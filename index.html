@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FrameFlow 视频生成工作台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">F</span><span>Frame<span class="brand-accent">Flow</span></span></div>
+        <div class="workspace-switcher"><span class="workspace-avatar">影</span><span><b>视频创作组</b><small>个人工作区</small></span><span class="chevron">⌄</span></div>
+        <nav class="main-nav" aria-label="主导航">
+          <a class="nav-item active" href="#"><span class="nav-icon">✦</span>工作台</a>
+          <a class="nav-item" href="#"><span class="nav-icon">◫</span>任务记录<span class="nav-count">24</span></a>
+          <a class="nav-item" href="#"><span class="nav-icon">▦</span>素材库</a>
+          <a class="nav-item" href="#"><span class="nav-icon">◌</span>用量与账单</a>
+        </nav>
+        <div class="sidebar-bottom">
+          <a class="nav-item" href="#"><span class="nav-icon">?</span>帮助中心</a>
+          <button class="user-card" type="button"><span class="user-avatar">M</span><span><b>Maureen Chen</b><small>Pro 方案</small></span><span class="more">•••</span></button>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div><p class="eyebrow">WORKSPACE / VIDEO LAB</p><h1>视频生成工作台</h1></div>
+          <div class="top-actions"><span class="sync-status"><i></i>服务正常 · 刚刚同步</span><button class="icon-button" title="通知">♢<span class="notification-dot"></span></button><button class="avatar-button">MC</button></div>
+        </header>
+
+        <section class="hero-strip">
+          <div><span class="live-pill">BETA</span><h2>把灵感变成一组可交付的视频</h2><p>一次配置，批量生成。保持画面风格一致，逐条掌握任务进度。</p></div>
+          <div class="hero-metric"><span>本月已生成</span><strong>186 <em>/ 500</em></strong><div class="metric-bar"><i></i></div></div>
+        </section>
+
+        <div class="page-grid">
+          <section class="panel submit-panel">
+            <div class="panel-heading"><div><span class="section-kicker">01 / CREATE</span><h3>创建生成批次</h3></div><button class="text-button" id="clearForm">清空表单</button></div>
+            <div class="form-grid">
+              <label class="field field-wide"><span>批次名称</span><input id="batchName" value="夏日品牌片 · 第一版" /></label>
+              <label class="field"><span>视频时长</span><div class="input-suffix"><input id="duration" type="number" min="1" max="15" value="3" /><b>秒</b></div></label>
+              <label class="field"><span>输出分辨率</span><select id="resolution"><option>768p</option><option>480p</option><option>768p 横屏</option><option>480p (1:1)</option></select></label>
+              <label class="field field-wide"><span>统一提示词 <i>必填</i></span><textarea id="prompt" rows="3">夏日午后，透明玻璃杯中的气泡水在阳光下闪闪发光，镜头缓慢推进，清透、高级、商业广告质感</textarea></label>
+              <label class="field field-wide"><span>参考图 URL <small>可选 · 支持 JPG / PNG / WebP</small></span><div class="input-suffix"><input id="reference" placeholder="https:// 或 base64 图片地址" /><b>↥</b></div></label>
+            </div>
+            <div class="batch-preview"><div class="preview-label"><span>批量预览</span><small>每行一条任务 · 可单独编辑提示词</small></div><div id="promptRows" class="prompt-rows"></div><button class="add-row" id="addRow">＋ 添加一条提示词</button></div>
+            <div class="submit-footer"><span class="estimate"><span class="spark">✦</span>预计消耗 <b id="costEstimate">¥ 0.10</b></span><button class="primary-button" id="submitBatch"><span>▶</span> 提交批次</button></div>
+          </section>
+
+          <aside class="panel api-panel">
+            <div class="panel-heading"><div><span class="section-kicker">CONFIGURATION</span><h3>API 连接</h3></div><span class="connected-badge"><i></i>已连接</span></div>
+            <div class="api-card"><div class="api-logo">H<span>3</span><small>高画质 API</small></div><div><b>MiniMax H3</b><p>lightx2v · 15 秒视频</p></div></div>
+            <dl class="api-details"><div><dt>工作流 ID</dt><dd>minimax_h3_lightx2v_v5_15s</dd></div><div><dt>接口状态</dt><dd><span class="status-ok">● 可用</span></dd></div><div><dt>计费参考</dt><dd>¥ 0.02 / 秒 <small>高峰时段</small></dd></div></dl>
+            <button class="outline-button" id="openSettings">⚙ 管理 API 设置</button><p class="api-note">API Key 由服务端 .env 管理，不暴露在浏览器。</p>
+          </aside>
+        </div>
+
+        <section class="panel tasks-panel">
+          <div class="panel-heading tasks-heading"><div><span class="section-kicker">02 / MONITOR</span><h3>任务队列 <span class="task-total" id="taskTotal">3</span></h3></div><div class="task-actions"><div class="segmented"><button class="selected" data-filter="all">全部 <b>3</b></button><button data-filter="processing">进行中 <b>1</b></button><button data-filter="completed">已完成 <b>1</b></button></div><button class="download-button" id="downloadSelected" disabled>⇩ 批量下载 <span id="selectedCount">0</span></button></div></div>
+          <div class="table-wrap"><table><thead><tr><th class="check-col"><input id="selectAll" type="checkbox" /></th><th>任务 / 提示词</th><th>分辨率</th><th>时长</th><th>状态</th><th>创建时间</th><th></th></tr></thead><tbody id="taskTable"></tbody></table><div id="emptyState" class="empty-state" hidden><span>◫</span><b>还没有任务</b><p>在上方填写提示词并提交一个批次</p></div></div>
+        </section>
+        <footer class="footer-note"><span>wenVedio · 视频生成工作台</span><span>API 文档 ↗</span></footer>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="settingsModal" hidden><section class="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settingsTitle"><div class="drawer-header"><div><span class="section-kicker">DEVELOPER SETTINGS</span><h3 id="settingsTitle">API 设置</h3></div><button class="close-button" id="closeSettings">×</button></div><p class="drawer-intro">修改后点击保存即可应用到下一批任务。你可以在这里切换真实接口与演示模式。</p><label class="field"><span>后端地址</span><input id="apiEndpoint" placeholder="http://127.0.0.1:8787" /></label><label class="field"><span>Workflow ID</span><input id="workflowId" value="minimax_h3_lightx2v_v5_15s" /></label><label class="field"><span>API Key <small>由服务端管理</small></span><div class="secret-input"><input id="apiKey" type="password" placeholder="服务端 .env 配置" /><button id="toggleKey" type="button">显示</button></div></label><div class="mode-row"><div><b>演示模式</b><small>不调用真实接口，快速预览完整流程</small></div><label class="switch"><input id="mockMode" type="checkbox" /><span></span></label></div><div class="drawer-actions"><button class="outline-button" id="testConnection">◎ 测试连接</button><button class="primary-button" id="saveSettings">保存设置</button></div><p class="test-result" id="testResult"></p></section></div>
+    <script src="app.js"></script>
+  </body>
+</html>
