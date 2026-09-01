@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FrameFlow 视频生成工作台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="ui-overrides.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar">
+        <div class="brand"><span class="brand-mark">F</span><span class="brand-name">Frame<span class="brand-accent">Flow</span></span><button class="sidebar-toggle" id="sidebarToggle" type="button" title="收起侧边栏" aria-label="收起侧边栏">‹</button></div>
+        <div class="workspace-switcher"><span class="workspace-avatar">影</span><span class="workspace-copy"><b>视频创作组</b><small>个人工作区</small></span><span class="chevron">⌄</span></div>
+        <nav class="main-nav" aria-label="主导航">
+          <a class="nav-item active" id="navWorkspace" href="#workspace"><span class="nav-icon">✦</span><span class="nav-label">视频提交</span></a>
+          <a class="nav-item" id="navTasks" href="#tasks"><span class="nav-icon">◫</span><span class="nav-label">任务记录</span><span class="nav-count" id="navTaskCount">0</span></a>
+          <a class="nav-item" id="navQuery" href="#query"><span class="nav-icon">↗</span><span class="nav-label">查询入口</span></a>
+          <button class="nav-item nav-action" id="openSettings" type="button"><span class="nav-icon">⚙</span><span class="nav-label">模型管理</span></button>
+          <button class="nav-item nav-action" id="openTokens" type="button"><span class="nav-icon">◈</span><span class="nav-label">令牌管理</span></button>
+        </nav>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div><p class="eyebrow" id="pageEyebrow">WORKSPACE / VIDEO LAB</p><h1 id="pageTitle">视频生成工作台</h1></div>
+          <div class="top-actions"><span class="sync-status"><i></i>服务正常 · 刚刚同步</span><button class="icon-button" title="通知">♢<span class="notification-dot"></span></button><button class="avatar-button">MC</button></div>
+        </header>
+        <nav class="mobile-nav" aria-label="移动端导航"><button id="mobileWorkspace" class="active" type="button">视频提交</button><button id="mobileTasks" type="button">任务记录</button><button id="mobileQuery" type="button">查询入口</button><button id="mobileApi" type="button">模型管理</button></nav>
+
+        <section class="workspace-view" id="workspaceView">
+        <section class="hero-strip">
+          <div><span class="live-pill">BETA</span><h2>把灵感变成一组可交付的视频</h2><p>输入提示词和参考图片，提交生成任务。</p></div>
+          <div class="hero-metric"><span>本月已生成</span><strong>0 <em>/ 500</em></strong><div class="metric-bar"><i style="width:0"></i></div></div>
+        </section>
+
+        <div class="page-grid">
+          <section class="panel submit-panel">
+            <div class="panel-heading"><div><span class="section-kicker">01 / CREATE</span><h3>创建生成任务</h3></div><button class="text-button" id="clearForm">清空表单</button></div>
+            <label class="field model-select-field"><span><b class="param-key">生成模型</b><i>必选</i></span><select id="modelSelect"></select><small class="field-help" id="modelSelectHelp">模型参数由 API 管理中的字段定义动态生成</small></label>
+            <div class="task-identity-grid">
+              <label class="field"><span><b class="param-key">任务名字</b></span><div class="task-name-editor"><input id="taskName" type="text" value="未命名任务" maxlength="100" readonly /><button id="editTaskName" type="button">修改</button><button id="saveTaskName" type="button" hidden>保存</button></div><small class="field-help">修改名字并保存后，序号自动重置为 1</small></label>
+              <label class="field"><span><b class="param-key">序号</b></span><input id="taskSequence" type="number" min="1" step="1" value="1" /><small class="field-help">必须为从 1 开始的整数，提交后自动加 1</small></label>
+            </div>
+            <div class="form-grid">
+              <label class="field field-wide"><span><b class="param-key">prompt</b><i>必填</i></span><textarea id="prompt" rows="5" maxlength="500000" placeholder="请输入视频生成提示词"></textarea><small class="field-help">长文本，长度范围：1 - 500000</small></label>
+            </div>
+            <div class="form-grid parameter-grid">
+              <label class="field"><span><b class="param-key">duration</b><small>可选</small></span><input id="duration" type="number" min="1" max="15" step="1" value="5" /><small class="field-help">整数，值范围：1 - 15</small></label>
+              <label class="field"><span><b class="param-key">resolution</b><small>可选</small></span><select id="resolution"><option value="">请选择</option><option value="480p竖">480p竖</option><option value="768p竖">768p竖</option><option value="480p横">480p横</option><option value="768p横">768p横</option><option value="480p(1:1)">480p(1:1)</option><option value="768p(1:1)">768p(1:1)</option></select></label>
+            </div>
+            <div class="form-grid parameter-grid" id="extraModelFields"></div>
+            <div class="batch-preview image-input-panel">
+              <div class="preview-label"><span>参考图片</span><small>首张必填 · 最多 10 张</small></div>
+              <div id="imageLinks" class="image-links"></div>
+              <div class="image-source-actions"><button class="add-link-button" id="addImageLink" type="button"><span>＋</span> 添加图片链接</button><label class="upload-image-button" for="localImageUpload"><span>↥</span> 上传本地图片<input id="localImageUpload" type="file" accept="image/jpeg,image/png,image/webp" multiple /></label></div>
+              <div class="image-upload-note" id="imageUploadNote">支持 JPG / PNG / WebP，可多选本地图片；超出 10 张时只保留前 10 张。</div>
+              <div id="imagePreviews" class="image-previews" aria-label="图片预览"></div>
+            </div>
+            <details class="advanced-params"><summary>高级参数 <span>seed</span></summary><label class="field"><span><b class="param-key">seed</b><small>可选</small></span><input id="seed" type="number" min="1" max="999999999999999" step="1" placeholder="不填写则随机生成" /><small class="field-help">整数，范围：1 - 999999999999999；不填或超出范围时随机生成</small></label></details>
+            <div class="submit-footer"><span class="estimate"><span class="spark">✦</span>已填写图片 <b id="imageCount">0 / 10</b></span><label class="schedule-checkbox"><input id="scheduleSubmit" type="checkbox" /><span>预约提交</span><small>00:00–08:00 立即提交</small></label><button class="primary-button" id="submitBatch"><span>▶</span> 提交任务</button></div>
+          </section>
+
+          <aside class="panel api-panel">
+            <div class="panel-heading"><div><span class="section-kicker">ACTIVE MODEL</span><h3>当前模型</h3></div><span class="connected-badge"><i></i>已连接</span></div>
+            <div class="api-card"><div class="api-logo">H<span>3</span><small>高画质 API</small></div><div><b id="activeModelName">MiniMax H3</b><p id="activeModelDescription">多图参考生视频</p></div></div>
+            <dl class="api-details"><div><dt>工作流 ID</dt><dd id="activeWorkflow">-</dd></div><div><dt>接口状态</dt><dd><span class="status-ok">● 可用</span></dd></div><div><dt>计费参考</dt><dd>¥ 0.02 / 秒 <small>00:00–08:00 ¥ 0.01 / 秒</small></dd></div></dl>
+            <p class="api-note">模型连接和 API 参数可从左侧的 API 管理统一配置。</p>
+          </aside>
+        </div>
+
+        <section class="panel tasks-panel unfinished-panel" id="tasksPanel">
+          <div class="panel-heading tasks-heading"><div><span class="section-kicker">02 / MONITOR</span><h3>未完成任务 <span class="task-total" id="taskTotal">0</span></h3></div><span class="panel-caption">工作台仅显示未完成任务</span></div>
+          <div class="table-wrap"><table><thead><tr><th>任务 / 提示词</th><th>图片</th><th>参数</th><th>状态</th><th>创建时间</th><th></th></tr></thead><tbody id="taskTable"></tbody></table><div id="emptyState" class="empty-state" hidden><span>◫</span><b>暂无未完成任务</b><p>提交任务后，进行中的任务会显示在这里</p></div></div>
+        </section>
+        <section class="panel tasks-panel scheduled-panel" id="scheduledPanel">
+          <div class="panel-heading tasks-heading"><div><span class="section-kicker">03 / SCHEDULED</span><h3>预约提交 <span class="task-total" id="scheduledTotal">0</span></h3></div><span class="panel-caption">北京时间 00:00 起，每 5 秒最多提交 1 条</span></div>
+          <div class="scheduled-list" id="scheduledList"></div>
+          <div class="empty-state" id="scheduledEmpty"><span>◷</span><b>暂无预约任务</b><p>勾选“预约提交”后，非夜间时段的任务会显示在这里</p></div>
+        </section>
+        <footer class="footer-note"><span>wenVedio · 视频生成工作台</span><span>API 文档 ↗</span></footer>
+        </section>
+
+        <section class="records-view" id="recordsView" hidden>
+          <div class="records-intro"><span class="section-kicker">02 / HISTORY</span><h2>任务记录</h2><p>查看全部任务，并批量下载已完成的视频。</p></div>
+          <section class="panel tasks-panel records-panel">
+            <div class="panel-heading tasks-heading"><div><h3>全部任务 <span class="task-total" id="recordTaskTotal">0</span></h3></div><div class="task-actions"><div class="segmented"><button class="selected" data-record-filter="all">全部 <b id="recordAllCount">0</b></button><button data-record-filter="processing">进行中 <b id="recordProcessingCount">0</b></button><button data-record-filter="completed">已完成 <b id="recordCompletedCount">0</b></button><button data-record-filter="failed">失败 <b id="recordFailedCount">0</b></button></div><button class="delete-selected-button" id="deleteSelected" disabled>删除选中</button><button class="download-button" id="downloadSelected" disabled>⇩ 下载选中 <span id="selectedCount">0</span></button></div></div>
+            <div class="download-location"><span class="download-location-label">下载路径</span><span class="download-location-value" id="downloadLocation">未选择</span><button id="chooseDownloadDirectory" type="button">选择路径</button></div>
+            <div class="table-wrap"><table><thead><tr><th class="check-col"><input id="selectAll" type="checkbox" /></th><th>任务 / 提示词</th><th>图片</th><th>参数</th><th>状态</th><th>创建时间</th><th></th></tr></thead><tbody id="recordTaskTable"></tbody></table><div id="recordEmptyState" class="empty-state" hidden><span>◫</span><b>还没有任务记录</b><p>提交任务后，记录会出现在这里</p></div></div>
+          </section>
+        </section>
+
+        <section class="query-view" id="queryView" hidden>
+          <div class="query-intro"><span class="section-kicker">03 / ACCESS</span><h2>AutoDL ComfyUI 查询入口</h2><p>前往 AutoDL ComfyUI 查看工作流、任务状态和生成结果。</p></div>
+          <div class="query-link-panel">
+            <div class="query-link-icon">↗</div>
+            <div class="query-link-copy"><span>AutoDL ComfyUI</span><strong>工作流与任务查询</strong><a id="queryLink" href="https://www.autodl.art/large-model/comfyui" target="_blank" rel="noopener noreferrer">https://www.autodl.art/large-model/comfyui</a></div>
+            <a class="primary-button query-open" href="https://www.autodl.art/large-model/comfyui" target="_blank" rel="noopener noreferrer">打开查询页面 <span>↗</span></a>
+          </div>
+          <div class="query-note"><span>i</span><p>登录 AutoDL 后，可以在该页面查看工作流列表、任务进度和历史生成结果。</p></div>
+        </section>
+
+        <section class="settings-view" id="settingsView" hidden>
+          <div class="settings-intro"><span class="section-kicker">04 / MODELS</span><h2>模型管理</h2><p>双击模型行打开配置，表单字段会驱动视频提交页。</p></div>
+          <section class="panel settings-panel model-settings-panel" aria-labelledby="settingsTitle">
+            <div class="panel-heading settings-heading"><div><span class="section-kicker">MODEL REGISTRY</span><h3 id="settingsTitle">模型列表</h3></div></div>
+            <div class="model-manager">
+              <aside class="model-list-pane"><button class="add-model-button" id="addModel" type="button">＋ 新增模型</button><div class="model-list-header"><span>模型名称</span><span>工作流 ID</span><span>令牌</span></div><div id="modelAdminList" class="model-admin-list"></div></aside>
+              <div class="model-editor-backdrop" id="modelEditorBackdrop" hidden><div class="model-editor">
+                <div class="model-editor-header"><div><span class="section-kicker">MODEL CONFIG</span><h3>模型配置</h3></div><button id="closeModelEditor" type="button">×</button></div>
+                <div class="settings-form">
+                  <label class="field"><span>模型名称</span><input id="modelName" type="text" /></label>
+                  <label class="field"><span>模型 ID</span><input id="modelId" type="text" /></label>
+                  <label class="field field-wide"><span>工作流 ID</span><input id="modelWorkflow" type="text" /></label>
+                  <label class="field field-wide"><span>提交地址</span><input id="requestUrl" type="url" /></label>
+                  <label class="field field-wide"><span>查询地址</span><input id="queryUrl" type="url" /></label>
+                  <label class="field field-wide"><span>使用令牌</span><select id="modelToken"></select><small class="field-help">请先在令牌管理中添加 API Key</small></label>
+                  <label class="field field-wide"><span>表单字段定义 <small>JSON 数组</small></span><textarea id="modelFields" rows="16" spellcheck="false"></textarea><small class="field-help">支持 textarea、number、select、images；修改后视频提交页自动更新</small></label>
+                </div>
+                <div class="settings-actions"><button class="primary-button" id="saveSettings" type="button">保存模型</button><button class="delete-selected-button" id="deleteModel" type="button">删除模型</button></div>
+              </div></div>
+            </div>
+            <p class="test-result" id="settingsStatus" role="status"></p>
+          </section>
+        </section>
+
+        <section class="tokens-view" id="tokensView" hidden>
+          <div class="settings-intro"><span class="section-kicker">05 / TOKENS</span><h2>令牌管理</h2><p>统一保存多个 API Key，模型配置只选择令牌，不直接保存 Key。</p></div>
+          <section class="panel token-panel"><div class="token-create"><input id="tokenName" type="text" placeholder="令牌名称" /><input id="tokenValue" type="password" placeholder="粘贴 API Key" /><button class="primary-button" id="saveToken" type="button">添加令牌</button></div><div class="token-list" id="tokenList"></div><p class="test-result" id="tokenStatus"></p></section>
+        </section>
+      </main>
+    </div>
+    <div class="task-detail-backdrop" id="taskDetailModal" hidden>
+      <section class="task-detail-modal" role="dialog" aria-modal="true" aria-labelledby="taskDetailTitle">
+        <div class="task-detail-header">
+          <div><span class="section-kicker">TASK DETAIL</span><h3 id="taskDetailTitle">任务详情</h3></div>
+          <button class="task-detail-close" id="closeTaskDetail" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="task-detail-meta" id="taskDetailMeta"></div>
+        <div class="task-detail-prompt" id="taskDetailPrompt"></div>
+        <button class="outline-button task-detail-copy" id="copyTaskDetail" type="button">复制提示词</button>
+      </section>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

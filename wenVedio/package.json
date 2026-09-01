@@ -2,9 +2,9 @@
   "name": "wenvedio",
   "version": "0.1.0",
   "description": "视频生成工作台：前端工作台 + Node 服务端代理（MiniMax H3 / autodl）",
-  "main": "server.js",
+  "main": "src/server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node src/server.js"
   },
   "engines": {
     "node": ">=18"

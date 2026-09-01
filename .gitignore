@@ -1,10 +1,6 @@
-# 依赖
-node_modules/
+# 方案资料只保存在本机，不纳入 Git
+/方案设计/
 
-# 本地敏感配置（含 API Key），严禁提交
-.env
-
-# 系统与日志
-.DS_Store
-*.log
-tmp/
+# wenVedio 内部的本地配置和临时文件由 wenVedio/.gitignore 管理
+/wenVedio/.env
+/wenVedio/node_modules/
