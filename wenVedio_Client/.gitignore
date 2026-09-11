@@ -18,6 +18,8 @@ data/models.json
 data/models.json.tmp
 data/tokens.json
 data/tokens.json.tmp
+data/settings.json
+data/settings.json.tmp
 
 # 同步工具临时文件
 *.baiduyun.uploading.cfg

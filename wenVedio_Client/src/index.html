@@ -144,6 +144,23 @@
         <button class="outline-button task-detail-copy" id="copyTaskDetail" type="button">复制提示词</button>
       </section>
     </div>
+    <button class="settings-fab" id="openAppSettings" type="button" title="应用设置" aria-label="应用设置">⚙</button>
+    <div class="app-settings-backdrop" id="appSettingsModal" hidden>
+      <section class="app-settings-modal" role="dialog" aria-modal="true" aria-labelledby="appSettingsTitle">
+        <div class="task-detail-header">
+          <div><span class="section-kicker">APP SETTINGS</span><h3 id="appSettingsTitle">应用设置</h3></div>
+          <button class="task-detail-close" id="closeAppSettings" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="app-settings-list">
+          <div class="app-setting-row" data-desktop-only hidden><div><b>开机自动启动</b><small>登录系统时自动运行客户端</small></div><label class="switch"><input id="settingOpenAtLogin" type="checkbox" /><span></span></label></div>
+          <div class="app-setting-row" data-desktop-only hidden><div><b>关闭时最小化到托盘</b><small>点关闭按钮时隐藏到系统托盘，从托盘图标退出</small></div><label class="switch"><input id="settingMinimizeToTray" type="checkbox" /><span></span></label></div>
+          <div class="app-setting-row"><div><b>任务完成桌面通知</b><small>生成完成或失败时弹出系统通知</small></div><label class="switch"><input id="settingNotify" type="checkbox" /><span></span></label></div>
+          <div class="app-setting-row"><div><b>任务进度刷新间隔</b><small>轮询任务状态的频率，修改后对后续轮询生效</small></div><select id="settingPollInterval" class="app-setting-select"><option value="10">10 秒</option><option value="30">30 秒</option><option value="60">60 秒</option><option value="120">2 分钟</option><option value="300">5 分钟</option></select></div>
+          <div class="app-setting-row"><div><b>预约提交间隔</b><small>北京时间 00:00 起，两条预约任务之间的最小间隔（1-600 秒）</small></div><input id="settingScheduleInterval" class="app-setting-input" type="number" min="1" max="600" step="1" /></div>
+        </div>
+        <p class="test-result" id="appSettingsStatus" role="status"></p>
+      </section>
+    </div>
     <script src="app.js"></script>
   </body>
 </html>

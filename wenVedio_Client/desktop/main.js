@@ -3,7 +3,7 @@
 // 等 /api/health 通过后再加载 http://127.0.0.1:<port>/，因此功能与界面和 web 一致。
 // 与 web 的差异只有两点：数据写入用户数据目录（安装包内是只读的），以及下载目录走原生对话框。
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, dialog, ipcMain, shell } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -25,6 +25,8 @@ let mainWindow = null;
 let serverProcess = null;
 let serverPort = 0;
 let quitting = false;
+let tray = null;
+let minimizeToTray = false;
 
 // 优先用 8787，被占用时退回系统随机端口。
 function findFreePort(preferred) {
@@ -47,6 +49,21 @@ function findFreePort(preferred) {
 
 function userDataFile(name) {
   return path.join(app.getPath('userData'), name);
+}
+
+function readConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(userDataFile('config.json'), 'utf8')) || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeConfig(patch) {
+  const next = { ...readConfig(), ...patch };
+  fs.mkdirSync(app.getPath('userData'), { recursive: true });
+  fs.writeFileSync(userDataFile('config.json'), JSON.stringify(next, null, 2));
+  return next;
 }
 
 function startServer(port) {
@@ -125,6 +142,13 @@ async function createWindow(port) {
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.on('closed', () => { mainWindow = null; });
+  // 开启“关闭时最小化到托盘”后，点关闭按钮只是隐藏，从托盘图标退出。
+  mainWindow.on('close', (event) => {
+    if (minimizeToTray && !quitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
 
   // 查询入口等外部链接交给系统浏览器，不在客户端内新开窗口。
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -176,6 +200,36 @@ function uniqueTargetPath(directory, desiredName) {
   return path.join(directory, desiredName);
 }
 
+function showMainWindow() {
+  if (!mainWindow) {
+    if (serverPort) createWindow(serverPort).catch(() => {});
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function ensureTray() {
+  if (tray) return;
+  const iconPath = path.join(__dirname, '..', 'build', 'icon.png');
+  const icon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 }) : undefined;
+  tray = new Tray(icon);
+  tray.setToolTip(`${APP_NAME} · 视频生成工作台`);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '显示主窗口', click: showMainWindow },
+    { type: 'separator' },
+    { label: '退出', click: () => { quitting = true; app.quit(); } },
+  ]));
+  tray.on('click', showMainWindow);
+}
+
+function destroyTray() {
+  if (!tray) return;
+  tray.destroy();
+  tray = null;
+}
+
 function registerIpc() {
   ipcMain.handle('wenvedio:default-download-directory', () => {
     const dir = app.getPath('downloads');
@@ -210,6 +264,24 @@ function registerIpc() {
     await fs.promises.writeFile(target, buffer);
     return { name: path.basename(target), path: target };
   });
+
+  ipcMain.handle('wenvedio:get-app-settings', () => ({
+    openAtLogin: app.getLoginItemSettings().openAtLogin,
+    minimizeToTray,
+  }));
+
+  ipcMain.handle('wenvedio:set-app-settings', (_event, payload) => {
+    if (payload && typeof payload.openAtLogin === 'boolean') {
+      app.setLoginItemSettings({ openAtLogin: payload.openAtLogin });
+    }
+    if (payload && typeof payload.minimizeToTray === 'boolean') {
+      minimizeToTray = payload.minimizeToTray;
+      writeConfig({ minimizeToTray });
+      if (minimizeToTray) ensureTray();
+      else destroyTray();
+    }
+    return { openAtLogin: app.getLoginItemSettings().openAtLogin, minimizeToTray };
+  });
 }
 
 const gotLock = app.requestSingleInstanceLock();
@@ -225,6 +297,8 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     registerIpc();
     buildMenu();
+    minimizeToTray = readConfig().minimizeToTray === true;
+    if (minimizeToTray) ensureTray();
     try {
       serverPort = await findFreePort(PREFERRED_PORT);
       startServer(serverPort);
@@ -237,6 +311,7 @@ if (!gotLock) {
 
   app.on('activate', () => {
     if (!mainWindow && serverPort) createWindow(serverPort).catch(() => {});
+    else showMainWindow();
   });
 
   app.on('window-all-closed', () => {

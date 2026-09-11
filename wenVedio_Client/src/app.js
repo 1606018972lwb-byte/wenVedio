@@ -34,6 +34,22 @@ function loadSettings() {
 }
 let settings = loadSettings();
 
+// 应用设置（客户端本地）：桌面通知与轮询间隔；桌面专属项由主进程持久化。
+const APP_SETTINGS_KEY = 'wenvedio-app-settings';
+function loadAppSettings() {
+  try {
+    return { notifyOnFinish: true, pollIntervalSeconds: 60, ...JSON.parse(localStorage.getItem(APP_SETTINGS_KEY) || '{}') };
+  } catch (_) {
+    return { notifyOnFinish: true, pollIntervalSeconds: 60 };
+  }
+}
+const appSettings = loadAppSettings();
+
+function saveAppSettings(patch) {
+  Object.assign(appSettings, patch);
+  try { localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(appSettings)); } catch (_) { /* 保存失败不影响使用 */ }
+}
+
 function randomSeed() {
   if (window.crypto?.getRandomValues) {
     const values = new Uint32Array(2);
@@ -891,6 +907,14 @@ async function submitBatch() {
   }
 }
 
+function notifyTaskFinished(task, ok) {
+  if (!appSettings.notifyOnFinish) return;
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  try {
+    new Notification(ok ? '视频生成完成' : '视频任务失败', { body: `${task.name || task.id}\n${String(task.prompt || '').slice(0, 60)}` });
+  } catch (_) { /* 通知失败不影响任务 */ }
+}
+
 // 轮询单个任务状态
 function pollTask(localId) {
   const t = state.tasks.find((x) => x.id === localId);
@@ -913,8 +937,8 @@ function pollTask(localId) {
       t.submitted_at = remote.submitted_at || t.submitted_at;
       if (remote.video_url) { t.video_url = remote.video_url; }
       const status = taskStatus(t);
-      if (status === 'completed') { t.progress = 100; state.pollingTasks.delete(localId); }
-      else if (['failed', 'timeout'].includes(status)) { state.pollingTasks.delete(localId); }
+      if (status === 'completed') { t.progress = 100; state.pollingTasks.delete(localId); notifyTaskFinished(t, true); }
+      else if (['failed', 'timeout'].includes(status)) { state.pollingTasks.delete(localId); notifyTaskFinished(t, false); }
       else { t.progress = remote.progress || t.progress || 8; }
       renderTasks();
       if (!['completed', 'failed', 'timeout'].includes(status)) scheduleNext();
@@ -924,7 +948,7 @@ function pollTask(localId) {
     }
   };
   const scheduleNext = () => {
-    const timer = setTimeout(poll, 60 * 1000);
+    const timer = setTimeout(poll, Math.max(5, Number(appSettings.pollIntervalSeconds) || 60) * 1000);
     state.pollTimers.push(timer);
   };
   poll();
@@ -1218,6 +1242,58 @@ async function deleteToken(id) {
   await openTokens();
 }
 
+// 应用设置面板（右下角 ⚙ 按钮）
+async function openAppSettingsPanel() {
+  $('#settingNotify').checked = Boolean(appSettings.notifyOnFinish);
+  $('#settingPollInterval').value = String(appSettings.pollIntervalSeconds);
+  const desktopRows = $$('[data-desktop-only]');
+  if (desktopBridge?.getAppSettings) {
+    try {
+      const cfg = await desktopBridge.getAppSettings();
+      $('#settingOpenAtLogin').checked = Boolean(cfg.openAtLogin);
+      $('#settingMinimizeToTray').checked = Boolean(cfg.minimizeToTray);
+      desktopRows.forEach((row) => { row.hidden = false; });
+    } catch (_) {
+      desktopRows.forEach((row) => { row.hidden = true; });
+    }
+  } else {
+    desktopRows.forEach((row) => { row.hidden = true; });
+  }
+  const status = $('#appSettingsStatus');
+  if (status) status.textContent = '';
+  try {
+    const res = await fetch(`${settings.apiBase}/api/settings`);
+    const data = await res.json();
+    if (data.ok) $('#settingScheduleInterval').value = String(data.settings.schedule_interval_seconds);
+  } catch (_) { /* 读取失败时保留空值 */ }
+  $('#appSettingsModal').hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeAppSettingsPanel() {
+  $('#appSettingsModal').hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+async function saveScheduleIntervalSeconds(value) {
+  const seconds = Math.round(Number(value));
+  const status = $('#appSettingsStatus');
+  const fail = (msg) => { if (status) { status.textContent = msg; status.style.color = '#db5c52'; } };
+  if (!Number.isFinite(seconds) || seconds < 1 || seconds > 600) return fail('预约提交间隔必须是 1-600 的整数秒');
+  try {
+    const res = await fetch(`${settings.apiBase}/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schedule_interval_seconds: seconds }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+    if (status) { status.textContent = '预约提交间隔已保存'; status.style.color = 'var(--green)'; }
+  } catch (err) {
+    fail(`保存失败：${err.message}`);
+  }
+}
+
 function showView(view) {
   const isQuery = view === 'query';
   const isRecords = view === 'tasks';
@@ -1281,7 +1357,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const task = state.tasks.find((item) => item.id === $('#copyTaskDetail').dataset.taskId);
     if (task) copyPrompt(task.prompt, $('#copyTaskDetail'));
   });
-  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !$('#taskDetailModal').hidden) closeTaskDetail(); });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if (!$('#taskDetailModal').hidden) closeTaskDetail();
+    if (!$('#appSettingsModal').hidden) closeAppSettingsPanel();
+  });
   document.addEventListener('click', () => $$('.row-action-menu').forEach((menu) => { menu.hidden = true; }));
   $('#navWorkspace').addEventListener('click', (event) => { event.preventDefault(); showView('workspace'); });
   $('#navTasks').addEventListener('click', (event) => { event.preventDefault(); showView('tasks'); });
@@ -1290,6 +1370,19 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#mobileTasks').addEventListener('click', () => showView('tasks'));
   $('#mobileQuery').addEventListener('click', () => showView('query'));
   $('#mobileApi').addEventListener('click', openSettings);
+  $('#openAppSettings').addEventListener('click', openAppSettingsPanel);
+  $('#closeAppSettings').addEventListener('click', closeAppSettingsPanel);
+  $('#appSettingsModal').addEventListener('click', (event) => { if (event.target === $('#appSettingsModal')) closeAppSettingsPanel(); });
+  $('#settingOpenAtLogin').addEventListener('change', async (event) => { if (desktopBridge?.setAppSettings) await desktopBridge.setAppSettings({ openAtLogin: event.target.checked }); });
+  $('#settingMinimizeToTray').addEventListener('change', async (event) => { if (desktopBridge?.setAppSettings) await desktopBridge.setAppSettings({ minimizeToTray: event.target.checked }); });
+  $('#settingNotify').addEventListener('change', async (event) => {
+    saveAppSettings({ notifyOnFinish: event.target.checked });
+    if (event.target.checked && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+      try { await Notification.requestPermission(); } catch (_) { /* 用户拒绝通知 */ }
+    }
+  });
+  $('#settingPollInterval').addEventListener('change', (event) => saveAppSettings({ pollIntervalSeconds: Number(event.target.value) || 60 }));
+  $('#settingScheduleInterval').addEventListener('change', (event) => saveScheduleIntervalSeconds(event.target.value));
   initializeModels().then(initializeFormDraft);
   initializeDownloadDirectory();
   $('#chooseDownloadDirectory').addEventListener('click', chooseDownloadDirectory);

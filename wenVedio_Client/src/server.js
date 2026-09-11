@@ -60,6 +60,7 @@ const DATA_DIR = process.env.WENVEDIO_DATA_DIR
   ? path.resolve(process.env.WENVEDIO_DATA_DIR)
   : path.join(PROJECT_ROOT, 'data');
 const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const MODELS_FILE = path.join(DATA_DIR, 'models.json');
 const TOKENS_FILE = path.join(DATA_DIR, 'tokens.json');
 const store = new Map();
@@ -68,7 +69,6 @@ const tokens = new Map();
 let seq = 0;
 const MAX_SEED = 999999999999999;
 const TASK_TIMEOUT_MS = 20 * 60 * 1000;
-const SCHEDULE_INTERVAL_MS = 5 * 1000;
 let scheduledBusy = false;
 let lastScheduledSubmissionAt = 0;
 
@@ -150,6 +150,27 @@ function tokenValueFor(model) {
   return tokens.get(model?.token_id)?.value || [...tokens.values()][0]?.value || config.apiKey || '';
 }
 
+// 应用级设置（预约提交间隔等），持久化到数据目录 settings.json。
+const DEFAULT_SCHEDULE_INTERVAL_MS = 5 * 1000;
+let scheduleIntervalMs = DEFAULT_SCHEDULE_INTERVAL_MS;
+
+function loadAppSettings() {
+  try {
+    const stored = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) || {};
+    const seconds = Math.round(Number(stored.schedule_interval_seconds));
+    if (Number.isFinite(seconds) && seconds >= 1 && seconds <= 600) scheduleIntervalMs = seconds * 1000;
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.error(`[wenVedio] 读取应用设置失败: ${err.message}`);
+  }
+}
+
+function saveAppSettings() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const temporary = `${SETTINGS_FILE}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify({ schedule_interval_seconds: scheduleIntervalMs / 1000 }, null, 2));
+  fs.renameSync(temporary, SETTINGS_FILE);
+}
+
 function loadTokens() {
   let records = null;
   try {
@@ -201,6 +222,7 @@ loadTokens();
 loadModels();
 rebindModelTokens();
 loadStore();
+loadAppSettings();
 
 function randomSeed() {
   while (true) {
@@ -244,7 +266,7 @@ function nextScheduledTime() {
   const last = [...store.values()]
     .filter((task) => task.status === 'scheduled' && task.scheduled_at)
     .reduce((latest, task) => Math.max(latest, new Date(task.scheduled_at).getTime()), 0);
-  return new Date(Math.max(midnight.getTime(), last ? last + SCHEDULE_INTERVAL_MS : 0));
+  return new Date(Math.max(midnight.getTime(), last ? last + scheduleIntervalMs : 0));
 }
 
 // ---------------- 第三方 API 封装 ----------------
@@ -310,7 +332,7 @@ async function performSubmission(record) {
 }
 
 async function processScheduledTasks() {
-  if (scheduledBusy || Date.now() - lastScheduledSubmissionAt < SCHEDULE_INTERVAL_MS) return;
+  if (scheduledBusy || Date.now() - lastScheduledSubmissionAt < scheduleIntervalMs) return;
   const due = [...store.values()]
     .filter((task) => task.status === 'scheduled' && new Date(task.scheduled_at).getTime() <= Date.now())
     .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at))[0];
@@ -601,6 +623,23 @@ async function handleApi(req, res, url) {
     }
     await performSubmission(rec);
     return sendJson(res, 200, { ok: true, task: rec });
+  }
+
+  // 应用设置：预约提交间隔等
+  if (route === '/api/settings' && req.method === 'GET') {
+    return sendJson(res, 200, { ok: true, settings: { schedule_interval_seconds: scheduleIntervalMs / 1000 } });
+  }
+
+  if (route === '/api/settings' && req.method === 'POST') {
+    let payload = {};
+    try { payload = JSON.parse(await readBody(req)); } catch (_) {}
+    const seconds = Math.round(Number(payload?.schedule_interval_seconds));
+    if (!Number.isFinite(seconds) || seconds < 1 || seconds > 600) {
+      return sendJson(res, 400, { ok: false, msg: '预约提交间隔必须是 1-600 的整数秒' });
+    }
+    scheduleIntervalMs = seconds * 1000;
+    saveAppSettings();
+    return sendJson(res, 200, { ok: true, settings: { schedule_interval_seconds: scheduleIntervalMs / 1000 } });
   }
 
   // 下载已生成视频：由本地服务转发，避免浏览器跨域限制。

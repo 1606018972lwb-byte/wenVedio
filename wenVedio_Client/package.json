@@ -28,6 +28,7 @@
     "files": [
       "desktop/**/*",
       "src/**/*",
+      "build/icon.png",
       "package.json"
     ],
     "directories": {
