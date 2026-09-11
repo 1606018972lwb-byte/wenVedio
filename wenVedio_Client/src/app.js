@@ -1206,6 +1206,8 @@ async function saveToken() {
   $('#tokenName').value = '';
   $('#tokenValue').value = '';
   await openTokens();
+  const status = $('#tokenStatus');
+  if (status) { status.textContent = '令牌已添加，并已自动绑定到未配置令牌的模型'; status.style.color = 'var(--green)'; }
 }
 
 async function deleteToken(id) {

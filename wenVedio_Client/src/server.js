@@ -130,6 +130,26 @@ function saveTokens() {
   fs.renameSync(temporary, TOKENS_FILE);
 }
 
+// 兜底：模型引用的令牌不存在时（例如全新安装后先添加令牌），自动改绑到第一个可用令牌。
+function rebindModelTokens() {
+  const first = [...tokens.values()][0];
+  if (!first) return false;
+  let changed = false;
+  for (const model of models.values()) {
+    if (!tokens.has(model.token_id)) {
+      model.token_id = first.id;
+      changed = true;
+    }
+  }
+  if (changed) saveModels();
+  return changed;
+}
+
+// 模型令牌缺失时回退到第一个可用令牌，避免“添加了令牌却用不了”。
+function tokenValueFor(model) {
+  return tokens.get(model?.token_id)?.value || [...tokens.values()][0]?.value || config.apiKey || '';
+}
+
 function loadTokens() {
   let records = null;
   try {
@@ -179,6 +199,7 @@ function loadStore() {
 
 loadTokens();
 loadModels();
+rebindModelTokens();
 loadStore();
 
 function randomSeed() {
@@ -230,7 +251,7 @@ function nextScheduledTime() {
 // 提交单个任务
 async function submitTask(task) {
   const model = models.get(task.model_id) || models.get(config.workflow) || DEFAULT_MODELS[0];
-  const token = tokens.get(model.token_id)?.value || config.apiKey;
+  const token = tokenValueFor(model);
   const body = { ...(model.request_params || {}), ...config.requestParams, ...(task.params || {}), prompt: task.prompt };
   const duration = Number(task.duration);
   if (Number.isInteger(duration) && duration >= 1 && duration <= 15) body.duration = duration;
@@ -303,7 +324,7 @@ async function processScheduledTasks() {
 // 查询单个任务（需要平台登录 token；工作流 key 无法查询）
 async function queryTask(taskId, modelId) {
   const model = models.get(modelId);
-  const queryToken = tokens.get(model?.token_id)?.value || config.tasksToken || config.apiKey;
+  const queryToken = tokens.get(model?.token_id)?.value || [...tokens.values()][0]?.value || config.tasksToken || config.apiKey;
   if (!queryToken) {
     return { task_id: taskId, status: 'queued', query_status: 'unavailable',
       note: '未配置 AUTODL_TASKS_TOKEN，无法从平台查询任务结果，请在平台控制台查看。' };
@@ -407,7 +428,7 @@ async function handleApi(req, res, url) {
       workflow: config.workflow,
       mock: config.mock,
       has_key: Boolean(config.apiKey),
-      can_query: Boolean(config.tasksToken || config.apiKey),
+      can_query: Boolean(config.tasksToken || config.apiKey || tokens.size > 0),
       request_url: getRequestUrl(),
       query_url: config.queryUrl,
     });
@@ -436,6 +457,7 @@ async function handleApi(req, res, url) {
     const token = { id, name, value, created_at: tokens.get(id)?.created_at || new Date().toISOString() };
     tokens.set(id, token);
     saveTokens();
+    rebindModelTokens();
     return sendJson(res, 200, { ok: true, token: { id, name, masked: `••••••••${value.slice(-4)}`, created_at: token.created_at } });
   }
 
@@ -526,7 +548,7 @@ async function handleApi(req, res, url) {
     const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
 
     if (!tasks.length) return sendJson(res, 400, { ok: false, msg: '没有可提交的任务' });
-    if (!config.mock && !tokens.get(selectedModel.token_id)?.value) return sendJson(res, 400, { ok: false, msg: '所选模型未配置有效令牌' });
+    if (!config.mock && !tokenValueFor(selectedModel)) return sendJson(res, 400, { ok: false, msg: '所选模型未配置有效令牌' });
 
     const created = [];
     for (const t of tasks) {
@@ -720,7 +742,7 @@ function onListening() {
   console.log(`[wenVedio] 本地地址  http://${config.host || '127.0.0.1'}:${config.port}`);
   console.log(`[wenVedio] 工作流     ${config.workflow}`);
   console.log(`[wenVedio] 模式       ${config.mock ? '演示 (mock)' : '真实 API'}${config.apiKey ? '' : '（未配置 API Key）'}`);
-  console.log(`[wenVedio] 查询能力   ${config.tasksToken || config.apiKey ? '已配置，可查结果' : '未配置，仅可提交任务'}`);
+  console.log(`[wenVedio] 查询能力   ${config.tasksToken || config.apiKey || tokens.size > 0 ? '已配置，可查结果' : '未配置，仅可提交任务'}`);
   console.log(`[wenVedio] 任务记录   已恢复 ${store.size} 条`);
   console.log(`[wenVedio] 数据目录   ${DATA_DIR}`);
 }
