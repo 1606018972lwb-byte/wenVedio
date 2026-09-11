@@ -5,7 +5,7 @@
 ## 工作方式
 
 - 客户端启动时，主进程会以纯 Node 身份拉起内置的 `src/server.js`，等 `/api/health` 通过后再加载界面，所以功能与 web 版完全一致。
-- 任务记录、模型和令牌保存在用户数据目录（Windows `%APPDATA%\wenVedio\data`，macOS `~/Library/Application Support/wenVedio/data`），安装包目录只读，这样升级客户端也不会丢数据。
+- 任务记录、模型、令牌等全部配置保存在用户数据目录的 data 文件夹里（Windows `%APPDATA%\wenVedio\data`，macOS `~/Library/Application Support/wenVedio/data`）：`data/config/` 放各类配置，`data/log/` 按天存放日志（如 `2026-09-12.log`），日志保留 30 天、过期自动删除。安装包目录只读，这样升级客户端也不会丢数据。
 - 视频下载默认写入系统「下载」文件夹，可在「任务记录 → 下载路径」里更换（走系统原生对话框）。
 - 外部链接（如「查询入口」）交给系统默认浏览器打开，不在客户端内新开窗口。
 

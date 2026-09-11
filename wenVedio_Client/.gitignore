@@ -12,14 +12,8 @@ dist/
 .DS_Store
 *.log
 tmp/
-data/tasks.json
-data/tasks.json.tmp
-data/models.json
-data/models.json.tmp
-data/tokens.json
-data/tokens.json.tmp
-data/settings.json
-data/settings.json.tmp
+# 运行数据（配置与日志）全部在 data/ 下
+data/
 
 # 同步工具临时文件
 *.baiduyun.uploading.cfg

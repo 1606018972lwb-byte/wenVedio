@@ -66,6 +66,21 @@ function writeConfig(patch) {
   return next;
 }
 
+// 主进程日志写入同一个 data/log/ 目录（按天一个文件）。
+function appendMainLog(line) {
+  try {
+    const logDir = path.join(userDataFile('data'), 'log');
+    fs.mkdirSync(logDir, { recursive: true });
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date());
+    const get = (type) => (parts.find((part) => part.type === type) || {}).value || '';
+    const day = `${get('year')}-${get('month')}-${get('day')}`;
+    fs.appendFileSync(path.join(logDir, `${day}.log`), `[${day} ${get('hour')}:${get('minute')}:${get('second')}] [main] ${line}\n`);
+  } catch (_) { /* 日志失败不影响运行 */ }
+}
+
 function startServer(port) {
   const entry = path.join(__dirname, '..', 'src', 'server.js');
   serverProcess = spawn(process.execPath, [entry], {
@@ -84,10 +99,12 @@ function startServer(port) {
   serverProcess.stdout.on('data', (chunk) => process.stdout.write(`[server] ${chunk}`));
   serverProcess.stderr.on('data', (chunk) => process.stderr.write(`[server] ${chunk}`));
   serverProcess.on('error', (err) => {
+    appendMainLog(`内置服务启动失败：${err.message}`);
     dialog.showErrorBox(APP_NAME, `内置服务启动失败：${err.message}`);
   });
   serverProcess.on('exit', (code, signal) => {
     serverProcess = null;
+    appendMainLog(`内置服务退出（${code ?? signal}）`);
     if (quitting) return;
     dialog.showErrorBox(APP_NAME, `内置服务意外退出（${code ?? signal}），请重新启动 ${APP_NAME}。`);
     app.quit();
@@ -299,6 +316,7 @@ if (!gotLock) {
     buildMenu();
     minimizeToTray = readConfig().minimizeToTray === true;
     if (minimizeToTray) ensureTray();
+    appendMainLog(`客户端启动 v${app.getVersion()}`);
     try {
       serverPort = await findFreePort(PREFERRED_PORT);
       startServer(serverPort);

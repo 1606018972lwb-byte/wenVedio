@@ -59,10 +59,13 @@ config.requestUrl = env.AUTODL_REQUEST_URL || `${config.endpoint.replace(/\/$/, 
 const DATA_DIR = process.env.WENVEDIO_DATA_DIR
   ? path.resolve(process.env.WENVEDIO_DATA_DIR)
   : path.join(PROJECT_ROOT, 'data');
-const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
-const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
-const MODELS_FILE = path.join(DATA_DIR, 'models.json');
-const TOKENS_FILE = path.join(DATA_DIR, 'tokens.json');
+// 所有配置收敛到 data/config/，日志按天写入 data/log/，过期日志自动清理。
+const CONFIG_DIR = path.join(DATA_DIR, 'config');
+const LOG_DIR = path.join(DATA_DIR, 'log');
+const TASKS_FILE = path.join(CONFIG_DIR, 'tasks.json');
+const SETTINGS_FILE = path.join(CONFIG_DIR, 'settings.json');
+const MODELS_FILE = path.join(CONFIG_DIR, 'models.json');
+const TOKENS_FILE = path.join(CONFIG_DIR, 'tokens.json');
 const store = new Map();
 const models = new Map();
 const tokens = new Map();
@@ -160,15 +163,78 @@ function loadAppSettings() {
     const seconds = Math.round(Number(stored.schedule_interval_seconds));
     if (Number.isFinite(seconds) && seconds >= 1 && seconds <= 600) scheduleIntervalMs = seconds * 1000;
   } catch (err) {
-    if (err.code !== 'ENOENT') console.error(`[wenVedio] 读取应用设置失败: ${err.message}`);
+    if (err.code !== 'ENOENT') writeLog('error', `读取应用设置失败: ${err.message}`);
   }
 }
 
 function saveAppSettings() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
   const temporary = `${SETTINGS_FILE}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify({ schedule_interval_seconds: scheduleIntervalMs / 1000 }, null, 2));
   fs.renameSync(temporary, SETTINGS_FILE);
+}
+
+// ---- 数据目录布局与日志 ----
+// 日志按天写入 data/log/YYYY-MM-DD.log，保留 30 天，过期自动删除。
+const LOG_RETENTION_DAYS = 30;
+
+function beijingParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+function writeLog(level, message) {
+  const p = beijingParts();
+  const line = `[${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}] [${level}] ${message}`;
+  if (level === 'error') console.error(line);
+  else console.log(line);
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    fs.appendFileSync(path.join(LOG_DIR, `${p.year}-${p.month}-${p.day}.log`), `${line}\n`);
+  } catch (_) { /* 写日志失败不影响业务 */ }
+}
+
+// 旧版本把配置直接放在 data/ 根目录，启动时迁移到 data/config/。
+function migrateDataLayout() {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  for (const [name, target] of [
+    ['tasks.json', TASKS_FILE],
+    ['models.json', MODELS_FILE],
+    ['tokens.json', TOKENS_FILE],
+    ['settings.json', SETTINGS_FILE],
+  ]) {
+    const legacy = path.join(DATA_DIR, name);
+    try {
+      if (fs.existsSync(legacy) && !fs.existsSync(target)) {
+        fs.renameSync(legacy, target);
+        console.log(`[wenVedio] 已迁移 ${name} 到 config/`);
+      }
+    } catch (err) {
+      console.error(`[wenVedio] 迁移 ${name} 失败: ${err.message}`);
+    }
+  }
+}
+
+function cleanExpiredLogs() {
+  try {
+    if (!fs.existsSync(LOG_DIR)) return;
+    const cutoff = Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (const name of fs.readdirSync(LOG_DIR)) {
+      const match = name.match(/^(\d{4}-\d{2}-\d{2})\.log$/);
+      const file = path.join(LOG_DIR, name);
+      let time = match ? new Date(`${match[1]}T00:00:00+08:00`).getTime() : NaN;
+      if (!Number.isFinite(time)) time = fs.statSync(file).mtimeMs;
+      if (Number.isFinite(time) && time < cutoff) {
+        fs.unlinkSync(file);
+        console.log(`[wenVedio] 已删除过期日志 ${name}`);
+      }
+    }
+  } catch (err) {
+    console.error(`[wenVedio] 清理过期日志失败: ${err.message}`);
+  }
 }
 
 function loadTokens() {
@@ -177,7 +243,7 @@ function loadTokens() {
     const parsed = JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf8'));
     records = Array.isArray(parsed) ? parsed : parsed.tokens;
   } catch (err) {
-    if (err.code !== 'ENOENT') console.error(`[wenVedio] 读取令牌配置失败: ${err.message}`);
+    if (err.code !== 'ENOENT') writeLog('error', `读取令牌配置失败: ${err.message}`);
   }
   if (Array.isArray(records)) records.forEach((token) => { if (token?.id && token?.value) tokens.set(token.id, token); });
   if (!tokens.size && config.apiKey) tokens.set('default', { id: 'default', name: '默认 ComfyUI 令牌', value: config.apiKey, created_at: new Date().toISOString() });
@@ -190,7 +256,7 @@ function loadModels() {
     const parsed = JSON.parse(fs.readFileSync(MODELS_FILE, 'utf8'));
     records = Array.isArray(parsed) ? parsed : parsed.models;
   } catch (err) {
-    if (err.code !== 'ENOENT') console.error(`[wenVedio] 读取模型配置失败: ${err.message}`);
+    if (err.code !== 'ENOENT') writeLog('error', `读取模型配置失败: ${err.message}`);
   }
   const source = Array.isArray(records) && records.length ? records : DEFAULT_MODELS;
   source.forEach((model) => models.set(model.id, { ...model, token_id: model.token_id || 'default' }));
@@ -214,15 +280,17 @@ function loadStore() {
       if (match) seq = Math.max(seq, Number(match[1]) || 0);
     }
   } catch (err) {
-    if (err.code !== 'ENOENT') console.error(`[wenVedio] 读取任务记录失败: ${err.message}`);
+    if (err.code !== 'ENOENT') writeLog('error', `读取任务记录失败: ${err.message}`);
   }
 }
 
+migrateDataLayout();
 loadTokens();
 loadModels();
 rebindModelTokens();
 loadStore();
 loadAppSettings();
+cleanExpiredLogs();
 
 function randomSeed() {
   while (true) {
@@ -326,6 +394,8 @@ async function performSubmission(record) {
     record.status = 'failed';
     record.error = err.message;
   }
+  if (record.status === 'failed') writeLog('error', `任务 ${record.local_id} 提交失败: ${record.error}`);
+  else writeLog('info', `任务 ${record.local_id} 提交成功，状态 ${record.status}`);
   delete record.scheduled_at;
   saveStore();
   return record;
@@ -772,18 +842,20 @@ const server = http.createServer(async (req, res) => {
 });
 
 const scheduledTimer = setInterval(() => {
-  processScheduledTasks().catch((err) => console.error(`[wenVedio] 预约任务调度失败: ${err.message}`));
+  processScheduledTasks().catch((err) => writeLog('error', `预约任务调度失败: ${err.message}`));
 }, 1000);
 scheduledTimer.unref();
 
+const logCleanupTimer = setInterval(cleanExpiredLogs, 24 * 60 * 60 * 1000);
+logCleanupTimer.unref();
+
 function onListening() {
-  console.log(`[wenVedio] 视频生成工作台服务已启动`);
-  console.log(`[wenVedio] 本地地址  http://${config.host || '127.0.0.1'}:${config.port}`);
-  console.log(`[wenVedio] 工作流     ${config.workflow}`);
-  console.log(`[wenVedio] 模式       ${config.mock ? '演示 (mock)' : '真实 API'}${config.apiKey ? '' : '（未配置 API Key）'}`);
-  console.log(`[wenVedio] 查询能力   ${config.tasksToken || config.apiKey || tokens.size > 0 ? '已配置，可查结果' : '未配置，仅可提交任务'}`);
-  console.log(`[wenVedio] 任务记录   已恢复 ${store.size} 条`);
-  console.log(`[wenVedio] 数据目录   ${DATA_DIR}`);
+  writeLog('info', `服务已启动，本地地址 http://${config.host || '127.0.0.1'}:${config.port}`);
+  writeLog('info', `工作流 ${config.workflow}`);
+  writeLog('info', `模式 ${config.mock ? '演示 (mock)' : '真实 API'}${config.apiKey ? '' : '（未配置 API Key）'}`);
+  writeLog('info', `查询能力 ${config.tasksToken || config.apiKey || tokens.size > 0 ? '已配置' : '未配置'}`);
+  writeLog('info', `任务记录已恢复 ${store.size} 条`);
+  writeLog('info', `数据目录 ${DATA_DIR}`);
 }
 
 if (config.host) server.listen(config.port, config.host, onListening);
