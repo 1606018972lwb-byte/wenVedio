@@ -16,7 +16,7 @@
         <div class="brand"><span class="brand-mark">F</span><span class="brand-name">Frame<span class="brand-accent">Flow</span></span><button class="sidebar-toggle" id="sidebarToggle" type="button" title="收起侧边栏" aria-label="收起侧边栏">‹</button></div>
         <div class="workspace-switcher"><span class="workspace-avatar">影</span><span class="workspace-copy"><b>视频创作组</b><small>个人工作区</small></span><span class="chevron">⌄</span></div>
         <nav class="main-nav" aria-label="主导航">
-          <a class="nav-item active" id="navWorkspace" href="#workspace"><span class="nav-icon">✦</span><span class="nav-label">视频提交</span></a>
+          <a class="nav-item active" id="navWorkspace" href="#workspace"><span class="nav-icon">✦</span><span class="nav-label">视频生成</span></a>
           <a class="nav-item" id="navTasks" href="#tasks"><span class="nav-icon">◫</span><span class="nav-label">任务记录</span><span class="nav-count" id="navTaskCount">0</span></a>
           <a class="nav-item" id="navQuery" href="#query"><span class="nav-icon">↗</span><span class="nav-label">查询入口</span></a>
           <button class="nav-item nav-action" id="openSettings" type="button"><span class="nav-icon">⚙</span><span class="nav-label">模型管理</span></button>
@@ -29,7 +29,7 @@
           <div><p class="eyebrow" id="pageEyebrow">WORKSPACE / VIDEO LAB</p><h1 id="pageTitle">视频生成工作台</h1></div>
           <div class="top-actions"><span class="sync-status"><i></i>服务正常 · 刚刚同步</span><button class="icon-button" title="通知">♢<span class="notification-dot"></span></button><button class="avatar-button">MC</button></div>
         </header>
-        <nav class="mobile-nav" aria-label="移动端导航"><button id="mobileWorkspace" class="active" type="button">视频提交</button><button id="mobileTasks" type="button">任务记录</button><button id="mobileQuery" type="button">查询入口</button><button id="mobileApi" type="button">模型管理</button></nav>
+        <nav class="mobile-nav" aria-label="移动端导航"><button id="mobileWorkspace" class="active" type="button">视频生成</button><button id="mobileTasks" type="button">任务记录</button><button id="mobileQuery" type="button">查询入口</button><button id="mobileApi" type="button">模型管理</button></nav>
 
         <section class="workspace-view" id="workspaceView">
         <section class="hero-strip">
@@ -61,15 +61,9 @@
               <div id="imagePreviews" class="image-previews" aria-label="图片预览"></div>
             </div>
             <details class="advanced-params"><summary>高级参数 <span>seed</span></summary><label class="field"><span><b class="param-key">seed</b><small>可选</small></span><input id="seed" type="number" min="1" max="999999999999999" step="1" placeholder="不填写则随机生成" /><small class="field-help">整数，范围：1 - 999999999999999；不填或超出范围时随机生成</small></label></details>
-            <div class="submit-footer"><span class="estimate"><span class="spark">✦</span>已填写图片 <b id="imageCount">0 / 10</b></span><label class="schedule-checkbox"><input id="scheduleSubmit" type="checkbox" /><span>预约提交</span><small>00:00–08:00 立即提交</small></label><button class="primary-button" id="submitBatch"><span>▶</span> 提交任务</button></div>
+            <div class="submit-footer"><span class="estimate"><span class="spark">✦</span>已填写图片 <b id="imageCount">0 / 10</b> · 当前价格 <b id="currentPrice"></b></span><label class="schedule-checkbox"><input id="scheduleSubmit" type="checkbox" /><span>预约提交</span><small>00:00–08:00 立即提交</small></label><button class="primary-button" id="submitBatch"><span>▶</span> 提交任务</button></div>
           </section>
 
-          <aside class="panel api-panel">
-            <div class="panel-heading"><div><span class="section-kicker">ACTIVE MODEL</span><h3>当前模型</h3></div><span class="connected-badge"><i></i>已连接</span></div>
-            <div class="api-card"><div class="api-logo">H<span>3</span><small>高画质 API</small></div><div><b id="activeModelName">MiniMax H3</b><p id="activeModelDescription">多图参考生视频</p></div></div>
-            <dl class="api-details"><div><dt>工作流 ID</dt><dd id="activeWorkflow">-</dd></div><div><dt>接口状态</dt><dd><span class="status-ok">● 可用</span></dd></div><div><dt>计费参考</dt><dd id="pricingLine">-</dd></div></dl>
-            <p class="api-note">模型连接和 API 参数可从左侧的 API 管理统一配置。</p>
-          </aside>
         </div>
 
         <section class="panel tasks-panel unfinished-panel" id="tasksPanel">
@@ -104,7 +98,7 @@
         </section>
 
         <section class="settings-view" id="settingsView" hidden>
-          <div class="settings-intro"><span class="section-kicker">04 / MODELS</span><h2>模型管理</h2><p>双击模型行打开配置，表单字段会驱动视频提交页。</p></div>
+          <div class="settings-intro"><span class="section-kicker">04 / MODELS</span><h2>模型管理</h2><p>双击模型行打开配置，表单字段会驱动视频生成页。</p></div>
           <section class="panel settings-panel model-settings-panel" aria-labelledby="settingsTitle">
             <div class="panel-heading settings-heading"><div><span class="section-kicker">MODEL REGISTRY</span><h3 id="settingsTitle">模型列表</h3></div></div>
             <div class="model-manager">
@@ -118,7 +112,7 @@
                   <label class="field field-wide"><span>提交地址</span><input id="requestUrl" type="url" /></label>
                   <label class="field field-wide"><span>查询地址</span><input id="queryUrl" type="url" /></label>
                   <label class="field field-wide"><span>使用令牌</span><select id="modelToken"></select><small class="field-help">请先在令牌管理中添加 API Key</small></label>
-                  <label class="field field-wide"><span>表单字段定义 <small>JSON 数组</small></span><textarea id="modelFields" rows="16" spellcheck="false"></textarea><small class="field-help">支持 textarea、number、select、images；修改后视频提交页自动更新</small></label>
+                  <label class="field field-wide"><span>表单字段定义 <small>JSON 数组</small></span><textarea id="modelFields" rows="16" spellcheck="false"></textarea><small class="field-help">支持 textarea、number、select、images；修改后视频生成页自动更新</small></label>
                 </div>
                 <div class="pricing-editor">
                   <div class="pricing-editor-head"><b>价格设置（可选，单位 元/秒）</b><small>全部留空表示不配置价格；谷值时段外的时段按峰值计；设置了分辨率价格时，该分辨率按此价格计，不再区分峰谷</small></div>

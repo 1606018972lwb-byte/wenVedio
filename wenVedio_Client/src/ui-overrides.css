@@ -104,8 +104,7 @@ body { background: var(--canvas); color: var(--ink); }
 .advanced-params summary span { margin-left: 6px; color: #9aa4af; font: 9px "DM Mono", monospace; }
 .advanced-params .field { padding: 4px 13px 14px; }
 .primary-button { background: var(--blue); border-color: var(--blue); }
-.primary-button:hover { background: #244bd1; }
-.api-panel { padding: 22px 20px; }
+.primary-button:hover { background: #244bd1; }
 .api-card { margin: 18px 0; background: #f3f5f8; }
 .api-note { margin-top: 14px; }
 .tasks-panel { margin-top: 18px; }
@@ -308,3 +307,6 @@ th, td { padding: 13px 12px; }
 .price-res-row input:focus { border-color: var(--blue); }
 .price-res-empty { grid-column: 1 / -1; color: #9da5b0; font-size: 11px; }
 @media (max-width: 680px) { .pricing-grid { grid-template-columns: 1fr; } }
+
+/* 右侧「当前模型」面板已移除，创建区占满整行 */
+.page-grid { grid-template-columns: minmax(0, 1fr); }

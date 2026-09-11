@@ -235,23 +235,39 @@ function modelRateFor(pricing, resolution, atValue) {
   return inValley ? pricing.valley : pricing.peak;
 }
 
-function renderPricingLine() {
-  const el = $('#pricingLine');
+// 按当前时间判断峰谷，在提交行显示当前适用的价格；每 30 秒自动刷新。
+function pricingBreakdown(pricing) {
+  const parts = [];
+  if (pricing.peak != null) parts.push(`峰值 ¥${pricing.peak}/秒`);
+  if (pricing.valley != null) parts.push(`谷值 ¥${pricing.valley}/秒（${pricing.valley_start || '00:00'}-${pricing.valley_end || '08:00'}）`);
+  if (pricing.by_resolution) {
+    for (const [resolution, price] of Object.entries(pricing.by_resolution)) parts.push(`${resolution} ¥${price}/秒`);
+  }
+  return parts.join(' · ') || '未配置价格';
+}
+
+function renderCurrentPrice() {
+  const el = $('#currentPrice');
   if (!el) return;
   const pricing = (selectedModel() || {}).pricing;
   if (!pricing || (pricing.peak == null && pricing.valley == null && !pricing.by_resolution)) {
-    el.textContent = '未配置价格';
-    el.title = '可在「模型管理」里为模型配置峰谷价格与按分辨率价格';
+    el.textContent = '';
+    el.title = '当前模型未配置价格，可在「模型管理」里设置';
     return;
   }
   const resolution = $('#resolution')?.value || '';
-  const main = [];
-  const resPrice = resolution && pricing.by_resolution ? pricing.by_resolution[resolution] : null;
-  if (resPrice != null) main.push(`${resolution} ¥${resPrice}/秒`);
-  else if (pricing.peak != null) main.push(`¥${pricing.peak}/秒`);
-  const sub = pricing.valley != null ? `${pricing.valley_start || '00:00'}–${pricing.valley_end || '08:00'} ¥${pricing.valley}/秒` : '';
-  el.innerHTML = `${escapeHtml(main.join(' · ') || '价格未配置')}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}`;
-  el.title = '';
+  const rate = modelRateFor(pricing, resolution, new Date().toISOString());
+  if (rate == null) {
+    el.textContent = '';
+    el.title = '';
+    return;
+  }
+  let label;
+  if (resolution && pricing.by_resolution && pricing.by_resolution[resolution] != null) label = `（${resolution}）`;
+  else if (pricing.valley != null && rate === pricing.valley) label = '（谷值）';
+  else label = '（峰值）';
+  el.textContent = `¥${rate}/秒${label}`;
+  el.title = pricingBreakdown(pricing);
 }
 
 function renderPriceByResolutionRows(initial) {
@@ -339,9 +355,6 @@ function applySelectedModel() {
   const model = selectedModel();
   if (!model) return;
   state.selectedModelId = model.id;
-  $('#activeModelName').textContent = model.name;
-  $('#activeModelDescription').textContent = model.workflow;
-  $('#activeWorkflow').textContent = model.workflow;
   const fields = Array.isArray(model.fields) ? model.fields : [];
   const byKey = Object.fromEntries(fields.map((field) => [field.key, field]));
   ['prompt', 'duration', 'resolution', 'seed'].forEach((key) => {
@@ -362,7 +375,7 @@ function applySelectedModel() {
   });
   $('.image-input-panel').hidden = !byKey.reference_images;
   renderExtraModelFields(fields.filter((field) => !['prompt', 'duration', 'resolution', 'seed', 'reference_images'].includes(field.key)));
-  renderPricingLine();
+  renderCurrentPrice();
 }
 
 function renderExtraModelFields(fields) {
@@ -1530,7 +1543,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#scheduleSubmit').addEventListener('change', saveForm);
   $('#modelSelect').addEventListener('change', () => { applySelectedModel(); saveForm(); });
   $('#modelFields').addEventListener('change', renderPriceByResolutionRows);
-  $('#resolution').addEventListener('change', renderPricingLine);
+  $('#resolution').addEventListener('change', renderCurrentPrice);
   $('#clearForm').addEventListener('click', async () => {
     $('#prompt').value = '';
     state.imageItems = [{ id: imageId('link'), kind: 'link', value: '' }];
