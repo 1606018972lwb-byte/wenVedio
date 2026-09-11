@@ -279,14 +279,3 @@ th, td { padding: 13px 12px; }
   .task-detail-backdrop { padding: 12px; }
   .task-detail-modal { max-height: calc(100vh - 24px); padding: 18px; }
 }
-
-.server-view { padding-top: 4px; }
-.server-panel { max-width: 860px; margin-top: 0; padding: 25px 28px 28px; }
-.server-card { display: flex; flex-direction: column; gap: 5px; padding: 15px 17px; border: 1px solid var(--line); border-radius: 7px; background: #f7f9fc; }
-.server-card-label { color: #8a95a2; font-size: 11px; }
-.server-card b { color: #3f4b59; font: 14px "DM Mono", monospace; overflow-wrap: anywhere; }
-.server-card small { color: #9ba4af; font-size: 10px; }
-.server-panel .field { margin-top: 22px; }
-.server-panel .settings-actions { margin-top: 20px; }
-.server-panel .test-result { margin-top: 14px; }
-@media (max-width: 680px) { .server-panel { padding: 20px 16px 22px; } }

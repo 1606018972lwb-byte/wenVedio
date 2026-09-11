@@ -49,29 +49,6 @@ function userDataFile(name) {
   return path.join(app.getPath('userData'), name);
 }
 
-// 客户端配置：目前只有远程服务端地址，留空表示使用内置的本地服务。
-function readConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(userDataFile('config.json'), 'utf8')) || {};
-  } catch (_) {
-    return {};
-  }
-}
-
-function writeConfig(patch) {
-  const next = { ...readConfig(), ...patch };
-  fs.mkdirSync(app.getPath('userData'), { recursive: true });
-  fs.writeFileSync(userDataFile('config.json'), JSON.stringify(next, null, 2));
-  return next;
-}
-
-function normalizeServerUrl(value) {
-  const url = String(value || '').trim().replace(/\/+$/, '');
-  if (!url) return '';
-  if (!/^https?:\/\//i.test(url)) throw new Error('服务端地址需要以 http:// 或 https:// 开头');
-  return url;
-}
-
 function startServer(port) {
   const entry = path.join(__dirname, '..', 'src', 'server.js');
   serverProcess = spawn(process.execPath, [entry], {
@@ -200,19 +177,6 @@ function uniqueTargetPath(directory, desiredName) {
 }
 
 function registerIpc() {
-  ipcMain.handle('wenvedio:get-server-config', () => ({
-    embeddedUrl: serverPort ? `http://127.0.0.1:${serverPort}` : '',
-    serverUrl: readConfig().serverUrl || '',
-    appVersion: app.getVersion(),
-    platform: process.platform,
-  }));
-
-  ipcMain.handle('wenvedio:set-server-config', (_event, payload) => {
-    const serverUrl = normalizeServerUrl(payload?.serverUrl);
-    writeConfig({ serverUrl });
-    return { serverUrl };
-  });
-
   ipcMain.handle('wenvedio:default-download-directory', () => {
     const dir = app.getPath('downloads');
     return { path: dir, name: path.basename(dir) || '下载' };

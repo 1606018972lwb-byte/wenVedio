@@ -22,7 +22,6 @@ const state = {
   selectedModelId: '',
   adminModelId: '',
   tokens: [],
-  serverConfig: null,
 };
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -190,57 +189,6 @@ async function initializeModels() {
   } catch (err) {
     console.error('读取模型列表失败', err);
   }
-}
-
-async function initializeServerConfig() {
-  if (!desktopBridge?.getServerConfig) return;
-  try {
-    const config = await desktopBridge.getServerConfig();
-    state.serverConfig = config;
-    settings.apiBase = config.serverUrl || '';
-    const input = $('#serverUrl');
-    if (input) input.value = config.serverUrl || '';
-    renderServerInfo();
-  } catch (err) {
-    console.warn('读取服务端配置失败', err);
-  }
-}
-
-function renderServerInfo() {
-  const embedded = $('#embeddedServerUrl');
-  if (embedded) embedded.textContent = state.serverConfig?.embeddedUrl || '-';
-  const input = $('#serverUrl');
-  if (input && document.activeElement !== input) input.value = state.serverConfig?.serverUrl || '';
-}
-
-async function saveServerConfig(serverUrl) {
-  if (!desktopBridge?.setServerConfig) return;
-  const status = $('#serverStatus');
-  try {
-    const saved = await desktopBridge.setServerConfig({ serverUrl });
-    state.serverConfig = { ...(state.serverConfig || {}), serverUrl: saved.serverUrl };
-    settings.apiBase = saved.serverUrl || '';
-    try { localStorage.setItem('frameflow-settings', JSON.stringify(settings)); } catch (_) { /* 存储失败不影响本次切换 */ }
-    renderServerInfo();
-    if (status) {
-      status.textContent = saved.serverUrl ? `已切换到 ${saved.serverUrl}` : '已改回内置本地服务';
-      status.style.color = 'var(--green)';
-    }
-    await reloadFromServer();
-  } catch (err) {
-    if (status) {
-      status.textContent = `保存失败：${err.message}`;
-      status.style.color = '#db5c52';
-    }
-  }
-}
-
-async function reloadFromServer() {
-  state.tasks = [];
-  state.selected.clear();
-  state.pollingTasks.clear();
-  await initializeModels();
-  await loadTasks();
 }
 
 function selectedModel() {
@@ -1273,27 +1221,24 @@ function showView(view) {
   const isRecords = view === 'tasks';
   const isSettings = view === 'settings';
   const isTokens = view === 'tokens';
-  const isServer = view === 'server';
   const workspaceView = $('#workspaceView');
   const recordsView = $('#recordsView');
   const queryView = $('#queryView');
   const settingsView = $('#settingsView');
   const tokensView = $('#tokensView');
-  const serverView = $('#serverView');
   const pageTitle = $('#pageTitle');
   const pageEyebrow = $('#pageEyebrow');
-  workspaceView.hidden = isQuery || isRecords || isSettings || isTokens || isServer;
+  workspaceView.hidden = isQuery || isRecords || isSettings || isTokens;
   recordsView.hidden = !isRecords;
   queryView.hidden = !isQuery;
   settingsView.hidden = !isSettings;
   tokensView.hidden = !isTokens;
-  serverView.hidden = !isServer;
-  pageTitle.textContent = isQuery ? '访问查询' : isRecords ? '任务记录' : isSettings ? '模型管理' : isTokens ? '令牌管理' : isServer ? '服务端' : '视频生成工作台';
-  pageEyebrow.textContent = isQuery ? 'AUTODL / COMFYUI' : isRecords ? 'WORKSPACE / HISTORY' : isSettings ? 'WORKSPACE / MODELS' : isTokens ? 'WORKSPACE / TOKENS' : isServer ? 'WORKSPACE / SERVER' : 'WORKSPACE / VIDEO LAB';
+  pageTitle.textContent = isQuery ? '访问查询' : isRecords ? '任务记录' : isSettings ? '模型管理' : isTokens ? '令牌管理' : '视频生成工作台';
+  pageEyebrow.textContent = isQuery ? 'AUTODL / COMFYUI' : isRecords ? 'WORKSPACE / HISTORY' : isSettings ? 'WORKSPACE / MODELS' : isTokens ? 'WORKSPACE / TOKENS' : 'WORKSPACE / VIDEO LAB';
   $$('.main-nav .nav-item').forEach((item) => item.classList.remove('active'));
-  $(`#${isQuery ? 'navQuery' : isRecords ? 'navTasks' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : isServer ? 'openServer' : 'navWorkspace'}`).classList.add('active');
+  $(`#${isQuery ? 'navQuery' : isRecords ? 'navTasks' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : 'navWorkspace'}`).classList.add('active');
   $$('.mobile-nav button').forEach((item) => item.classList.remove('active'));
-  $(`#${isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : isServer ? 'mobileServer' : 'mobileWorkspace'}`).classList.add('active');
+  $(`#${isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace'}`).classList.add('active');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -1311,8 +1256,7 @@ function toggleSidebar() {
   $('#sidebarToggle').setAttribute('aria-label', $('#sidebarToggle').title);
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
-  await initializeServerConfig();
+document.addEventListener('DOMContentLoaded', () => {
   loadTasks();
   initializeSidebar();
 
@@ -1321,7 +1265,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#deleteSelected').addEventListener('click', () => deleteTasks([...state.selected]));
   $('#openSettings').addEventListener('click', openSettings);
   $('#openTokens').addEventListener('click', openTokens);
-  $('#openServer').addEventListener('click', () => { renderServerInfo(); showView('server'); });
   $('#saveSettings').addEventListener('click', saveSettings);
   $('#addModel').addEventListener('click', newModelDraft);
   $('#deleteModel').addEventListener('click', deleteAdminModel);
@@ -1345,9 +1288,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#mobileTasks').addEventListener('click', () => showView('tasks'));
   $('#mobileQuery').addEventListener('click', () => showView('query'));
   $('#mobileApi').addEventListener('click', openSettings);
-  $('#mobileServer').addEventListener('click', () => { renderServerInfo(); showView('server'); });
-  $('#saveServerUrl').addEventListener('click', () => saveServerConfig($('#serverUrl').value));
-  $('#useEmbeddedServer').addEventListener('click', () => { $('#serverUrl').value = ''; saveServerConfig(''); });
   initializeModels().then(initializeFormDraft);
   initializeDownloadDirectory();
   $('#chooseDownloadDirectory').addEventListener('click', chooseDownloadDirectory);

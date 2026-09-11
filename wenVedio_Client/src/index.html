@@ -21,7 +21,6 @@
           <a class="nav-item" id="navQuery" href="#query"><span class="nav-icon">↗</span><span class="nav-label">查询入口</span></a>
           <button class="nav-item nav-action" id="openSettings" type="button"><span class="nav-icon">⚙</span><span class="nav-label">模型管理</span></button>
           <button class="nav-item nav-action" id="openTokens" type="button"><span class="nav-icon">◈</span><span class="nav-label">令牌管理</span></button>
-          <button class="nav-item nav-action" id="openServer" type="button"><span class="nav-icon">⇄</span><span class="nav-label">服务端</span></button>
         </nav>
       </aside>
 
@@ -30,7 +29,7 @@
           <div><p class="eyebrow" id="pageEyebrow">WORKSPACE / VIDEO LAB</p><h1 id="pageTitle">视频生成工作台</h1></div>
           <div class="top-actions"><span class="sync-status"><i></i>服务正常 · 刚刚同步</span><button class="icon-button" title="通知">♢<span class="notification-dot"></span></button><button class="avatar-button">MC</button></div>
         </header>
-        <nav class="mobile-nav" aria-label="移动端导航"><button id="mobileWorkspace" class="active" type="button">视频提交</button><button id="mobileTasks" type="button">任务记录</button><button id="mobileQuery" type="button">查询入口</button><button id="mobileApi" type="button">模型管理</button><button id="mobileServer" type="button">服务端</button></nav>
+        <nav class="mobile-nav" aria-label="移动端导航"><button id="mobileWorkspace" class="active" type="button">视频提交</button><button id="mobileTasks" type="button">任务记录</button><button id="mobileQuery" type="button">查询入口</button><button id="mobileApi" type="button">模型管理</button></nav>
 
         <section class="workspace-view" id="workspaceView">
         <section class="hero-strip">
@@ -131,16 +130,6 @@
         <section class="tokens-view" id="tokensView" hidden>
           <div class="settings-intro"><span class="section-kicker">05 / TOKENS</span><h2>令牌管理</h2><p>统一保存多个 API Key，模型配置只选择令牌，不直接保存 Key。</p></div>
           <section class="panel token-panel"><div class="token-create"><input id="tokenName" type="text" placeholder="令牌名称" /><input id="tokenValue" type="password" placeholder="粘贴 API Key" /><button class="primary-button" id="saveToken" type="button">添加令牌</button></div><div class="token-list" id="tokenList"></div><p class="test-result" id="tokenStatus"></p></section>
-        </section>
-
-        <section class="server-view" id="serverView" hidden>
-          <div class="settings-intro"><span class="section-kicker">06 / SERVER</span><h2>服务端</h2><p>默认使用客户端内置的本地服务，也可以填写远程服务端地址由客户端直连。</p></div>
-          <section class="panel server-panel">
-            <div class="server-card"><span class="server-card-label">内置本地服务</span><b id="embeddedServerUrl">-</b><small>随客户端启动，仅本机可访问</small></div>
-            <label class="field field-wide"><span><b class="param-key">远程服务端地址</b><small>可选</small></span><input id="serverUrl" type="text" placeholder="http://192.168.1.10:8787，留空则使用内置服务" /><small class="field-help">填写后，界面里的所有接口请求都会发往该地址；请确保对端服务端与本客户端版本兼容。</small></label>
-            <div class="settings-actions"><button class="primary-button" id="saveServerUrl" type="button">保存并切换</button><button class="delete-selected-button" id="useEmbeddedServer" type="button">改回内置服务</button></div>
-            <p class="test-result" id="serverStatus" role="status"></p>
-          </section>
         </section>
       </main>
     </div>

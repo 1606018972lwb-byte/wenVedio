@@ -1,35 +1,22 @@
-# wenVedio · 桌面客户端
+# wenVedio · 桌面客户端（一体化）
 
-跨平台桌面版视频生成工作台，功能与 web 版一致，界面就是同一套前端页面。基于 Electron 实现，可打包 macOS 与 Windows x64。
+跨平台桌面版视频生成工作台：界面、服务端全部内置在一个应用里，双击即用，不需要安装 Node，也不需要单独部署服务。基于 Electron 实现，可打包 macOS 与 Windows x64。
 
-## 服务端：内置 / 远程
+## 工作方式
 
-客户端有两种连接方式，在左侧「服务端」页切换：
+- 客户端启动时，主进程会以纯 Node 身份拉起内置的 `src/server.js`，等 `/api/health` 通过后再加载界面，所以功能与 web 版完全一致。
+- 任务记录、模型和令牌保存在用户数据目录（Windows `%APPDATA%\wenVedio\data`，macOS `~/Library/Application Support/wenVedio/data`），安装包目录只读，这样升级客户端也不会丢数据。
+- 视频下载默认写入系统「下载」文件夹，可在「任务记录 → 下载路径」里更换（走系统原生对话框）。
+- 外部链接（如「查询入口」）交给系统默认浏览器打开，不在客户端内新开窗口。
 
-- **内置本地服务（默认）**：客户端自带一份服务端代码，启动时由主进程拉起，双击即用，不需要先装 Node 或另起服务。
-- **远程服务端**：填写远程地址（如 `http://192.168.1.10:8787`）后，界面的所有接口请求都发往该地址，内置服务只继续负责加载界面。适合把 API Key 集中放在一台机器上、多人共用。
-
-远程模式需要配合 `wenVedio_Server`（独立的纯 API 服务端）。服务端的接口带 `Access-Control-Allow-Origin: *`，客户端可以跨域直连。
-
-配置保存在 `%APPDATA%\wenVedio\config.json`（macOS 为 `~/Library/Application Support/wenVedio/config.json`）。
-
-## 与 web 版的差异
-
-桌面端复用 `src/` 下同源的服务端和前端页面，只有几处必要的桌面适配：
-
-- **无需安装 Node**：内置服务端随客户端启动，等健康检查通过后再显示界面。
-- **数据写入用户目录**：任务记录、模型和令牌保存在系统用户数据目录，因为安装包目录是只读的，同时升级客户端不会丢数据。
-- **下载目录走原生对话框**：默认写入系统「下载」文件夹，可在「任务记录 → 下载路径」里更换。
-- **多一个「服务端」页**：web 版没有这一页。
-
-外部链接（如「查询入口」）会交给系统默认浏览器打开，不会在客户端内新开窗口。
+autodl 的工作流 API Key 在客户端的「令牌管理」里添加即可，保存在用户数据目录，不会进入前端代码或 Git。
 
 ## 目录结构
 
 ```
 wenVedio_Client/
 ├── desktop/              # Electron 主进程与预加载脚本
-│   ├── main.js           # 拉起内置服务、创建窗口、服务端配置与下载相关 IPC
+│   ├── main.js           # 拉起内置服务、创建窗口、下载相关 IPC
 │   └── preload.js        # 通过 contextBridge 暴露最小桌面能力
 ├── src/                  # 内置的前端页面与服务端（与 web 版同源）
 │   ├── server.js
@@ -71,13 +58,10 @@ npm run dist:mac    # macOS：dmg + zip（x64 / arm64）
 2. 进入「模型管理」，确认模型的工作流 ID、提交地址、查询地址和所用令牌。
 3. 回到「视频提交」，填写 prompt 和参考图后提交任务。
 
-默认用内置服务就够了；要连远程服务端，去「服务端」页填地址。
-
 ## 与其它目录的关系
 
-- `wenVedio_Server/`：独立的纯 API 服务端，供远程模式使用。
-- `wenVedio_web/`：带浏览器界面的 web 版。
-- 本目录的 `src/` 是一份独立副本，更新 web 版后可用 `wenVedio_web/src` 覆盖本目录 `src` 再重新打包（桌面专属分支通过 `window.wenvedioDesktop` 判断，web 端不受影响）。
+- `wenVedio_web/`：带浏览器界面的 web 版，与本客户端共用同一套页面和服务端代码。
+- 本目录的 `src/` 是一份独立副本，web 版更新后可用 `wenVedio_web/src` 覆盖本目录 `src` 再重新打包（桌面专属分支通过 `window.wenvedioDesktop` 判断，web 端不受影响）。
 
 ## 网络受限时的安装与打包
 
@@ -92,9 +76,3 @@ ELECTRON_MIRROR="https://cdn.npmmirror.com/binaries/electron/" \
 ELECTRON_BUILDER_BINARIES_MIRROR="https://cdn.npmmirror.com/binaries/electron-builder-binaries/" \
 npm run dist:win
 ```
-
-## 已验证
-
-- Windows x64 打包通过：`release/wenVedio-0.2.0-win-x64-setup.exe`（NSIS 安装版）与 `release/wenVedio-0.2.0-win-x64-portable.exe`（免安装版）。
-- 打包后的客户端启动后，内置服务 `/api/health` 与首页均正常返回，任务记录/模型/令牌写入 `%APPDATA%\wenVedio\data`。
-- macOS 打包配置已就绪（dmg + zip，x64 / arm64），但需要在 macOS 上执行 `npm run dist:mac` 才能真正产出。
