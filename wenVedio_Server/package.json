@@ -1,0 +1,14 @@
+{
+  "name": "wenvedio-server",
+  "version": "0.2.0",
+  "description": "wenVedio 视频生成工作台 服务端：代理 autodl 视频生成 API，供客户端或其它程序调用",
+  "author": "WenMumu <1606018972lwb@gmail.com>",
+  "license": "MIT",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

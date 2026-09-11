@@ -1,0 +1,23 @@
+# 依赖
+node_modules/
+
+# 打包产物
+release/
+dist/
+
+# 本地敏感配置（含 API Key），严禁提交
+.env
+
+# 系统与日志
+.DS_Store
+*.log
+tmp/
+data/tasks.json
+data/tasks.json.tmp
+data/models.json
+data/models.json.tmp
+data/tokens.json
+data/tokens.json.tmp
+
+# 同步工具临时文件
+*.baiduyun.uploading.cfg
