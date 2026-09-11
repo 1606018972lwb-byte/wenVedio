@@ -271,7 +271,7 @@ async function initializeDownloadDirectory() {
 function renderDownloadLocation() {
   const label = $('#downloadLocation');
   if (!label) return;
-  if (desktopBridge) label.textContent = state.downloadDirectory?.name || '未选择';
+  if (desktopBridge) label.textContent = state.downloadDirectory?.path || '未选择';
   else if (!window.showDirectoryPicker) label.textContent = '当前浏览器不支持自定义路径';
   else label.textContent = state.downloadDirectory?.name || '未选择';
   label.title = state.downloadDirectory?.path || label.textContent;
