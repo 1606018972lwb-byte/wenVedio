@@ -211,6 +211,130 @@ function selectedModel() {
   return state.models.find((model) => model.id === ($('#modelSelect')?.value || state.selectedModelId));
 }
 
+// ---- 价格（可选）：峰谷价格 + 按分辨率价格，单位 元/秒 ----
+function beijingHour(value) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', hour: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(value));
+    const hour = parts.find((part) => part.type === 'hour');
+    return hour ? Number(hour.value) : null;
+  } catch (_) { return null; }
+}
+
+// 取费率：分辨率设置了专属价格就按它计；否则谷值时段内取谷价，时段外取峰价。
+function modelRateFor(pricing, resolution, atValue) {
+  if (!pricing) return null;
+  if (resolution && pricing.by_resolution && pricing.by_resolution[resolution] != null) return pricing.by_resolution[resolution];
+  if (pricing.peak == null) return null;
+  if (pricing.valley == null || !pricing.valley_start || !pricing.valley_end) return pricing.peak;
+  const hour = beijingHour(atValue || new Date().toISOString());
+  if (hour == null) return pricing.peak;
+  const start = Number(String(pricing.valley_start).slice(0, 2));
+  const end = Number(String(pricing.valley_end).slice(0, 2));
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return pricing.peak;
+  const inValley = start <= end ? hour >= start && hour < end : hour >= start || hour < end;
+  return inValley ? pricing.valley : pricing.peak;
+}
+
+function renderPricingLine() {
+  const el = $('#pricingLine');
+  if (!el) return;
+  const pricing = (selectedModel() || {}).pricing;
+  if (!pricing || (pricing.peak == null && pricing.valley == null && !pricing.by_resolution)) {
+    el.textContent = '未配置价格';
+    el.title = '可在「模型管理」里为模型配置峰谷价格与按分辨率价格';
+    return;
+  }
+  const resolution = $('#resolution')?.value || '';
+  const main = [];
+  const resPrice = resolution && pricing.by_resolution ? pricing.by_resolution[resolution] : null;
+  if (resPrice != null) main.push(`${resolution} ¥${resPrice}/秒`);
+  else if (pricing.peak != null) main.push(`¥${pricing.peak}/秒`);
+  const sub = pricing.valley != null ? `${pricing.valley_start || '00:00'}–${pricing.valley_end || '08:00'} ¥${pricing.valley}/秒` : '';
+  el.innerHTML = `${escapeHtml(main.join(' · ') || '价格未配置')}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}`;
+  el.title = '';
+}
+
+function renderPriceByResolutionRows(initial) {
+  const wrap = $('#priceByResolution');
+  if (!wrap) return;
+  let options = [];
+  try {
+    const fields = JSON.parse($('#modelFields').value.trim() || '[]');
+    const resField = Array.isArray(fields) ? fields.find((field) => field && field.key === 'resolution' && Array.isArray(field.options)) : null;
+    options = resField ? resField.options.filter((option) => typeof option === 'string' && option.trim()) : [];
+  } catch (_) { options = []; }
+  const existing = {};
+  $$('#priceByResolution input[data-res-price]').forEach((input) => { existing[input.dataset.resPrice] = input.value; });
+  const values = initial || existing;
+  wrap.innerHTML = '';
+  if (!options.length) {
+    const hint = document.createElement('small');
+    hint.className = 'price-res-empty';
+    hint.textContent = '表单字段定义里没有 resolution 下拉选项，无法按分辨率设置价格';
+    wrap.appendChild(hint);
+    return;
+  }
+  options.forEach((option) => {
+    const row = document.createElement('label');
+    row.className = 'price-res-row';
+    const name = document.createElement('span');
+    name.textContent = option;
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.step = '0.001';
+    input.placeholder = '元/秒';
+    input.dataset.resPrice = option;
+    if (values[option] != null) input.value = String(values[option]);
+    row.append(name, input);
+    wrap.appendChild(row);
+  });
+}
+
+function clearPricingEditor() {
+  $('#pricePeak').value = '';
+  $('#priceValley').value = '';
+  $('#priceValleyWindow').value = '';
+  renderPriceByResolutionRows();
+}
+
+function collectPricingFromEditor() {
+  const peakText = $('#pricePeak').value.trim();
+  const valleyText = $('#priceValley').value.trim();
+  const rangeText = $('#priceValleyWindow').value.trim();
+  const byResolution = {};
+  $$('#priceByResolution input[data-res-price]').forEach((input) => {
+    const text = input.value.trim();
+    if (text === '') return;
+    const num = Number(text);
+    if (!Number.isFinite(num) || num < 0) throw new Error(`分辨率 ${input.dataset.resPrice} 的价格必须是 ≥ 0 的数字`);
+    byResolution[input.dataset.resPrice] = Math.round(num * 1000) / 1000;
+  });
+  if (peakText === '' && valleyText === '' && !Object.keys(byResolution).length) return undefined;
+  const toPrice = (text) => {
+    if (text === '') return null;
+    const num = Number(text);
+    if (!Number.isFinite(num) || num < 0) throw new Error('价格必须是 ≥ 0 的数字');
+    return Math.round(num * 1000) / 1000;
+  };
+  const pricing = {};
+  const peak = toPrice(peakText);
+  if (peak != null) pricing.peak = peak;
+  const valley = toPrice(valleyText);
+  if (valley != null) pricing.valley = valley;
+  if (rangeText !== '') {
+    const match = rangeText.match(/^((?:[01]\d|2[0-3]):[0-5]\d)\s*[-–~至到]\s*((?:[01]\d|2[0-3]):[0-5]\d)$/);
+    if (!match) throw new Error('谷值时段格式应为 00:00-08:00');
+    pricing.valley_start = match[1];
+    pricing.valley_end = match[2];
+  } else if (valley != null) {
+    pricing.valley_start = '00:00';
+    pricing.valley_end = '08:00';
+  }
+  if (Object.keys(byResolution).length) pricing.by_resolution = byResolution;
+  return pricing;
+}
+
 function applySelectedModel() {
   const model = selectedModel();
   if (!model) return;
@@ -238,6 +362,7 @@ function applySelectedModel() {
   });
   $('.image-input-panel').hidden = !byKey.reference_images;
   renderExtraModelFields(fields.filter((field) => !['prompt', 'duration', 'resolution', 'seed', 'reference_images'].includes(field.key)));
+  renderPricingLine();
 }
 
 function renderExtraModelFields(fields) {
@@ -607,7 +732,9 @@ async function copyPrompt(prompt, button) {
 
 function openTaskDetail(task) {
   $('#taskDetailTitle').textContent = task.name || '任务详情';
-  $('#taskDetailMeta').textContent = `${task.id} · ${task.time || '-'} · ${task.resolution || '未设置分辨率'}`;
+  const rate = modelRateFor((state.models.find((model) => model.id === task.model_id) || {}).pricing, task.resolution, task.submitted_at || task.created_at);
+  const costText = rate != null && Number(task.duration) > 0 ? ` · 预估 ¥${(rate * Number(task.duration)).toFixed(3)}` : '';
+  $('#taskDetailMeta').textContent = `${task.id} · ${task.time || '-'} · ${task.resolution || '未设置分辨率'}${costText}`;
   $('#taskDetailPrompt').textContent = task.prompt || '';
   $('#copyTaskDetail').dataset.taskId = task.id;
   $('#taskDetailModal').hidden = false;
@@ -1147,6 +1274,11 @@ function selectAdminModel(id) {
   $('#requestUrl').value = model.request_url || '';
   $('#queryUrl').value = model.query_url || '';
   $('#modelFields').value = JSON.stringify(model.fields || [], null, 2);
+  const pricing = model.pricing || {};
+  $('#pricePeak').value = pricing.peak != null ? String(pricing.peak) : '';
+  $('#priceValley').value = pricing.valley != null ? String(pricing.valley) : '';
+  $('#priceValleyWindow').value = pricing.valley_start ? `${pricing.valley_start}-${pricing.valley_end || '00:00'}` : '';
+  renderPriceByResolutionRows(pricing.by_resolution || {});
   renderModelTokenOptions(model.token_id);
   $('#modelEditorBackdrop').hidden = false;
 }
@@ -1157,6 +1289,7 @@ function newModelDraft() {
   $('#modelId').readOnly = false;
   $('#queryUrl').value = 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow/result/{task_id}';
   $('#modelFields').value = JSON.stringify([{ key: 'prompt', label: 'prompt', type: 'textarea', required: true }, { key: 'reference_images', label: '参考图片', type: 'images', required: true, min: 1, max: 10 }], null, 2);
+  clearPricingEditor();
   renderModelTokenOptions(state.tokens[0]?.id || '');
   $('#modelEditorBackdrop').hidden = false;
 }
@@ -1171,7 +1304,10 @@ async function saveSettings() {
   let fields;
   try { fields = JSON.parse($('#modelFields').value.trim() || '[]'); }
   catch (_) { status.textContent = '保存失败：JSON 格式不正确'; status.style.color = '#db5c52'; return; }
-  const model = { id: $('#modelId').value.trim(), name: $('#modelName').value.trim(), workflow: $('#modelWorkflow').value.trim(), request_url: $('#requestUrl').value.trim(), query_url: $('#queryUrl').value.trim(), token_id: $('#modelToken').value, request_params: {}, fields };
+  let pricing;
+  try { pricing = collectPricingFromEditor(); }
+  catch (err) { status.textContent = `保存失败：${err.message}`; status.style.color = '#db5c52'; return; }
+  const model = { id: $('#modelId').value.trim(), name: $('#modelName').value.trim(), workflow: $('#modelWorkflow').value.trim(), request_url: $('#requestUrl').value.trim(), query_url: $('#queryUrl').value.trim(), token_id: $('#modelToken').value, request_params: {}, fields, ...(pricing ? { pricing } : {}) };
   try {
     const res = await fetch(`${settings.apiBase}/api/models`, {
       method: 'POST',
@@ -1393,6 +1529,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#scheduleSubmit').addEventListener('change', saveForm);
   $('#modelSelect').addEventListener('change', () => { applySelectedModel(); saveForm(); });
+  $('#modelFields').addEventListener('change', renderPriceByResolutionRows);
+  $('#resolution').addEventListener('change', renderPricingLine);
   $('#clearForm').addEventListener('click', async () => {
     $('#prompt').value = '';
     state.imageItems = [{ id: imageId('link'), kind: 'link', value: '' }];

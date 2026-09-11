@@ -67,7 +67,7 @@
           <aside class="panel api-panel">
             <div class="panel-heading"><div><span class="section-kicker">ACTIVE MODEL</span><h3>当前模型</h3></div><span class="connected-badge"><i></i>已连接</span></div>
             <div class="api-card"><div class="api-logo">H<span>3</span><small>高画质 API</small></div><div><b id="activeModelName">MiniMax H3</b><p id="activeModelDescription">多图参考生视频</p></div></div>
-            <dl class="api-details"><div><dt>工作流 ID</dt><dd id="activeWorkflow">-</dd></div><div><dt>接口状态</dt><dd><span class="status-ok">● 可用</span></dd></div><div><dt>计费参考</dt><dd>¥ 0.02 / 秒 <small>00:00–08:00 ¥ 0.01 / 秒</small></dd></div></dl>
+            <dl class="api-details"><div><dt>工作流 ID</dt><dd id="activeWorkflow">-</dd></div><div><dt>接口状态</dt><dd><span class="status-ok">● 可用</span></dd></div><div><dt>计费参考</dt><dd id="pricingLine">-</dd></div></dl>
             <p class="api-note">模型连接和 API 参数可从左侧的 API 管理统一配置。</p>
           </aside>
         </div>
@@ -119,6 +119,15 @@
                   <label class="field field-wide"><span>查询地址</span><input id="queryUrl" type="url" /></label>
                   <label class="field field-wide"><span>使用令牌</span><select id="modelToken"></select><small class="field-help">请先在令牌管理中添加 API Key</small></label>
                   <label class="field field-wide"><span>表单字段定义 <small>JSON 数组</small></span><textarea id="modelFields" rows="16" spellcheck="false"></textarea><small class="field-help">支持 textarea、number、select、images；修改后视频提交页自动更新</small></label>
+                </div>
+                <div class="pricing-editor">
+                  <div class="pricing-editor-head"><b>价格设置（可选，单位 元/秒）</b><small>全部留空表示不配置价格；谷值时段外的时段按峰值计；设置了分辨率价格时，该分辨率按此价格计，不再区分峰谷</small></div>
+                  <div class="pricing-grid">
+                    <label class="field"><span>峰值价格</span><input id="pricePeak" type="number" min="0" step="0.001" placeholder="如 0.02" /></label>
+                    <label class="field"><span>谷值价格</span><input id="priceValley" type="number" min="0" step="0.001" placeholder="如 0.01" /></label>
+                    <label class="field"><span>谷值时段</span><input id="priceValleyWindow" type="text" placeholder="00:00-08:00" /></label>
+                  </div>
+                  <div class="pricing-res"><b>按分辨率价格</b><div id="priceByResolution" class="price-res-list"></div></div>
                 </div>
                 <div class="settings-actions"><button class="primary-button" id="saveSettings" type="button">保存模型</button><button class="delete-selected-button" id="deleteModel" type="button">删除模型</button></div>
               </div></div>

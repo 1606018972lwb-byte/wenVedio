@@ -81,6 +81,7 @@ const DEFAULT_MODELS = [
     request_url: 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow/minimax_h3_lightx2v_v5_15s',
     query_url: 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow/result/{task_id}',
     token_id: 'default', request_params: {},
+    pricing: { peak: 0.02, valley: 0.01, valley_start: '00:00', valley_end: '08:00' },
     fields: [
       { key: 'prompt', label: 'prompt', type: 'textarea', required: true, max: 500000 },
       { key: 'duration', label: 'duration', type: 'number', min: 1, max: 15, step: 1, default: 5 },
@@ -94,6 +95,7 @@ const DEFAULT_MODELS = [
     request_url: 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow/minimax_h3_lightx2v_v5',
     query_url: 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow/result/{task_id}',
     token_id: 'default', request_params: {},
+    pricing: { peak: 0.02, valley: 0.01, valley_start: '00:00', valley_end: '08:00' },
     fields: [
       { key: 'prompt', label: 'prompt', type: 'textarea', required: true, max: 500000 },
       { key: 'duration', label: 'duration', type: 'number', min: 1, max: 15, step: 1, default: 5 },
@@ -260,6 +262,17 @@ function loadModels() {
   }
   const source = Array.isArray(records) && records.length ? records : DEFAULT_MODELS;
   source.forEach((model) => models.set(model.id, { ...model, token_id: model.token_id || 'default' }));
+  // 旧版本保存的模型没有价格字段，内置模型补上默认价格，避免一直显示未配置。
+  let pricingBackfilled = false;
+  for (const model of models.values()) {
+    if (!model.pricing) {
+      const defaults = DEFAULT_MODELS.find((item) => item.id === model.id);
+      if (defaults && defaults.pricing) {
+        model.pricing = defaults.pricing;
+        pricingBackfilled = true;
+      }
+    }
+  }
   saveModels();
 }
 
@@ -508,6 +521,34 @@ function serveStatic(res, filePath, contentType) {
   });
 }
 
+// 模型可选价格：峰谷价格（元/秒）、谷值时段、按分辨率单价。
+function sanitizePricing(pricing) {
+  if (!pricing || typeof pricing !== 'object' || Array.isArray(pricing)) return undefined;
+  const toPrice = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) && num >= 0 ? Math.round(num * 1000) / 1000 : null;
+  };
+  const out = {};
+  const peak = toPrice(pricing.peak);
+  if (peak != null) out.peak = peak;
+  const valley = toPrice(pricing.valley);
+  if (valley != null) out.valley = valley;
+  const time = (value) => (typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : null);
+  const valleyStart = time(pricing.valley_start);
+  if (valleyStart) out.valley_start = valleyStart;
+  const valleyEnd = time(pricing.valley_end);
+  if (valleyEnd) out.valley_end = valleyEnd;
+  if (pricing.by_resolution && typeof pricing.by_resolution === 'object' && !Array.isArray(pricing.by_resolution)) {
+    const byResolution = {};
+    for (const [resolution, value] of Object.entries(pricing.by_resolution)) {
+      const price = toPrice(value);
+      if (price != null && resolution.trim()) byResolution[resolution.trim()] = price;
+    }
+    if (Object.keys(byResolution).length) out.by_resolution = byResolution;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // ---------------- 路由 ----------------
 async function handleApi(req, res, url) {
   const route = url.pathname;
@@ -577,11 +618,13 @@ async function handleApi(req, res, url) {
     if (!Array.isArray(model.fields) || !model.fields.length) {
       return sendJson(res, 400, { ok: false, msg: '参数字段定义必须是非空数组' });
     }
+    const pricing = sanitizePricing(model.pricing);
     const saved = {
       id, name, workflow, request_url: requestUrl, query_url: queryUrl,
       token_id: String(model.token_id || '').trim(),
       request_params: model.request_params && typeof model.request_params === 'object' && !Array.isArray(model.request_params) ? model.request_params : {},
       fields: model.fields,
+      ...(pricing ? { pricing } : {}),
     };
     if (!saved.token_id || !tokens.has(saved.token_id)) return sendJson(res, 400, { ok: false, msg: '请为模型选择已保存的令牌' });
     models.set(id, saved);
