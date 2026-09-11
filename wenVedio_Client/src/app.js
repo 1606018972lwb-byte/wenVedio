@@ -22,6 +22,7 @@ const state = {
   selectedModelId: '',
   adminModelId: '',
   tokens: [],
+  imageModelId: '',
 };
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -197,11 +198,21 @@ async function initializeModels() {
     if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
     const previousModelId = $('#modelSelect')?.value || state.selectedModelId;
     state.models = data.models || [];
+    const videoModels = state.models.filter((model) => model.kind !== 'image');
+    const imageModels = state.models.filter((model) => model.kind === 'image');
     const select = $('#modelSelect');
-    select.innerHTML = state.models.map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.name)}</option>`).join('');
-    state.selectedModelId = state.models.some((model) => model.id === previousModelId) ? previousModelId : (state.models[0]?.id || '');
+    select.innerHTML = videoModels.map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.name)}</option>`).join('');
+    state.selectedModelId = videoModels.some((model) => model.id === previousModelId) ? previousModelId : (videoModels[0]?.id || '');
     select.value = state.selectedModelId;
     applySelectedModel();
+    const imageSelect = $('#imageModelSelect');
+    if (imageSelect) {
+      const previousImageId = imageSelect.value || state.imageModelId;
+      imageSelect.innerHTML = imageModels.map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.name)}</option>`).join('');
+      state.imageModelId = imageModels.some((model) => model.id === previousImageId) ? previousImageId : (imageModels[0]?.id || '');
+      imageSelect.value = state.imageModelId;
+      applySelectedImageModel();
+    }
   } catch (err) {
     console.error('读取模型列表失败', err);
   }
@@ -221,6 +232,10 @@ function beijingHour(value) {
 }
 
 // 取费率：分辨率设置了专属价格就按它计；否则谷值时段内取谷价，时段外取峰价。
+function priceSymbol(pricing) {
+  return pricing && pricing.currency === 'USD' ? '$' : '¥';
+}
+
 function modelRateFor(pricing, resolution, atValue) {
   if (!pricing) return null;
   if (resolution && pricing.by_resolution && pricing.by_resolution[resolution] != null) return pricing.by_resolution[resolution];
@@ -237,11 +252,14 @@ function modelRateFor(pricing, resolution, atValue) {
 
 // 按当前时间判断峰谷，在提交行显示当前适用的价格；每 30 秒自动刷新。
 function pricingBreakdown(pricing) {
+  const symbol = priceSymbol(pricing);
+  const perSecond = pricing.unit !== 'per_image';
+  const unitText = perSecond ? '/秒' : '/张';
   const parts = [];
-  if (pricing.peak != null) parts.push(`峰值 ¥${pricing.peak}/秒`);
-  if (pricing.valley != null) parts.push(`谷值 ¥${pricing.valley}/秒（${pricing.valley_start || '00:00'}-${pricing.valley_end || '08:00'}）`);
+  if (pricing.peak != null) parts.push(`峰值 ${symbol}${pricing.peak}${unitText}`);
+  if (pricing.valley != null) parts.push(`谷值 ${symbol}${pricing.valley}${unitText}（${pricing.valley_start || '00:00'}-${pricing.valley_end || '08:00'}）`);
   if (pricing.by_resolution) {
-    for (const [resolution, price] of Object.entries(pricing.by_resolution)) parts.push(`${resolution} ¥${price}/秒`);
+    for (const [resolution, price] of Object.entries(pricing.by_resolution)) parts.push(`${resolution} ${symbol}${price}${unitText}`);
   }
   return parts.join(' · ') || '未配置价格';
 }
@@ -266,7 +284,7 @@ function renderCurrentPrice() {
   if (resolution && pricing.by_resolution && pricing.by_resolution[resolution] != null) label = `（${resolution}）`;
   else if (pricing.valley != null && rate === pricing.valley) label = '（谷值）';
   else label = '（峰值）';
-  el.textContent = `¥${rate}/秒${label}`;
+  el.textContent = `${priceSymbol(pricing)}${rate}/秒${label}`;
   el.title = pricingBreakdown(pricing);
 }
 
@@ -746,7 +764,7 @@ async function copyPrompt(prompt, button) {
 function openTaskDetail(task) {
   $('#taskDetailTitle').textContent = task.name || '任务详情';
   const rate = modelRateFor((state.models.find((model) => model.id === task.model_id) || {}).pricing, task.resolution, task.submitted_at || task.created_at);
-  const costText = rate != null && Number(task.duration) > 0 ? ` · 预估 ¥${(rate * Number(task.duration)).toFixed(3)}` : '';
+  const costText = rate != null && Number(task.duration) > 0 ? ` · 预估 ${priceSymbol((state.models.find((model) => model.id === task.model_id) || {}).pricing)}${(rate * Number(task.duration)).toFixed(3)}` : '';
   $('#taskDetailMeta').textContent = `${task.id} · ${task.time || '-'} · ${task.resolution || '未设置分辨率'}${costText}`;
   $('#taskDetailPrompt').textContent = task.prompt || '';
   $('#copyTaskDetail').dataset.taskId = task.id;
@@ -760,17 +778,18 @@ function closeTaskDetail() {
 }
 
 function renderTasks() {
-  const unfinished = state.tasks.filter((t) => !['completed', 'scheduled'].includes(taskStatus(t)));
+  const unfinished = state.tasks.filter((t) => t.kind !== 'image' && !['completed', 'scheduled'].includes(taskStatus(t)));
   const scheduled = state.tasks.filter((t) => taskStatus(t) === 'scheduled')
     .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
-  const recordFiltered = state.tasks.filter((t) => matchesTaskFilter(t, state.filter));
+  const recordFiltered = state.tasks.filter((t) => t.kind !== 'image' && matchesTaskFilter(t, state.filter));
   renderTaskRows($('#taskTable'), unfinished);
   renderTaskRows($('#recordTaskTable'), recordFiltered, true);
   renderScheduledTasks(scheduled);
+  renderImageTasks();
   $('#taskTotal').textContent = unfinished.length;
   const navTaskCount = $('#navTaskCount');
-  if (navTaskCount) navTaskCount.textContent = state.tasks.length;
-  const counts = state.tasks.reduce((acc, t) => {
+  if (navTaskCount) navTaskCount.textContent = String(state.tasks.filter((t) => t.kind !== 'image').length);
+  const counts = state.tasks.filter((t) => t.kind !== 'image').reduce((acc, t) => {
     acc.all += 1;
     const status = taskStatus(t);
     if (status === 'scheduled') acc.processing += 1;
@@ -874,6 +893,8 @@ async function loadTasks() {
       created_at: task.created_at,
       submitted_at: task.submitted_at,
       scheduled_at: task.scheduled_at,
+      kind: task.kind || 'video',
+      image_files: task.image_files || null,
       time: taskTime(task.created_at),
     })).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     renderTasks();
@@ -1076,6 +1097,7 @@ function pollTask(localId) {
       t.scheduled_at = remote.scheduled_at || null;
       t.submitted_at = remote.submitted_at || t.submitted_at;
       if (remote.video_url) { t.video_url = remote.video_url; }
+      if (remote.image_files) t.image_files = remote.image_files;
       const status = taskStatus(t);
       if (status === 'completed') { t.progress = 100; state.pollingTasks.delete(localId); notifyTaskFinished(t, true); }
       else if (['failed', 'timeout'].includes(status)) { state.pollingTasks.delete(localId); notifyTaskFinished(t, false); }
@@ -1443,11 +1465,250 @@ async function saveScheduleIntervalSeconds(value) {
   }
 }
 
+// ---- 图片生成 ----
+function selectedImageModel() {
+  return state.models.find((model) => model.kind === 'image' && model.id === ($('#imageModelSelect')?.value || state.imageModelId));
+}
+
+function imageFormParams() {
+  return Object.fromEntries($$('[data-image-field]').map((input) => [input.dataset.imageField, input.type === 'number' && input.value !== '' ? Number(input.value) : input.value]));
+}
+
+function applySelectedImageModel() {
+  const model = selectedImageModel();
+  if (!model) return;
+  state.imageModelId = model.id;
+  const wrap = $('#imageExtraFields');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  const fields = Array.isArray(model.fields) ? model.fields.filter((field) => field && field.key !== 'prompt') : [];
+  fields.forEach((field) => {
+    const label = document.createElement('label');
+    label.className = 'field';
+    label.innerHTML = `<span><b class="param-key">${escapeHtml(field.label || field.key)}</b>${field.required ? '<i>必填</i>' : '<small>可选</small>'}</span>`;
+    let input;
+    if (field.type === 'select') {
+      input = document.createElement('select');
+      input.innerHTML = '<option value="">请选择</option>' + (field.options || []).map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('');
+    } else if (field.type === 'textarea') {
+      input = document.createElement('textarea');
+      input.rows = 3;
+    } else {
+      input = document.createElement('input');
+      input.type = field.type === 'number' ? 'number' : 'text';
+      if (field.type === 'number') input.step = field.step != null ? field.step : 1;
+    }
+    input.dataset.imageField = field.key;
+    input.required = Boolean(field.required);
+    if (field.default != null) input.value = String(field.default);
+    input.addEventListener('input', () => { saveImageForm(); renderImageCurrentPrice(); });
+    input.addEventListener('change', () => { saveImageForm(); renderImageCurrentPrice(); });
+    label.appendChild(input);
+    wrap.appendChild(label);
+  });
+  renderImageCurrentPrice();
+}
+
+function renderImageCurrentPrice() {
+  const el = $('#imageCurrentPrice');
+  if (!el) return;
+  const pricing = (selectedImageModel() || {}).pricing;
+  if (!pricing || (pricing.peak == null && pricing.valley == null && !pricing.by_resolution)) {
+    el.textContent = '当前模型未配置价格';
+    el.title = '可在「模型管理」里为模型设置价格（可选按张计费）';
+    return;
+  }
+  const params = imageFormParams();
+  const size = typeof params.size === 'string' ? params.size : '';
+  const rate = modelRateFor(pricing, size, new Date().toISOString());
+  if (rate == null) { el.textContent = ''; el.title = ''; return; }
+  const perImage = pricing.unit === 'per_image';
+  const symbol = priceSymbol(pricing);
+  let text = `${symbol}${rate}/${perImage ? '张' : '秒'}`;
+  if (size) text += `（${size}）`;
+  if (perImage) {
+    const n = Math.max(1, Math.round(Number(params.n) || 1));
+    text += ` × ${n} 张 = ${symbol}${(rate * n).toFixed(2)}`;
+  }
+  el.textContent = text;
+  el.title = pricingBreakdown(pricing);
+}
+
+const IMAGE_FORM_KEY = 'wenvedio-image-form';
+
+function imageFormParamsSnapshot() {
+  return imageFormParams();
+}
+
+function saveImageForm() {
+  const payload = {
+    taskName: $('#imageTaskName')?.dataset.savedValue || $('#imageTaskName')?.value || '未命名图片任务',
+    sequence: $('#imageTaskSequence')?.value || '1',
+    modelId: $('#imageModelSelect')?.value || state.imageModelId || '',
+    prompt: $('#imagePrompt')?.value || '',
+    params: imageFormParamsSnapshot(),
+  };
+  try { localStorage.setItem(IMAGE_FORM_KEY, JSON.stringify(payload)); } catch (_) { /* 保存失败不影响使用 */ }
+}
+
+function restoreImageForm() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(IMAGE_FORM_KEY) || '{}'); } catch (_) { saved = {}; }
+  if (typeof saved.taskName === 'string' && saved.taskName.trim()) $('#imageTaskName').value = saved.taskName.trim();
+  $('#imageTaskName').dataset.savedValue = $('#imageTaskName').value.trim() || '未命名图片任务';
+  if (saved.sequence != null) $('#imageTaskSequence').value = String(saved.sequence);
+  if (typeof saved.modelId === 'string' && saved.modelId && state.models.some((model) => model.kind === 'image' && model.id === saved.modelId)) {
+    $('#imageModelSelect').value = saved.modelId;
+    state.imageModelId = saved.modelId;
+    applySelectedImageModel();
+  }
+  if (typeof saved.prompt === 'string') $('#imagePrompt').value = saved.prompt;
+  if (saved.params && typeof saved.params === 'object') {
+    $$('[data-image-field]').forEach((input) => {
+      const value = saved.params[input.dataset.imageField];
+      if (value != null) input.value = String(value);
+    });
+  }
+  renderImageCurrentPrice();
+}
+
+function initializeImageFormDraft() {
+  restoreImageForm();
+  saveImageForm();
+}
+
+function imageTaskFromRecord(record) {
+  return {
+    id: record.local_id,
+    kind: 'image',
+    name: record.name || '图片任务',
+    prompt: record.prompt || '',
+    status: record.status || 'processing',
+    image_files: record.image_files || null,
+    image_count: record.image_count || 0,
+    model_id: record.model_id,
+    model_name: record.model_name,
+    resolution: '',
+    created_at: record.created_at,
+    submitted_at: record.submitted_at || record.created_at,
+    time: taskTime(record.created_at),
+  };
+}
+
+async function submitImageBatch() {
+  const model = selectedImageModel();
+  if (!model) { alert('请选择生图模型'); return; }
+  const taskName = ($('#imageTaskName').dataset.savedValue || $('#imageTaskName').value).trim();
+  const sequence = Number($('#imageTaskSequence').value);
+  if (!taskName) { alert('请先设置并保存任务名字'); return; }
+  if (!Number.isInteger(sequence) || sequence < 1) { alert('序号必须是从 1 开始的整数'); $('#imageTaskSequence').focus(); return; }
+  const prompt = $('#imagePrompt').value.trim();
+  if (!prompt) { alert('请填写提示词'); $('#imagePrompt').focus(); return; }
+  const params = {};
+  for (const input of $$('[data-image-field]')) {
+    if (input.required && input.value.trim() === '') {
+      alert(`请填写必填参数：${input.dataset.imageField}`);
+      input.focus();
+      return;
+    }
+    if (input.value === '') continue;
+    params[input.dataset.imageField] = input.type === 'number' ? Number(input.value) : input.value;
+  }
+  try {
+    const res = await fetch(`${settings.apiBase}/api/batches`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `${taskName}_${sequence}`, model_id: model.id, tasks: [{ prompt, params }] }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+    (data.tasks || []).forEach((record) => {
+      state.tasks.unshift(imageTaskFromRecord(record));
+      if (record.local_id) pollTask(record.local_id);
+    });
+    renderTasks();
+    $('#imageTaskSequence').value = String(sequence + 1);
+    saveImageForm();
+  } catch (err) {
+    alert(`提交失败：${err.message}`);
+  }
+}
+
+async function downloadImageTask(task) {
+  const files = task.image_files || [];
+  if (!files.length) { alert('该任务还没有生成的图片'); return; }
+  const safeName = String(task.name || task.id).replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 80);
+  for (let i = 0; i < files.length; i += 1) {
+    const ext = String(files[i]).split('.').pop() || 'png';
+    try {
+      const res = await fetch(`${settings.apiBase}/api/tasks/${encodeURIComponent(task.id)}/image/${i}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      if (desktopBridge?.saveFile) {
+        let directory = state.downloadDirectory;
+        if (!directory?.path) {
+          directory = await chooseDownloadDirectory();
+          if (!directory?.path) return;
+        }
+        await desktopBridge.saveFile({ directory: directory.path, name: `${safeName}_${i + 1}.${ext}`, data: await blob.arrayBuffer() });
+      } else {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${safeName}_${i + 1}.${ext}`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      }
+    } catch (err) {
+      alert(`下载图片失败：${err.message}`);
+      return;
+    }
+  }
+  alert(`已下载 ${files.length} 张图片。`);
+}
+
+function renderImageTasks() {
+  const tbody = $('#imageTaskTable');
+  if (!tbody) return;
+  const imageTasks = state.tasks.filter((task) => task.kind === 'image');
+  tbody.innerHTML = '';
+  imageTasks.forEach((task) => {
+    const tr = document.createElement('tr');
+    tr.dataset.id = task.id;
+    const thumbs = task.image_files || [];
+    const thumbsHtml = thumbs.length
+      ? thumbs.map((_, index) => `<img src="${settings.apiBase}/api/tasks/${encodeURIComponent(task.id)}/image/${index}" alt="生成图片" loading="lazy" />`).join('')
+      : (taskStatus(task) === 'failed' ? '<span class="image-thumb-empty">无图片</span>' : '<span class="image-thumb-empty">生成中…</span>');
+    tr.innerHTML = `<td class="task-summary-cell"><div class="task-name">${escapeHtml(task.name)}</div><div class="task-id">${escapeHtml(task.id)} · ${escapeHtml(task.prompt)}</div></td><td class="progress-cell">${statusMarkup(task)}</td><td><div class="image-thumbs">${thumbsHtml}</div></td><td>${task.time}</td><td class="row-menu"><button class="row-menu-button" type="button" aria-label="任务操作">•••</button><div class="row-action-menu" hidden><button class="row-image-download" type="button" ${thumbs.length ? '' : 'disabled'}>下载图片</button><button class="row-delete-action" type="button">删除记录</button></div></td>`;
+    const menu = tr.querySelector('.row-action-menu');
+    tr.querySelector('.row-menu-button').addEventListener('click', (event) => {
+      event.stopPropagation();
+      $$('.row-action-menu').forEach((item) => { if (item !== menu) item.hidden = true; });
+      menu.hidden = !menu.hidden;
+    });
+    tr.querySelector('.row-image-download').addEventListener('click', () => { menu.hidden = true; downloadImageTask(task); });
+    tr.querySelector('.row-delete-action').addEventListener('click', () => { menu.hidden = true; deleteTasks([task.id]); });
+    tbody.appendChild(tr);
+  });
+  $('#imageTaskTotal').textContent = String(imageTasks.length);
+  $('#imageEmptyState').hidden = imageTasks.length > 0;
+}
+
+function clearImageForm() {
+  $('#imagePrompt').value = '';
+  $$('[data-image-field]').forEach((input) => { input.value = ''; });
+  saveImageForm();
+  renderImageCurrentPrice();
+}
+
 function showView(view) {
   const isQuery = view === 'query';
+  const isImage = view === 'image';
   const isRecords = view === 'tasks';
   const isSettings = view === 'settings';
   const isTokens = view === 'tokens';
+  const imageView = $('#imageView');
   const workspaceView = $('#workspaceView');
   const recordsView = $('#recordsView');
   const queryView = $('#queryView');
@@ -1455,17 +1716,18 @@ function showView(view) {
   const tokensView = $('#tokensView');
   const pageTitle = $('#pageTitle');
   const pageEyebrow = $('#pageEyebrow');
-  workspaceView.hidden = isQuery || isRecords || isSettings || isTokens;
+  workspaceView.hidden = isQuery || isRecords || isSettings || isTokens || isImage;
+  imageView.hidden = !isImage;
   recordsView.hidden = !isRecords;
   queryView.hidden = !isQuery;
   settingsView.hidden = !isSettings;
   tokensView.hidden = !isTokens;
-  pageTitle.textContent = isQuery ? '访问查询' : isRecords ? '任务记录' : isSettings ? '模型管理' : isTokens ? '令牌管理' : '视频生成工作台';
-  pageEyebrow.textContent = isQuery ? 'AUTODL / COMFYUI' : isRecords ? 'WORKSPACE / HISTORY' : isSettings ? 'WORKSPACE / MODELS' : isTokens ? 'WORKSPACE / TOKENS' : 'WORKSPACE / VIDEO LAB';
+  pageTitle.textContent = isImage ? '图片生成' : isQuery ? '访问查询' : isRecords ? '任务记录' : isSettings ? '模型管理' : isTokens ? '令牌管理' : '视频生成工作台';
+  pageEyebrow.textContent = isImage ? 'WORKSPACE / IMAGE LAB' : isQuery ? 'AUTODL / COMFYUI' : isRecords ? 'WORKSPACE / HISTORY' : isSettings ? 'WORKSPACE / MODELS' : isTokens ? 'WORKSPACE / TOKENS' : 'WORKSPACE / VIDEO LAB';
   $$('.main-nav .nav-item').forEach((item) => item.classList.remove('active'));
-  $(`#${isQuery ? 'navQuery' : isRecords ? 'navTasks' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : 'navWorkspace'}`).classList.add('active');
+  $(`#${isImage ? 'navImage' : isQuery ? 'navQuery' : isRecords ? 'navTasks' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : 'navWorkspace'}`).classList.add('active');
   $$('.mobile-nav button').forEach((item) => item.classList.remove('active'));
-  $(`#${isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace'}`).classList.add('active');
+  $(`#${isImage ? 'mobileImage' : isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace'}`).classList.add('active');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -1512,9 +1774,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!$('#appSettingsModal').hidden) closeAppSettingsPanel();
   });
   document.addEventListener('click', () => $$('.row-action-menu').forEach((menu) => { menu.hidden = true; }));
+  $('#navImage').addEventListener('click', (event) => { event.preventDefault(); showView('image'); });
   $('#navWorkspace').addEventListener('click', (event) => { event.preventDefault(); showView('workspace'); });
   $('#navTasks').addEventListener('click', (event) => { event.preventDefault(); showView('tasks'); });
   $('#navQuery').addEventListener('click', (event) => { event.preventDefault(); showView('query'); });
+  $('#mobileImage').addEventListener('click', () => showView('image'));
   $('#mobileWorkspace').addEventListener('click', () => showView('workspace'));
   $('#mobileTasks').addEventListener('click', () => showView('tasks'));
   $('#mobileQuery').addEventListener('click', () => showView('query'));
@@ -1532,7 +1796,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#settingPollInterval').addEventListener('change', (event) => saveAppSettings({ pollIntervalSeconds: Number(event.target.value) || 60 }));
   $('#settingScheduleInterval').addEventListener('change', (event) => saveScheduleIntervalSeconds(event.target.value));
-  initializeModels().then(initializeFormDraft);
+  initializeModels().then(() => { initializeFormDraft(); initializeImageFormDraft(); });
   initializeDownloadDirectory();
   $('#chooseDownloadDirectory').addEventListener('click', chooseDownloadDirectory);
   $('#sidebarToggle').addEventListener('click', toggleSidebar);
@@ -1542,6 +1806,33 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#scheduleSubmit').addEventListener('change', saveForm);
   $('#modelSelect').addEventListener('change', () => { applySelectedModel(); saveForm(); });
+  $('#imageModelSelect').addEventListener('change', () => { applySelectedImageModel(); saveImageForm(); });
+  $('#submitImageBatch').addEventListener('click', submitImageBatch);
+  $('#clearImageForm').addEventListener('click', clearImageForm);
+  $('#imagePrompt').addEventListener('input', saveImageForm);
+  $('#imageTaskSequence').addEventListener('input', saveImageForm);
+  $('#editImageTaskName').addEventListener('click', () => {
+    const input = $('#imageTaskName');
+    input.readOnly = false;
+    $('#editImageTaskName').hidden = true;
+    $('#saveImageTaskName').hidden = false;
+    input.focus();
+    input.select();
+  });
+  $('#saveImageTaskName').addEventListener('click', () => {
+    const input = $('#imageTaskName');
+    const nextName = input.value.trim();
+    if (!nextName) { alert('任务名字不能为空'); input.focus(); return; }
+    const previousName = input.dataset.savedValue || '未命名图片任务';
+    input.value = nextName;
+    input.dataset.savedValue = nextName;
+    input.readOnly = true;
+    $('#saveImageTaskName').hidden = true;
+    $('#editImageTaskName').hidden = false;
+    if (nextName !== previousName) $('#imageTaskSequence').value = '1';
+    saveImageForm();
+  });
+  setInterval(() => { renderCurrentPrice(); renderImageCurrentPrice(); }, 30 * 1000);
   $('#modelFields').addEventListener('change', renderPriceByResolutionRows);
   $('#resolution').addEventListener('change', renderCurrentPrice);
   $('#clearForm').addEventListener('click', async () => {

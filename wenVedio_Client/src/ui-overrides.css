@@ -310,3 +310,14 @@ th, td { padding: 13px 12px; }
 
 /* 右侧「当前模型」面板已移除，创建区占满整行 */
 .page-grid { grid-template-columns: minmax(0, 1fr); }
+
+.image-view { padding-top: 4px; }
+.image-view .records-intro { padding: 28px 2px 22px; }
+.image-view .records-intro h2 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0; }
+.image-view .records-intro p { margin: 0; color: var(--muted); font-size: 13px; }
+.image-view .page-grid { grid-template-columns: minmax(0, 1fr); }
+.image-view .submit-footer .estimate b { font: 12px "DM Mono", monospace; }
+.image-thumbs { display: flex; flex-wrap: wrap; gap: 6px; max-width: 320px; }
+.image-thumbs img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); display: block; }
+.image-thumb-empty { color: #9ba4af; font-size: 10px; }
+@media (max-width: 680px) { .image-view .records-intro { padding: 20px 2px 17px; } .image-view .records-intro h2 { font-size: 24px; } }

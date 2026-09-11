@@ -16,7 +16,7 @@
         <div class="brand"><span class="brand-mark">F</span><span class="brand-name">Frame<span class="brand-accent">Flow</span></span><button class="sidebar-toggle" id="sidebarToggle" type="button" title="收起侧边栏" aria-label="收起侧边栏">‹</button></div>
         <div class="workspace-switcher"><span class="workspace-avatar">影</span><span class="workspace-copy"><b>视频创作组</b><small>个人工作区</small></span><span class="chevron">⌄</span></div>
         <nav class="main-nav" aria-label="主导航">
-          <a class="nav-item active" id="navWorkspace" href="#workspace"><span class="nav-icon">✦</span><span class="nav-label">视频生成</span></a>
+          <a class="nav-item active" id="navImage" href="#image"><span class="nav-icon">▣</span><span class="nav-label">图片生成</span></a><a class="nav-item" id="navWorkspace" href="#workspace"><span class="nav-icon">✦</span><span class="nav-label">视频生成</span></a>
           <a class="nav-item" id="navTasks" href="#tasks"><span class="nav-icon">◫</span><span class="nav-label">任务记录</span><span class="nav-count" id="navTaskCount">0</span></a>
           <a class="nav-item" id="navQuery" href="#query"><span class="nav-icon">↗</span><span class="nav-label">查询入口</span></a>
           <button class="nav-item nav-action" id="openSettings" type="button"><span class="nav-icon">⚙</span><span class="nav-label">模型管理</span></button>
@@ -29,7 +29,30 @@
           <div><p class="eyebrow" id="pageEyebrow">WORKSPACE / VIDEO LAB</p><h1 id="pageTitle">视频生成工作台</h1></div>
           <div class="top-actions"><span class="sync-status"><i></i>服务正常 · 刚刚同步</span><button class="icon-button" title="通知">♢<span class="notification-dot"></span></button><button class="avatar-button">MC</button></div>
         </header>
-        <nav class="mobile-nav" aria-label="移动端导航"><button id="mobileWorkspace" class="active" type="button">视频生成</button><button id="mobileTasks" type="button">任务记录</button><button id="mobileQuery" type="button">查询入口</button><button id="mobileApi" type="button">模型管理</button></nav>
+        <nav class="mobile-nav" aria-label="移动端导航"><button id="mobileImage" class="active" type="button">图片生成</button><button id="mobileWorkspace" type="button">视频生成</button><button id="mobileTasks" type="button">任务记录</button><button id="mobileQuery" type="button">查询入口</button><button id="mobileApi" type="button">模型管理</button></nav>
+
+        <section class="image-view" id="imageView" hidden>
+          <div class="records-intro"><span class="section-kicker">01 / IMAGE CREATE</span><h2>图片生成</h2><p>选择生图模型，输入提示词，按当前规格价格出图。</p></div>
+          <div class="page-grid">
+            <section class="panel submit-panel">
+              <div class="panel-heading"><div><span class="section-kicker">01 / CREATE</span><h3>创建图片任务</h3></div><button class="text-button" id="clearImageForm">清空表单</button></div>
+              <label class="field model-select-field"><span><b class="param-key">生图模型</b><i>必选</i></span><select id="imageModelSelect"></select><small class="field-help">生图模型与价格在「模型管理」中配置</small></label>
+              <div class="task-identity-grid">
+                <label class="field"><span><b class="param-key">任务名字</b></span><div class="task-name-editor"><input id="imageTaskName" type="text" value="未命名图片任务" maxlength="100" readonly /><button id="editImageTaskName" type="button">修改</button><button id="saveImageTaskName" type="button" hidden>保存</button></div><small class="field-help">修改名字并保存后，序号自动重置为 1</small></label>
+                <label class="field"><span><b class="param-key">序号</b></span><input id="imageTaskSequence" type="number" min="1" step="1" value="1" /><small class="field-help">必须为从 1 开始的整数，提交后自动加 1</small></label>
+              </div>
+              <div class="form-grid">
+                <label class="field field-wide"><span><b class="param-key">prompt</b><i>必填</i></span><textarea id="imagePrompt" rows="4" maxlength="500000" placeholder="描述想生成的图片内容"></textarea></label>
+              </div>
+              <div class="form-grid parameter-grid" id="imageExtraFields"></div>
+              <div class="submit-footer"><span class="estimate"><span class="spark">✦</span>当前价格 <b id="imageCurrentPrice">-</b></span><button class="primary-button" id="submitImageBatch"><span>▶</span> 提交生成</button></div>
+            </section>
+          </div>
+          <section class="panel tasks-panel">
+            <div class="panel-heading tasks-heading"><div><span class="section-kicker">02 / IMAGES</span><h3>图片任务 <span class="task-total" id="imageTaskTotal">0</span></h3></div><span class="panel-caption">图片完成后可在任务菜单里逐张下载；删除任务会同时删除图片文件</span></div>
+            <div class="table-wrap"><table><thead><tr><th>任务 / 提示词</th><th>状态</th><th>图片</th><th>创建时间</th><th></th></tr></thead><tbody id="imageTaskTable"></tbody></table><div id="imageEmptyState" class="empty-state" hidden><span>▣</span><b>暂无图片任务</b><p>提交后，生成中的任务会显示在这里</p></div></div>
+          </section>
+        </section>
 
         <section class="workspace-view" id="workspaceView">
         <section class="hero-strip">

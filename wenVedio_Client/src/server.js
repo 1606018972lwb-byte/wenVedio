@@ -66,6 +66,7 @@ const TASKS_FILE = path.join(CONFIG_DIR, 'tasks.json');
 const SETTINGS_FILE = path.join(CONFIG_DIR, 'settings.json');
 const MODELS_FILE = path.join(CONFIG_DIR, 'models.json');
 const TOKENS_FILE = path.join(CONFIG_DIR, 'tokens.json');
+const IMAGES_DIR = path.join(DATA_DIR, 'images');
 const store = new Map();
 const models = new Map();
 const tokens = new Map();
@@ -497,6 +498,126 @@ function publicConfig() {
   };
 }
 
+// ---- 图片生成（OpenAI 兼容 images 接口，后台异步执行）----
+function createMockImage(index) {
+  const width = 512;
+  const height = 512;
+  const palette = [[63, 104, 240], [232, 121, 69], [26, 167, 120], [138, 98, 211]];
+  const [r, g, b] = palette[index % palette.length];
+  const rowSize = width * 3 + ((4 - ((width * 3) % 4)) % 4);
+  const pixels = Buffer.alloc(rowSize * height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = y * rowSize + x * 3;
+      pixels[offset] = b;
+      pixels[offset + 1] = g;
+      pixels[offset + 2] = r;
+    }
+  }
+  const header = Buffer.alloc(54);
+  header.write('BM', 0, 'ascii');
+  header.writeUInt32LE(54 + pixels.length, 2);
+  header.writeUInt32LE(54, 10);
+  header.writeUInt32LE(40, 14);
+  header.writeInt32LE(width, 18);
+  header.writeInt32LE(height, 22);
+  header.writeUInt16LE(1, 26);
+  header.writeUInt16LE(24, 28);
+  header.writeUInt32LE(pixels.length, 34);
+  return Buffer.concat([header, pixels]);
+}
+
+async function runImageGeneration(record) {
+  const model = models.get(record.model_id);
+  try {
+    if (!model) throw new Error('模型配置不存在');
+    fs.mkdirSync(IMAGES_DIR, { recursive: true });
+    if (config.mock) {
+      const count = Math.min(10, Math.max(1, Math.round(Number(record.params?.n) || 1)));
+      const files = [];
+      for (let i = 0; i < count; i += 1) {
+        const name = `${record.local_id}-${i + 1}.bmp`;
+        fs.writeFileSync(path.join(IMAGES_DIR, name), createMockImage(i));
+        files.push(name);
+      }
+      record.image_files = files;
+      record.image_count = files.length;
+      record.status = 'completed';
+      record.completed_at = new Date().toISOString();
+      writeLog('info', `图片任务 ${record.local_id} 演示生成完成（${files.length} 张）`);
+    } else {
+      const token = tokenValueFor(model);
+      if (!token) throw new Error('模型未配置有效令牌');
+      const body = { model: model.workflow, prompt: record.prompt };
+      for (const [key, value] of Object.entries(record.params || {})) {
+        if (value === '' || value == null) continue;
+        body[key] = value;
+      }
+      if (body.n != null) body.n = Math.min(10, Math.max(1, Math.round(Number(body.n) || 1)));
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 300 * 1000);
+      let res;
+      try {
+        res = await fetch(model.request_url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error?.message || data?.msg || `HTTP ${res.status}`);
+      const items = Array.isArray(data.data) ? data.data : [];
+      if (!items.length) throw new Error('接口未返回图片数据');
+      const files = [];
+      for (let i = 0; i < items.length; i += 1) {
+        const item = items[i];
+        let buffer;
+        let ext = 'png';
+        if (item.b64_json) {
+          buffer = Buffer.from(item.b64_json, 'base64');
+          if (typeof item.mime_type === 'string') {
+            if (item.mime_type.includes('jpeg')) ext = 'jpg';
+            else if (item.mime_type.includes('webp')) ext = 'webp';
+          }
+        } else if (item.url) {
+          const imageRes = await fetch(item.url);
+          if (!imageRes.ok) throw new Error(`下载生成图片失败 HTTP ${imageRes.status}`);
+          const type = imageRes.headers.get('content-type') || '';
+          if (type.includes('jpeg')) ext = 'jpg';
+          else if (type.includes('webp')) ext = 'webp';
+          buffer = Buffer.from(await imageRes.arrayBuffer());
+        } else {
+          throw new Error('返回的图片缺少数据');
+        }
+        const name = `${record.local_id}-${i + 1}.${ext}`;
+        fs.writeFileSync(path.join(IMAGES_DIR, name), buffer);
+        files.push(name);
+      }
+      record.image_files = files;
+      record.image_count = files.length;
+      record.status = 'completed';
+      record.completed_at = new Date().toISOString();
+      writeLog('info', `图片任务 ${record.local_id} 生成完成（${files.length} 张）`);
+    }
+  } catch (err) {
+    record.status = 'failed';
+    record.error = err.message;
+    writeLog('error', `图片任务 ${record.local_id} 失败: ${err.message}`);
+  }
+  saveStore();
+}
+
+// 删除图片任务时同时清理落盘的图片文件。
+function deleteTaskFiles(record) {
+  if (!record || record.kind !== 'image' || !Array.isArray(record.image_files)) return;
+  for (const name of record.image_files) {
+    try { fs.unlinkSync(path.join(IMAGES_DIR, path.basename(name))); } catch (_) { /* 文件可能已不存在 */ }
+  }
+}
+
 // ---------------- JSON / 静态资源 工具 ----------------
 function sendJson(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -529,6 +650,8 @@ function sanitizePricing(pricing) {
     return Number.isFinite(num) && num >= 0 ? Math.round(num * 1000) / 1000 : null;
   };
   const out = {};
+  if (pricing.unit === 'per_image' || pricing.unit === 'per_second') out.unit = pricing.unit;
+  if (pricing.currency === 'USD') out.currency = 'USD';
   const peak = toPrice(pricing.peak);
   if (peak != null) out.peak = peak;
   const valley = toPrice(pricing.valley);
@@ -612,15 +735,17 @@ async function handleApi(req, res, url) {
     const workflow = String(model.workflow || id).trim();
     const requestUrl = String(model.request_url || '').trim();
     const queryUrl = String(model.query_url || '').trim();
-    if (!id || !name || !workflow || !requestUrl || !queryUrl) {
-      return sendJson(res, 400, { ok: false, msg: '模型 ID、名称、工作流 ID、提交地址和查询地址均为必填' });
+    const kind = model.kind === 'image' ? 'image' : 'video';
+    if (!id || !name || !workflow || !requestUrl || (kind === 'video' && !queryUrl)) {
+      return sendJson(res, 400, { ok: false, msg: kind === 'image' ? '模型 ID、名称、工作流 ID 和提交地址为必填' : '模型 ID、名称、工作流 ID、提交地址和查询地址均为必填' });
     }
     if (!Array.isArray(model.fields) || !model.fields.length) {
       return sendJson(res, 400, { ok: false, msg: '参数字段定义必须是非空数组' });
     }
     const pricing = sanitizePricing(model.pricing);
     const saved = {
-      id, name, workflow, request_url: requestUrl, query_url: queryUrl,
+      id, name, workflow, kind, request_url: requestUrl,
+      ...(kind === 'video' ? { query_url: queryUrl } : {}),
       token_id: String(model.token_id || '').trim(),
       request_params: model.request_params && typeof model.request_params === 'object' && !Array.isArray(model.request_params) ? model.request_params : {},
       fields: model.fields,
@@ -678,8 +803,9 @@ async function handleApi(req, res, url) {
     const modelId = String(payload.model_id || config.workflow);
     const selectedModel = models.get(modelId);
     if (!selectedModel) return sendJson(res, 400, { ok: false, msg: '所选模型不存在' });
+    const isImageModel = selectedModel.kind === 'image';
     const wantsSchedule = payload.scheduled === true;
-    const shouldSchedule = wantsSchedule && !isNightDiscountTime();
+    const shouldSchedule = wantsSchedule && !isNightDiscountTime() && !isImageModel;
     const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
 
     if (!tasks.length) return sendJson(res, 400, { ok: false, msg: '没有可提交的任务' });
@@ -693,17 +819,16 @@ async function handleApi(req, res, url) {
         ? t.reference_images.slice(0, 10).map((url) => typeof url === 'string' ? url.trim() : '')
         : [];
       if (!prompt || prompt.length > 500000) return sendJson(res, 400, { ok: false, msg: 'prompt 长度必须是 1-500000' });
-      if (!Array.isArray(t.reference_images) || t.reference_images.length > 10) return sendJson(res, 400, { ok: false, msg: '图片参数最多支持 ref_image_0 到 ref_image_9' });
-      if (!refs[0]) return sendJson(res, 400, { ok: false, msg: '请填写 ref_image_0' });
+      if (!isImageModel) {
+        if (!Array.isArray(t.reference_images) || t.reference_images.length > 10) return sendJson(res, 400, { ok: false, msg: '图片参数最多支持 ref_image_0 到 ref_image_9' });
+        if (!refs[0]) return sendJson(res, 400, { ok: false, msg: '请填写 ref_image_0' });
+      }
       const record = {
         local_id: localId,
         name,
         model_id: selectedModel.id,
         model_name: selectedModel.name,
         prompt,
-        duration: Number.isInteger(Number(t.duration)) ? Math.min(15, Math.max(1, Number(t.duration))) : 5,
-        resolution: typeof t.resolution === 'string' ? t.resolution.trim() : '',
-        seed: normalizeSeed(t.seed),
         params: t.params && typeof t.params === 'object' && !Array.isArray(t.params) ? t.params : {},
         reference_images: refs,
         image_count: refs.filter(Boolean).length,
@@ -712,11 +837,26 @@ async function handleApi(req, res, url) {
         error: null,
         created_at: new Date().toISOString(),
       };
+      if (isImageModel) {
+        record.kind = 'image';
+        record.image_count = 0;
+        record.status = 'processing';
+      } else {
+        record.duration = Number.isInteger(Number(t.duration)) ? Math.min(15, Math.max(1, Number(t.duration))) : 5;
+        record.resolution = typeof t.resolution === 'string' ? t.resolution.trim() : '';
+        record.seed = normalizeSeed(t.seed);
+      }
       if (shouldSchedule) record.scheduled_at = nextScheduledTime().toISOString();
       store.set(localId, record);
 
-      if (shouldSchedule) saveStore();
-      else await performSubmission(record);
+      if (isImageModel && !shouldSchedule) {
+        saveStore();
+        runImageGeneration(record);
+      } else if (shouldSchedule) {
+        saveStore();
+      } else {
+        await performSubmission(record);
+      }
       created.push(record);
     }
     return sendJson(res, 200, { ok: true, name, tasks: created });
@@ -761,6 +901,19 @@ async function handleApi(req, res, url) {
     const localId = decodeURIComponent(downloadMatch[1]);
     const rec = store.get(localId);
     if (!rec) return sendJson(res, 404, { ok: false, msg: '任务不存在' });
+    if (rec.kind === 'image') {
+      const name = Array.isArray(rec.image_files) ? rec.image_files[0] : null;
+      const file = name ? path.join(IMAGES_DIR, path.basename(name)) : null;
+      if (!file || !fs.existsSync(file)) return sendJson(res, 409, { ok: false, msg: '任务尚无可下载的图片' });
+      const ext = path.extname(file).toLowerCase();
+      res.writeHead(200, {
+        'Content-Type': ext === '.jpg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : ext === '.bmp' ? 'image/bmp' : 'image/png',
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(fs.readFileSync(file));
+      return;
+    }
     if (!rec.video_url) return sendJson(res, 409, { ok: false, msg: '任务尚无可下载的视频' });
     try {
       const remote = await fetch(rec.video_url);
@@ -785,7 +938,10 @@ async function handleApi(req, res, url) {
   const deleteMatch = route.match(/^\/api\/tasks\/([^/]+)$/);
   if (deleteMatch && req.method === 'DELETE') {
     const localId = decodeURIComponent(deleteMatch[1]);
-    if (!store.delete(localId)) return sendJson(res, 404, { ok: false, msg: '任务不存在' });
+    const rec = store.get(localId);
+    if (!rec) return sendJson(res, 404, { ok: false, msg: '任务不存在' });
+    deleteTaskFiles(rec);
+    store.delete(localId);
     saveStore();
     return sendJson(res, 200, { ok: true, deleted: [localId] });
   }
@@ -795,9 +951,34 @@ async function handleApi(req, res, url) {
     let payload = {};
     try { payload = JSON.parse(await readBody(req)); } catch (_) {}
     const ids = Array.isArray(payload.ids) ? [...new Set(payload.ids.map(String))] : [];
-    const deleted = ids.filter((id) => store.delete(id));
+    const deleted = [];
+    for (const id of ids) {
+      const rec = store.get(id);
+      if (!rec) continue;
+      deleteTaskFiles(rec);
+      store.delete(id);
+      deleted.push(id);
+    }
     if (deleted.length) saveStore();
     return sendJson(res, 200, { ok: true, deleted });
+  }
+
+  // 图片任务预览：GET /api/tasks/{id}/image/{序号}
+  const imageMatch = route.match(/^\/api\/tasks\/([^/]+)\/image\/(\d+)$/);
+  if (imageMatch && req.method === 'GET') {
+    const rec = store.get(decodeURIComponent(imageMatch[1]));
+    const index = Number(imageMatch[2]);
+    const name = rec && rec.kind === 'image' && Array.isArray(rec.image_files) ? rec.image_files[index] : null;
+    const file = name ? path.join(IMAGES_DIR, path.basename(name)) : null;
+    if (!file || !fs.existsSync(file)) return sendJson(res, 404, { ok: false, msg: '图片不存在' });
+    const ext = path.extname(file).toLowerCase();
+    res.writeHead(200, {
+      'Content-Type': ext === '.jpg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : ext === '.bmp' ? 'image/bmp' : 'image/png',
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(fs.readFileSync(file));
+    return;
   }
 
   // 查询单个任务：GET /api/tasks/{localId}
