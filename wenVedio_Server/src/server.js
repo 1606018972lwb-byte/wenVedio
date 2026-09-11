@@ -34,8 +34,8 @@ function loadEnv() {
 const env = loadEnv();
 const config = {
   port: Number(process.env.PORT || env.PORT || 8787),
-  // 仅桌面客户端会注入 HOST=127.0.0.1，web 端保持只监听端口（原有行为）。
-  host: process.env.HOST || '',
+  // 监听地址：桌面客户端注入 HOST=127.0.0.1；独立服务端由 .env 的 HOST 决定（不写则保持原有行为）。
+  host: process.env.HOST || env.HOST || '',
   // 第三方提交接口前缀：实际提交 POST {endpoint}/{workflow}
   endpoint: env.AUTODL_ENDPOINT || 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow',
   workflow: env.AUTODL_WORKFLOW || 'minimax_h3_lightx2v_v5_15s',
