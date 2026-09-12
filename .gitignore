@@ -4,3 +4,6 @@
 # wenVedio 内部的本地配置和临时文件由 wenVedio/.gitignore 管理
 /wenVedio/.env
 /wenVedio/node_modules/
+
+# 临时脚本与验证文件
+.tmp-*/
