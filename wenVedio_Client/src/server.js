@@ -85,9 +85,9 @@ const DEFAULT_MODELS = [
     pricing: { peak: 0.02, valley: 0.01, valley_start: '00:00', valley_end: '08:00' },
     fields: [
       { key: 'prompt', label: 'prompt', type: 'textarea', required: true, max: 500000 },
-      { key: 'duration', label: 'duration', type: 'number', min: 1, max: 15, step: 1, default: 5 },
-      { key: 'resolution', label: 'resolution', type: 'select', options: ['480p竖', '768p竖', '480p横', '768p横', '480p(1:1)', '768p(1:1)'] },
-      { key: 'seed', label: 'seed', type: 'number', min: 1, max: MAX_SEED, step: 1 },
+      { key: 'duration', label: '时长', type: 'number', min: 1, max: 15, step: 1, default: 5 },
+      { key: 'resolution', label: '分辨率', type: 'select', options: ['480p竖', '768p竖', '480p横', '768p横', '480p(1:1)', '768p(1:1)'] },
+      { key: 'seed', label: '随机种子', type: 'number', min: 1, max: MAX_SEED, step: 1 },
       { key: 'reference_images', label: '参考图片', type: 'images', required: true, min: 1, max: 10 },
     ],
   },
@@ -99,9 +99,9 @@ const DEFAULT_MODELS = [
     pricing: { peak: 0.02, valley: 0.01, valley_start: '00:00', valley_end: '08:00' },
     fields: [
       { key: 'prompt', label: 'prompt', type: 'textarea', required: true, max: 500000 },
-      { key: 'duration', label: 'duration', type: 'number', min: 1, max: 15, step: 1, default: 5 },
-      { key: 'resolution', label: 'resolution', type: 'select', options: ['480p竖', '768p竖', '1080p竖', '480p横', '768p横', '1080p横', '480p(1:1)', '768p(1:1)', '1080p(1:1)'] },
-      { key: 'seed', label: 'seed', type: 'number', min: 1, max: MAX_SEED, step: 1 },
+      { key: 'duration', label: '时长', type: 'number', min: 1, max: 15, step: 1, default: 5 },
+      { key: 'resolution', label: '分辨率', type: 'select', options: ['480p竖', '768p竖', '1080p竖', '480p横', '768p横', '1080p横', '480p(1:1)', '768p(1:1)', '1080p(1:1)'] },
+      { key: 'seed', label: '随机种子', type: 'number', min: 1, max: MAX_SEED, step: 1 },
       { key: 'reference_images', label: '参考图片', type: 'images', required: true, min: 1, max: 10 },
     ],
   },
@@ -808,7 +808,15 @@ async function handleApi(req, res, url) {
     const existing = tokens.get(id);
     // 带已有 id 即为编辑：Key 留空表示保留原值；新增仍必须提供 Key。
     if (!name || (!value && !existing)) return sendJson(res, 400, { ok: false, msg: '令牌名称和 API Key 不能为空' });
-    const token = { id, name, value: value || existing?.value || '', created_at: existing?.created_at || new Date().toISOString() };
+    const token = {
+      id,
+      name,
+      value: value || existing?.value || '',
+      provider: String(payload.provider || existing?.provider || '').trim(),
+      remark: String(payload.remark || existing?.remark || '').slice(0, 200),
+      created_at: existing?.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
     tokens.set(id, token);
     saveTokens();
     rebindModelTokens();
@@ -1039,6 +1047,49 @@ async function handleApi(req, res, url) {
       created.push(record);
     }
     return sendJson(res, 200, { ok: true, name, tasks: created });
+  }
+
+  // 令牌连接测试：借用绑定了该令牌的模型地址探测
+  if (route === '/api/tokens/test' && req.method === 'POST') {
+    let payload = {};
+    try { payload = JSON.parse(await readBody(req)); } catch (_) {}
+    const id = String(payload.id || '');
+    const token = tokens.get(id);
+    if (!token) return sendJson(res, 404, { ok: false, msg: '令牌不存在' });
+    const bound = [...models.values()].filter((model) => model.token_id === id);
+    if (!bound.length) return sendJson(res, 200, { ok: false, latency_ms: 0, msg: '该令牌尚未绑定模型，无法测试' });
+    const model = bound[0];
+    const candidates = [];
+    if (model.kind === 'image') {
+      const modelsUrl = String(model.request_url || '').replace('/images/generations', '/models');
+      if (modelsUrl && modelsUrl !== model.request_url) candidates.push(modelsUrl);
+    } else if (model.query_url) {
+      candidates.push(String(model.query_url).replace('{task_id}', 'wenvedio-test'));
+    }
+    candidates.push(String(model.request_url || ''));
+    const started = Date.now();
+    let lastError = '未配置地址';
+    for (const url of candidates) {
+      if (!url || !/^https?:\/\//i.test(url)) continue;
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10 * 1000);
+        let res;
+        try {
+          res = await fetch(url, { headers: { Authorization: `Bearer ${token.value}` }, signal: controller.signal });
+        } finally {
+          clearTimeout(timer);
+        }
+        const latency = Date.now() - started;
+        if (res.status === 401 || res.status === 403) {
+          return sendJson(res, 200, { ok: false, latency_ms: latency, status: res.status, msg: `服务可达，但令牌校验失败（HTTP ${res.status}）` });
+        }
+        return sendJson(res, 200, { ok: true, latency_ms: latency, status: res.status, msg: `连接正常（HTTP ${res.status}）` });
+      } catch (err) {
+        lastError = err.name === 'AbortError' ? '连接超时（10 秒）' : err.message;
+      }
+    }
+    return sendJson(res, 200, { ok: false, latency_ms: Date.now() - started, msg: `连接失败：${lastError}` });
   }
 
   const scheduledAction = route.match(/^\/api\/scheduled\/([^/]+)\/(submit|cancel)$/);

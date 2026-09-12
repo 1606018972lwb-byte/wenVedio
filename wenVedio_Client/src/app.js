@@ -25,6 +25,7 @@ const state = {
   imageModelId: '',
   imageRefItems: [],
   recordsKind: 'video',
+  tc: { filter: 'all', search: '', type: '', model: '', date: '' },
 };
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -63,18 +64,42 @@ function randomSeed() {
   return Math.floor(Math.random() * MAX_SEED) + 1;
 }
 
+const GEN_VALUES_KEY = 'wenvedio_gen_values_v1';
+const genValues = { video: { values: {} }, image: { values: {} } };
+function setGenFieldValue(kind, key, value) {
+  genValues[kind].values[key] = value;
+  saveGenValues();
+}
+function loadGenValues() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(GEN_VALUES_KEY) || 'null');
+    if (saved && typeof saved === 'object') {
+      if (saved.video && typeof saved.video === 'object') genValues.video.values = saved.video;
+      if (saved.image && typeof saved.image === 'object') genValues.image.values = saved.image;
+    }
+  } catch (_) { /* 忽略损坏的历史参数 */ }
+}
+function saveGenValues() {
+  try { localStorage.setItem(GEN_VALUES_KEY, JSON.stringify(genValues)); } catch (_) { /* 浏览器禁用本地存储时不影响提交 */ }
+}
+function parseResolutionOption(option) {
+  const text = String(option || '').trim();
+  const match = text.match(/^(\d+p)\s*(竖|横|\(1:1\))?$/);
+  if (!match) return null;
+  return { clarity: match[1], shape: match[2] === '(1:1)' ? '1:1' : match[2] || '', option: text };
+}
+function pickResolution(parsed, clarity, shape) {
+  const hit = parsed.find((item) => item.clarity === clarity && item.shape === shape);
+  return hit ? hit.option : '';
+}
+
 function saveForm() {
   const payload = {
-    taskName: $('#taskName')?.dataset.savedValue || $('#taskName')?.value || '未命名任务',
+    taskName: $('#taskName')?.value || '未命名任务',
     taskSequence: $('#taskSequence')?.value || '1',
     scheduleSubmit: Boolean($('#scheduleSubmit')?.checked),
     modelId: $('#modelSelect')?.value || state.selectedModelId || '',
-    modelParams: Object.fromEntries($$('[data-model-field]').map((input) => [input.dataset.modelField, input.value])),
     prompt: $('#prompt')?.value || '',
-    duration: $('#duration')?.value || '5',
-    resolution: $('#resolution')?.value || '',
-    seed: $('#seed')?.value || '',
-    // Base64 本地图片改存 IndexedDB，避免撑爆 localStorage 导致整份表单丢失。
     imageItems: state.imageItems
       .filter((item) => item.kind === 'link')
       .map(({ id, kind, value, name }) => ({ id, kind, value, name })),
@@ -84,7 +109,36 @@ function saveForm() {
   } catch (_) { /* 浏览器禁用本地存储时不影响提交 */ }
   scheduleImageDraftSave();
 }
-
+function restoreForm() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FORM_STORAGE_KEY) || 'null');
+    if (!saved) return;
+    if (typeof saved.taskName === 'string' && saved.taskName.trim()) $('#taskName').value = saved.taskName.trim();
+    if (saved.taskSequence != null) $('#taskSequence').value = String(saved.taskSequence);
+    if (typeof saved.scheduleSubmit === 'boolean') $('#scheduleSubmit').checked = saved.scheduleSubmit;
+    if (typeof saved.modelId === 'string' && state.models.some((model) => model.id === saved.modelId)) {
+      $('#modelSelect').value = saved.modelId;
+      state.selectedModelId = saved.modelId;
+      applySelectedModel();
+    }
+    if (typeof saved.prompt === 'string') $('#prompt').value = saved.prompt;
+    if (Array.isArray(saved.imageItems)) {
+      const items = saved.imageItems
+        .filter((item) => item && (item.kind === 'link' || item.kind === 'file'))
+        .slice(0, 10)
+        .map((item, i) => ({
+          id: String(item.id || `link-${i}`),
+          kind: item.kind,
+          value: String(item.value || ''),
+          name: String(item.name || ''),
+        }));
+      if (items.length) state.imageItems = items;
+    } else if (Array.isArray(saved.imageRows)) {
+      const links = saved.imageRows.map((value, i) => ({ id: `link-${i}`, kind: 'link', value: String(value || '') })).filter((item) => item.value);
+      state.imageItems = links.length ? links : [{ id: 'link-0', kind: 'link', value: '' }];
+    }
+  } catch (_) { /* 忽略损坏的历史表单 */ }
+}
 function openFormDb() {
   return new Promise((resolve, reject) => {
     if (!window.indexedDB) return reject(new Error('IndexedDB unavailable'));
@@ -215,6 +269,7 @@ async function initializeModels() {
       imageSelect.value = state.imageModelId;
       applySelectedImageModel();
     }
+    renderTasks();
   } catch (err) {
     console.error('读取模型列表失败', err);
   }
@@ -294,26 +349,40 @@ function renderCurrentPrice() {
   if (!el) return;
   const pricing = (selectedModel() || {}).pricing;
   if (!pricing || (pricing.peak == null && pricing.valley == null && !pricing.by_resolution)) {
-    el.textContent = '';
+    el.textContent = '当前模型未配置价格';
     el.title = '当前模型未配置价格，可在「模型管理」里设置';
+    const lines = $('#videoPriceLines');
+    if (lines) lines.innerHTML = '';
     return;
   }
-  const resolution = $('#resolution')?.value || '';
+  const resolution = genValues.video.values.resolution || '';
+  const duration = Math.max(1, Math.round(Number(genValues.video.values.duration) || 5));
   const rate = modelRateFor(pricing, resolution, new Date().toISOString());
   if (rate == null) {
     el.textContent = '';
     el.title = '';
+    const lines = $('#videoPriceLines');
+    if (lines) lines.innerHTML = '';
     return;
   }
   let label;
   if (resolution && pricing.by_resolution && pricing.by_resolution[resolution] != null) label = `（${resolution}）`;
   else if (pricing.valley != null && rate === pricing.valley) label = '（谷值）';
   else label = '（峰值）';
-  el.textContent = `${priceSymbol(pricing)}${rate}/秒${label}`;
+  const symbol = priceSymbol(pricing);
+  el.textContent = `${symbol}${rate}/秒${label} · ${duration} 秒 = ${symbol}${(rate * duration).toFixed(2)}`;
   el.title = pricingBreakdown(pricing);
+  const lines = $('#videoPriceLines');
+  if (lines) {
+    const rows = [
+      `清晰度：${resolution ? resolution.replace(/(竖|横|\(1:1\))$/, '') : '默认'}`,
+      `画幅：${resolution.includes('竖') ? '竖屏' : resolution.includes('横') ? '横屏' : resolution.includes('1:1') ? '1:1' : '默认'}`,
+      `时长：${duration} 秒`,
+      `预计：${symbol}${(rate * duration).toFixed(2)}`,
+    ];
+    lines.innerHTML = rows.map((row) => `<div>${escapeHtml(row)}</div>`).join('');
+  }
 }
-
-// ===== 模型管理（新）=====
 const modelUI = {
   search: '',
   kind: '',
@@ -787,15 +856,10 @@ function setDrawerTab(tab) {
 }
 
 function requestCloseModelDrawer() {
-  if (modelUI.dirty) {
-    $('#modelCloseConfirm').hidden = false;
-    return;
-  }
+  if (modelUI.dirty && !window.confirm('有未保存的修改，确定关闭吗？')) return;
   closeModelDrawer();
 }
-
 function closeModelDrawer() {
-  $('#modelCloseConfirm').hidden = true;
   $('#modelEditorBackdrop').hidden = true;
   modelUI.editingId = null;
   modelUI.dirty = false;
@@ -1189,63 +1253,219 @@ function addPriceResRowFromButton() {
 }
 
 
+const GEN_FIELD_LABELS = { duration: '时长', resolution: '分辨率', seed: '随机种子', size: '尺寸', n: '生成数量' };
 function applySelectedModel() {
   const model = selectedModel();
   if (!model) return;
   state.selectedModelId = model.id;
-  const fields = Array.isArray(model.fields) ? model.fields : [];
-  const byKey = Object.fromEntries(fields.map((field) => [field.key, field]));
-  ['prompt', 'duration', 'resolution', 'seed'].forEach((key) => {
-    const input = $(`#${key}`);
-    if (!input) return;
-    const field = byKey[key];
-    input.closest('label').hidden = !field;
-    if (!field) return;
-    if (field.min != null) input.min = field.min;
-    if (field.max != null) input.max = field.max;
-    if (field.step != null) input.step = field.step;
-    if (field.required != null) input.required = Boolean(field.required);
-    if (key === 'resolution' && Array.isArray(field.options)) {
-      const current = input.value;
-      input.innerHTML = '<option value="">请选择</option>' + field.options.map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('');
-      if (field.options.includes(current)) input.value = current;
-    }
-  });
-  $('.image-input-panel').hidden = !byKey.reference_images;
-  renderExtraModelFields(fields.filter((field) => !['prompt', 'duration', 'resolution', 'seed', 'reference_images'].includes(field.key)));
+  renderGenFields('video', model);
   renderCurrentPrice();
 }
-
-function renderExtraModelFields(fields) {
-  const wrap = $('#extraModelFields');
+function renderGenFields(kind, model) {
+  const wrap = $(kind === 'image' ? '#imageExtraFields' : '#videoExtraFields');
+  if (!wrap) return;
   wrap.innerHTML = '';
+  const fields = Array.isArray(model.fields) ? model.fields : [];
   fields.forEach((field) => {
-    const label = document.createElement('label');
-    label.className = 'field';
-    label.innerHTML = `<span><b class="param-key">${escapeHtml(field.label || field.key)}</b>${field.required ? '<i>必填</i>' : '<small>可选</small>'}</span>`;
-    let input;
-    if (field.type === 'select') {
-      input = document.createElement('select');
-      input.innerHTML = '<option value="">请选择</option>' + (field.options || []).map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('');
-    } else if (field.type === 'textarea') {
-      input = document.createElement('textarea');
-      input.rows = field.rows || 4;
-    } else {
-      input = document.createElement('input');
-      input.type = field.type === 'number' ? 'number' : 'text';
-    }
-    input.dataset.modelField = field.key;
-    input.required = Boolean(field.required);
-    if (field.default != null) input.value = field.default;
-    if (field.min != null) input.min = field.min;
-    if (field.max != null) input.max = field.max;
-    input.addEventListener('input', saveForm);
-    label.appendChild(input);
-    wrap.appendChild(label);
+    if (!field || !field.key) return;
+    if (field.key === 'prompt' || field.key === 'reference_images') return;
+    wrap.appendChild(buildGenField(kind, model, field));
   });
-  wrap.hidden = fields.length === 0;
+  const dropzone = $(kind === 'image' ? '#imageRefDropzone' : '#refDropzone');
+  if (dropzone) {
+    const section = dropzone.closest('.gen-section');
+    if (section) section.hidden = !fields.some((field) => field && field.key === 'reference_images');
+  }
 }
-
+function buildGenField(kind, model, field) {
+  const block = document.createElement('div');
+  block.className = 'gen-field';
+  const head = document.createElement('div');
+  head.className = 'gen-field-head';
+  head.innerHTML = `<b>${escapeHtml(GEN_FIELD_LABELS[field.key] || field.label || field.key)}</b>${field.required ? '<i class="req">*</i>' : '<small>可选</small>'}`;
+  block.appendChild(head);
+  const body = document.createElement('div');
+  body.className = 'gen-field-body';
+  const type = field.type || 'text';
+  if (field.key === 'resolution' && type === 'select' && (field.options || []).every((option) => parseResolutionOption(option))) {
+    body.appendChild(buildResolutionSegments(kind, field));
+    const hint = document.createElement('small');
+    hint.className = 'field-help';
+    hint.textContent = '选择清晰度与画幅组合';
+    body.appendChild(hint);
+  } else if (type === 'number') {
+    body.appendChild(buildStepper(kind, field));
+    const hint = document.createElement('small');
+    hint.className = 'field-help';
+    hint.textContent = `值范围：${field.min != null ? field.min : 1} - ${field.max != null ? field.max : '∞'}`;
+    body.appendChild(hint);
+  } else if (type === 'select' && (field.options || []).length && (field.options || []).length <= 6) {
+    body.appendChild(buildOptionButtons(kind, field));
+  } else if (type === 'select') {
+    const select = document.createElement('select');
+    select.className = 'gen-select';
+    select.innerHTML = '<option value="">请选择</option>' + (field.options || []).map((option) => `<option value="${escapeHtml(option)}" ${genValues[kind].values[field.key] === option ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('');
+    select.addEventListener('change', () => { setGenFieldValue(kind, field.key, select.value); });
+    body.appendChild(select);
+  } else if (type === 'textarea') {
+    const textarea = document.createElement('textarea');
+    textarea.rows = 3;
+    textarea.className = 'gen-input';
+    if (field.maxLength) textarea.maxLength = field.maxLength;
+    textarea.value = genValues[kind].values[field.key] || '';
+    textarea.addEventListener('input', () => setGenFieldValue(kind, field.key, textarea.value));
+    body.appendChild(textarea);
+  } else {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'gen-input';
+    if (field.placeholder) input.placeholder = field.placeholder;
+    input.value = genValues[kind].values[field.key] || '';
+    input.addEventListener('input', () => setGenFieldValue(kind, field.key, input.value));
+    body.appendChild(input);
+  }
+  block.appendChild(body);
+  return block;
+}
+function buildResolutionSegments(kind, field) {
+  const wrap = document.createElement('div');
+  wrap.className = 'seg-stack';
+  const parsed = (field.options || []).map(parseResolutionOption).filter(Boolean);
+  const clarities = [...new Set(parsed.map((p) => p.clarity))];
+  const shapes = [...new Set(parsed.map((p) => p.shape))];
+  const current = genValues[kind].values.resolution || field.default || '';
+  const cur = parseResolutionOption(current) || {};
+  let selClarity = cur.clarity || clarities[0];
+  let selShape = cur.shape || shapes[0];
+  const sync = () => {
+    const option = pickResolution(parsed, selClarity, selShape);
+    setGenFieldValue(kind, 'resolution', option || '');
+    wrap.querySelectorAll('.seg-btn').forEach((btn) => {
+      const active = btn.dataset.clarity != null ? btn.dataset.clarity === selClarity : btn.dataset.shape === selShape;
+      btn.classList.toggle('active', active);
+    });
+    renderCurrentPrice();
+    saveForm();
+  };
+  const clarityRow = document.createElement('div');
+  clarityRow.className = 'seg-row';
+  clarityRow.innerHTML = '<span class="seg-label">清晰度</span>';
+  clarities.forEach((clarity) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'seg-btn';
+    btn.textContent = clarity.toUpperCase();
+    btn.dataset.clarity = clarity;
+    if (clarity === selClarity) btn.classList.add('active');
+    btn.addEventListener('click', () => { selClarity = clarity; sync(); });
+    clarityRow.appendChild(btn);
+  });
+  wrap.appendChild(clarityRow);
+  const shapeRow = document.createElement('div');
+  shapeRow.className = 'seg-row';
+  shapeRow.innerHTML = '<span class="seg-label">画幅</span>';
+  shapes.forEach((shape) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'seg-btn';
+    btn.textContent = shape;
+    btn.dataset.shape = shape;
+    if (shape === selShape) btn.classList.add('active');
+    btn.addEventListener('click', () => { selShape = shape; sync(); });
+    shapeRow.appendChild(btn);
+  });
+  wrap.appendChild(shapeRow);
+  setTimeout(sync, 0);
+  return wrap;
+}
+function buildStepper(kind, field) {
+  const wrap = document.createElement('div');
+  wrap.className = 'stepper';
+  const dec = document.createElement('button');
+  dec.type = 'button';
+  dec.className = 'step-btn';
+  dec.textContent = '−';
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'step-input';
+  if (field.min != null) input.min = field.min;
+  if (field.max != null) input.max = field.max;
+  if (field.step != null) input.step = field.step;
+  const current = genValues[kind].values[field.key];
+  input.value = current != null && current !== '' ? current : (field.default != null ? field.default : '');
+  const inc = document.createElement('button');
+  inc.type = 'button';
+  inc.className = 'step-btn';
+  inc.textContent = '+';
+  const step = Number(field.step) > 0 ? Number(field.step) : 1;
+  const clamp = (v) => {
+    let n = Number(v);
+    if (!Number.isFinite(n)) n = Number(field.default) || Number(field.min) || 0;
+    if (input.min !== '' && n < Number(input.min)) n = Number(input.min);
+    if (input.max !== '' && n > Number(input.max)) n = Number(input.max);
+    return n;
+  };
+  dec.addEventListener('click', () => { input.value = clamp(Number(input.value) - step); input.dispatchEvent(new Event('input', { bubbles: true })); });
+  inc.addEventListener('click', () => { input.value = clamp(Number(input.value) + step); input.dispatchEvent(new Event('input', { bubbles: true })); });
+  input.addEventListener('input', () => setGenFieldValue(kind, field.key, input.value));
+  wrap.append(dec, input, inc);
+  return wrap;
+}
+function buildOptionButtons(kind, field) {
+  const wrap = document.createElement('div');
+  wrap.className = 'option-buttons';
+  const current = genValues[kind].values[field.key] || field.default || '';
+  (field.options || []).forEach((option) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'seg-btn' + (option === current ? ' active' : '');
+    btn.textContent = option;
+    btn.addEventListener('click', () => {
+      setGenFieldValue(kind, field.key, option);
+      wrap.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      renderCurrentPrice();
+    });
+    wrap.appendChild(btn);
+  });
+  return wrap;
+}
+function getGenParams(kind, model) {
+  const params = {};
+  const values = genValues[kind].values;
+  const fields = Array.isArray(model.fields) ? model.fields : [];
+  fields.forEach((field) => {
+    if (!field || !field.key || field.key === 'reference_images') return;
+    if (field.key === 'resolution') {
+      if (values.resolution) params.resolution = values.resolution;
+      else if (field.default) params.resolution = field.default;
+      return;
+    }
+    const raw = values[field.key] != null && values[field.key] !== '' ? values[field.key] : field.default;
+    if (field.type === 'number') {
+      if (raw != null && raw !== '' && Number.isFinite(Number(raw))) params[field.key] = Number(raw);
+      return;
+    }
+    if (raw != null && raw !== '') params[field.key] = raw;
+  });
+  return params;
+}
+function updateGenStatCards() {
+  const videoModel = selectedModel();
+  const imageModel = selectedImageModel();
+  const set = (id, text) => { const el = $(id); if (el) el.textContent = text; };
+  set('#videoStatModel', videoModel ? videoModel.name : '—');
+  set('#videoStatModelId', videoModel ? videoModel.workflow : '—');
+  set('#imageStatModel', imageModel ? imageModel.name : '—');
+  set('#imageStatModelId', imageModel ? imageModel.workflow : '—');
+  const monthKey = (beijingDayKey(new Date().toISOString()) || '').slice(0, 7);
+  set('#videoStatMonth', `${state.tasks.filter((t) => t.kind !== 'image' && (beijingDayKey(t.created_at) || '').slice(0, 7) === monthKey).length} 条`);
+  set('#imageStatMonth', `${state.tasks.filter((t) => t.kind === 'image' && (beijingDayKey(t.created_at) || '').slice(0, 7) === monthKey).length} 张`);
+}
+function updateCharCount(id) {
+  const el = $(`#${id}`);
+  const counter = $(`#${id}Count`);
+  if (el && counter) counter.textContent = String(el.value.length);
+}
 async function initializeDownloadDirectory() {
   if (desktopBridge) {
     let saved = null;
@@ -1304,46 +1524,6 @@ async function chooseDownloadDirectory() {
   }
 }
 
-function restoreForm() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(FORM_STORAGE_KEY) || 'null');
-    if (!saved) return;
-    if (typeof saved.taskName === 'string' && saved.taskName.trim()) $('#taskName').value = saved.taskName.trim();
-    if (typeof saved.taskSequence === 'string' || typeof saved.taskSequence === 'number') $('#taskSequence').value = String(saved.taskSequence);
-    if (typeof saved.scheduleSubmit === 'boolean') $('#scheduleSubmit').checked = saved.scheduleSubmit;
-    if (typeof saved.modelId === 'string' && state.models.some((model) => model.id === saved.modelId)) {
-      $('#modelSelect').value = saved.modelId;
-      state.selectedModelId = saved.modelId;
-      applySelectedModel();
-    }
-    if (saved.modelParams && typeof saved.modelParams === 'object') {
-      $$('[data-model-field]').forEach((input) => {
-        if (saved.modelParams[input.dataset.modelField] != null) input.value = String(saved.modelParams[input.dataset.modelField]);
-      });
-    }
-    if (typeof saved.prompt === 'string') $('#prompt').value = saved.prompt;
-    if (typeof saved.duration === 'string' || typeof saved.duration === 'number') $('#duration').value = String(saved.duration);
-    if (typeof saved.resolution === 'string') $('#resolution').value = saved.resolution;
-    if (typeof saved.seed === 'string' || typeof saved.seed === 'number') $('#seed').value = String(saved.seed);
-    if (Array.isArray(saved.imageItems)) {
-      const items = saved.imageItems
-        .filter((item) => item && (item.kind === 'link' || item.kind === 'file'))
-        .slice(0, 10)
-        .map((item, i) => ({
-          id: String(item.id || `${item.kind}-${i}`),
-          kind: item.kind,
-          value: String(item.value || ''),
-          name: String(item.name || ''),
-        }));
-      if (items.length) state.imageItems = items;
-    } else if (Array.isArray(saved.imageRows)) {
-      const links = saved.imageRows.map((value, i) => ({ id: `link-${i}`, kind: 'link', value: String(value || '') })).filter((item) => item.value);
-      state.imageItems = links.length ? links : [{ id: 'link-0', kind: 'link', value: '' }];
-    }
-    $('#taskName').dataset.savedValue = $('#taskName').value.trim() || '未命名任务';
-  } catch (_) { /* 忽略损坏的历史表单 */ }
-}
-
 function imageSourceCount() {
   return state.imageItems.filter((item) => item.value.trim()).length;
 }
@@ -1399,28 +1579,23 @@ function renderImageInputs() {
 
 function renderImagePreviews() {
   const wrap = $('#imagePreviews');
+  if (!wrap) return;
   wrap.innerHTML = '';
-  const filled = state.imageItems.filter((item) => item.value.trim());
   const items = state.imageItems.filter((item) => item.value.trim());
-  items.forEach((item) => {
+  items.forEach((item, index) => {
     const tile = document.createElement('div');
-    tile.className = 'image-preview-tile';
+    tile.className = 'ref-tile';
     tile.draggable = true;
     tile.dataset.imageId = item.id;
-    tile.title = '拖动调整图片顺序';
-
     const image = document.createElement('img');
-    image.src = item.kind === 'file' || /^(https?:|data:|blob:)/i.test(item.value)
-      ? item.value
-      : `data:image/png;base64,${item.value}`;
-    image.alt = item.name || '本地图片预览';
-
+    image.src = item.kind === 'file' || /^(https?:|data:|blob:)/i.test(item.value) ? item.value : `data:image/png;base64,${item.value}`;
+    image.alt = item.name || '参考图';
+    image.title = `参考图 ${index + 1}（拖拽调整顺序）`;
     const order = document.createElement('span');
-    order.className = 'image-preview-order';
-    order.textContent = String(filled.indexOf(item) + 1).padStart(2, '0');
-
+    order.className = 'ref-order';
+    order.textContent = String(index + 1);
     const remove = document.createElement('button');
-    remove.className = 'image-preview-remove';
+    remove.className = 'ref-remove';
     remove.type = 'button';
     remove.title = '删除图片';
     remove.textContent = '×';
@@ -1430,47 +1605,19 @@ function renderImagePreviews() {
       renderImagePreviews();
       saveForm();
     });
-
-    tile.addEventListener('dragstart', (event) => {
-      event.dataTransfer.effectAllowed = 'move';
-      event.dataTransfer.setData('text/plain', item.id);
-      tile.classList.add('is-dragging');
-    });
-    tile.addEventListener('dragend', () => tile.classList.remove('is-dragging'));
-    tile.addEventListener('dragover', (event) => event.preventDefault());
-    tile.addEventListener('drop', (event) => {
-      event.preventDefault();
-      const sourceId = event.dataTransfer.getData('text/plain');
-      if (!sourceId || sourceId === item.id) return;
-      const sourceItems = state.imageItems.filter((candidate) => candidate.value.trim());
-      const from = sourceItems.findIndex((candidate) => candidate.id === sourceId);
-      const to = sourceItems.findIndex((candidate) => candidate.id === item.id);
-      if (from < 0 || to < 0) return;
-      const [moved] = sourceItems.splice(from, 1);
-      sourceItems.splice(to, 0, moved);
-      state.imageItems = sourceItems.concat(state.imageItems.filter((candidate) => !candidate.value.trim()));
-      renderImageInputs();
-      renderImagePreviews();
-      saveForm();
-    });
-
     tile.append(image, order, remove);
     wrap.appendChild(tile);
   });
   updateImageMeta();
 }
-
 function updateImageMeta() {
-  const imageCount = $('#imageCount');
-  if (imageCount) imageCount.textContent = `${imageSourceCount()} / 10`;
-  const note = $('#imageUploadNote');
-  if (note) note.textContent = imageSourceCount() >= 10 ? '已达到 10 张上限，可删除后重新添加。' : '支持 JPG / PNG / WebP，可多选本地图片；超出 10 张时只保留前 10 张。';
+  const note = $('#refCountNote');
+  if (note) note.textContent = `已填写图片 ${imageSourceCount()} / 10`;
   const addLink = $('#addImageLink');
   if (addLink) addLink.disabled = state.imageItems.length >= 10;
   const upload = $('#localImageUpload');
   if (upload) upload.disabled = imageSourceCount() >= 10;
 }
-
 function renderImageRows() {
   renderImageInputs();
   renderImagePreviews();
@@ -1507,12 +1654,6 @@ async function addLocalImages(event) {
   event.target.value = '';
 }
 
-function statusMarkup(t) {
-  const labels = { scheduled: '已预约', submitting: '提交中', queued: '排队中', processing: '生成中', completed: '已完成', failed: '失败', timeout: '已超时' };
-  const st = taskStatus(t);
-  return `<span class="state ${st}"><i></i>${labels[st]}</span>${st === 'processing' || st === 'submitting' ? `<div class="progress"><i style="width:${t.progress || 8}%"></i></div>` : ''}`;
-}
-
 function taskStatus(task) {
   const status = String(task.status || 'queued').toLowerCase();
   if (status === 'scheduled') return 'scheduled';
@@ -1524,119 +1665,188 @@ function taskStatus(task) {
   return 'queued';
 }
 
-function matchesTaskFilter(task, filter) {
-  const status = taskStatus(task);
-  if (filter === 'all') return true;
-  if (filter === 'processing') return ['scheduled', 'submitting', 'queued', 'processing'].includes(status);
-  if (filter === 'failed') return ['failed', 'timeout'].includes(status);
-  return status === filter;
-}
-
-function renderTaskRows(tbody, tasks, selectable = false) {
-  tbody.innerHTML = '';
-  tasks.forEach((t) => {
-    const tr = document.createElement('tr');
-    tr.dataset.id = t.id;
-    const parameters = [t.resolution, Number.isInteger(t.seed) ? `seed ${t.seed}` : ''].filter(Boolean).join(' · ') || '-';
-    tr.innerHTML = `${selectable ? `<td class="check-col"><input type="checkbox" ${state.selected.has(t.id) ? 'checked' : ''} /></td>` : ''}<td class="task-summary-cell"><button class="task-copy-button" type="button" title="复制提示词" aria-label="复制提示词">复制</button><div class="task-name">${escapeHtml(t.name)}</div><div class="task-id">${escapeHtml(t.id)} · ${escapeHtml(t.prompt)}</div><button class="task-expand-button" type="button" title="放大查看" aria-label="放大查看">⤢ 放大</button></td><td>${t.image_count || 0} 张</td><td>${escapeHtml(parameters)}</td><td class="progress-cell">${statusMarkup(t)}</td>${selectable ? `<td class="cost-cell">${formatTaskCost(t)}</td>` : ''}<td>${t.time}</td><td class="row-menu"><button class="row-menu-button" type="button" aria-label="任务操作" title="任务操作">•••</button><div class="row-action-menu" hidden><button class="row-download-action" type="button" ${t.video_url || settings.mock ? '' : 'disabled'}>下载</button><button class="row-delete-action" type="button">删除记录</button></div></td>`;
-    tr.querySelector('.task-copy-button').addEventListener('click', () => copyPrompt(t.prompt, tr.querySelector('.task-copy-button')));
-    tr.querySelector('.task-expand-button').addEventListener('click', () => openTaskDetail(t));
-    const menu = tr.querySelector('.row-action-menu');
-    tr.querySelector('.row-menu-button').addEventListener('click', (event) => {
-      event.stopPropagation();
-      $$('.row-action-menu').forEach((item) => { if (item !== menu) item.hidden = true; });
-      menu.hidden = !menu.hidden;
-    });
-    tr.querySelector('.row-download-action').addEventListener('click', () => {
-      menu.hidden = true;
-      downloadTasks([t]);
-    });
-    tr.querySelector('.row-delete-action').addEventListener('click', () => {
-      menu.hidden = true;
-      deleteTasks([t.id]);
-    });
-    if (selectable) tr.querySelector('input').addEventListener('change', (e) => {
-      e.target.checked ? state.selected.add(t.id) : state.selected.delete(t.id);
-      updateSelection();
-    });
-    tbody.appendChild(tr);
-  });
-}
-
-async function copyPrompt(prompt, button) {
-  try {
-    await navigator.clipboard.writeText(prompt || '');
-  } catch (_) {
-    const input = document.createElement('textarea');
-    input.value = prompt || '';
-    input.style.position = 'fixed';
-    input.style.opacity = '0';
-    document.body.appendChild(input);
-    input.select();
-    document.execCommand('copy');
-    input.remove();
-  }
-  const original = button.textContent;
-  button.textContent = '已复制';
-  setTimeout(() => { button.textContent = original; }, 1200);
-}
-
-function openTaskDetail(task) {
-  $('#taskDetailTitle').textContent = task.name || '任务详情';
-  const pricingRef = (state.models.find((model) => model.id === task.model_id) || {}).pricing;
-  const storedCost = typeof task.cost === 'number' ? ` · 预估 ${formatTaskCost(task)}` : '';
-  const rate = storedCost ? null : modelRateFor(pricingRef, task.resolution, task.submitted_at || task.created_at);
-  const costText = storedCost || (rate != null && Number(task.duration) > 0 ? ` · 预估 ${priceSymbol(pricingRef)}${(rate * Number(task.duration)).toFixed(3)}` : '');
-  $('#taskDetailMeta').textContent = `${task.id} · ${task.time || '-'} · ${task.resolution || '未设置分辨率'}${costText}`;
-  $('#taskDetailPrompt').textContent = task.prompt || '';
-  $('#copyTaskDetail').dataset.taskId = task.id;
-  $('#taskDetailModal').hidden = false;
-  document.body.classList.add('modal-open');
-}
-
-function closeTaskDetail() {
-  $('#taskDetailModal').hidden = true;
-  document.body.classList.remove('modal-open');
-}
-
-function renderTasks() {
-  const unfinished = state.tasks.filter((t) => t.kind !== 'image' && !['completed', 'scheduled'].includes(taskStatus(t)));
-  const scheduled = state.tasks.filter((t) => taskStatus(t) === 'scheduled')
-    .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
-  const recordTasks = state.tasks.filter((t) => t.kind === state.recordsKind);
-  const recordFiltered = recordTasks.filter((t) => matchesTaskFilter(t, state.filter));
-  renderTaskRows($('#taskTable'), unfinished);
-  renderTaskRows($('#recordTaskTable'), recordFiltered, true);
-  renderScheduledTasks(scheduled);
-  renderImageTasks();
-  renderUsageStats();
-  $('#taskTotal').textContent = unfinished.length;
-  const navTaskCount = $('#navTaskCount');
-  if (navTaskCount) navTaskCount.textContent = String(state.tasks.filter((t) => t.kind !== 'image').length);
-  const counts = recordTasks.reduce((acc, t) => {
-    acc.all += 1;
-    const status = taskStatus(t);
-    if (status === 'scheduled') acc.processing += 1;
-    else if (status === 'timeout') acc.failed += 1;
-    else if (acc[status] != null) acc[status] += 1;
-    return acc;
-  }, { all: 0, processing: 0, completed: 0, queued: 0, failed: 0 });
-  const setCount = (filter, n) => {
-    const el = $(`#record${filter[0].toUpperCase()}${filter.slice(1)}Count`);
-    if (el) el.textContent = String(n);
+function statusBadgeHtml(task) {
+  const map = {
+    completed: ['已完成', 'badge-green'],
+    processing: ['生成中', 'badge-blue'],
+    queued: ['排队中', 'badge-amber'],
+    submitting: ['排队中', 'badge-amber'],
+    scheduled: ['已预约', 'badge-purple'],
+    failed: ['失败', 'badge-red'],
+    timeout: ['失败', 'badge-red'],
   };
-  setCount('all', counts.all);
-  setCount('processing', counts.processing);
-  setCount('completed', counts.completed);
-  setCount('failed', counts.failed);
-  $('#recordTaskTotal').textContent = String(recordTasks.length);
-  $('#emptyState').hidden = unfinished.length > 0;
-  $('#recordEmptyState').hidden = recordFiltered.length > 0;
-  const gotoButton = $('#recordGoto');
-  if (gotoButton) gotoButton.textContent = state.recordsKind === 'image' ? '立即生成图片 →' : '立即生成视频 →';
-  updateSelection(recordFiltered);
+  const entry = map[taskStatus(task)] || ['排队中', 'badge-amber'];
+  return `<span class="badge ${entry[1]}">${entry[0]}</span>`;
 }
-
+function typeBadgeHtml(task) {
+  return task.kind === 'image' ? '<span class="badge badge-type-image">图片</span>' : '<span class="badge badge-type-video">视频</span>';
+}
+function taskPreviewHtml(task) {
+  if (task.kind === 'image' && (task.image_files || []).length) {
+    return `<img class="task-thumb" src="${settings.apiBase}/api/tasks/${encodeURIComponent(task.id)}/image/0" alt="" loading="lazy" />`;
+  }
+  return `<span class="task-thumb task-thumb-icon">${task.kind === 'image' ? '▣' : '▶'}</span>`;
+}
+function renderTasks() {
+  renderRecentTasks();
+  renderTaskCenter();
+  renderUsageStats();
+  updateGenStatCards();
+  syncVideoSubmitLabel();
+}
+function renderRecentTasks() {
+  const imageTasks = state.tasks.filter((t) => t.kind === 'image').sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 4);
+  const videoTasks = state.tasks.filter((t) => t.kind !== 'image').sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 4);
+  const imgBody = $('#recentImageTable');
+  if (imgBody) {
+    imgBody.innerHTML = '';
+    imageTasks.forEach((task) => imgBody.appendChild(recentImageRow(task)));
+    const empty = $('#recentImageEmpty');
+    if (empty) empty.hidden = imageTasks.length > 0;
+  }
+  const vidBody = $('#recentVideoTable');
+  if (vidBody) {
+    vidBody.innerHTML = '';
+    videoTasks.forEach((task) => vidBody.appendChild(recentVideoRow(task)));
+    const empty = $('#recentVideoEmpty');
+    if (empty) empty.hidden = videoTasks.length > 0;
+  }
+}
+function recentImageRow(task) {
+  const tr = document.createElement('tr');
+  const size = (task.params && task.params.size) || task.resolution || '—';
+  const count = (task.image_files || []).length || Number(task.params && task.params.n) || '—';
+  tr.innerHTML = `
+    <td>${taskPreviewHtml(task)}</td>
+    <td class="task-name-cell"><b>${escapeHtml(task.name)}</b><small>${escapeHtml(String(task.prompt || '').slice(0, 60))}</small></td>
+    <td>${statusBadgeHtml(task)}</td>
+    <td class="mono">${escapeHtml(String(size))}</td>
+    <td>${escapeHtml(String(count))}</td>
+    <td class="mono">${escapeHtml(task.time || taskTime(task.created_at))}</td>
+    <td><button type="button" class="text-button" data-recent-download="${escapeHtml(task.id)}" ${(task.image_files || []).length ? '' : 'hidden'}>⇩ 下载</button></td>`;
+  const download = tr.querySelector('[data-recent-download]');
+  if (download) download.addEventListener('click', () => downloadImageTask(task));
+  tr.querySelector('.task-name-cell').addEventListener('click', () => openTaskDetailDrawer(task.id));
+  return tr;
+}
+function recentVideoRow(task) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td>${taskPreviewHtml(task)}</td>
+    <td class="task-name-cell"><b>${escapeHtml(task.name)}</b><small>${escapeHtml(String(task.prompt || '').slice(0, 60))}</small></td>
+    <td>${statusBadgeHtml(task)}</td>
+    <td>${task.duration ? `${task.duration} 秒` : '—'}</td>
+    <td class="mono">${escapeHtml(task.resolution || '—')}</td>
+    <td class="mono">${escapeHtml(task.time || taskTime(task.created_at))}</td>
+    <td><button type="button" class="text-button" data-recent-download="${escapeHtml(task.id)}" ${task.status === 'completed' && task.video_url ? '' : 'hidden'}>⇩ 下载</button></td>`;
+  const download = tr.querySelector('[data-recent-download]');
+  if (download) download.addEventListener('click', () => downloadTasks([task]));
+  tr.querySelector('.task-name-cell').addEventListener('click', () => openTaskDetailDrawer(task.id));
+  return tr;
+}
+function tcMatches(task) {
+  const f = state.tc;
+  const status = taskStatus(task);
+  if (f.filter === 'processing' && !['submitting', 'queued', 'processing'].includes(status)) return false;
+  if (f.filter === 'scheduled' && status !== 'scheduled') return false;
+  if (f.filter === 'completed' && status !== 'completed') return false;
+  if (f.filter === 'failed' && !['failed', 'timeout'].includes(status)) return false;
+  if (f.type && task.kind !== f.type) return false;
+  if (f.model && task.model_id !== f.model) return false;
+  if (f.date && (beijingDayKey(task.created_at) || '') !== f.date) return false;
+  if (f.search) {
+    const kw = f.search.toLowerCase();
+    if (!`${task.name || ''}${task.prompt || ''}`.toLowerCase().includes(kw)) return false;
+  }
+  return true;
+}
+function filterTaskCenter() {
+  return state.tasks.filter((task) => tcMatches(task)).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+}
+function renderTaskCenter() {
+  const wrap = $('#tcTable');
+  if (!wrap) return;
+  const counts = {
+    all: state.tasks.length,
+    processing: state.tasks.filter((t) => ['submitting', 'queued', 'processing'].includes(taskStatus(t))).length,
+    scheduled: state.tasks.filter((t) => taskStatus(t) === 'scheduled').length,
+    completed: state.tasks.filter((t) => taskStatus(t) === 'completed').length,
+    failed: state.tasks.filter((t) => ['failed', 'timeout'].includes(taskStatus(t))).length,
+  };
+  const set = (id, value) => { const el = $(id); if (el) el.textContent = String(value); };
+  set('#tcAll', counts.all);
+  set('#tcProcessing', counts.processing);
+  set('#tcScheduled', counts.scheduled);
+  set('#tcCompleted', counts.completed);
+  set('#tcFailed', counts.failed);
+  $$('.tc-tabs [data-tc-filter]').forEach((button) => {
+    const key = button.dataset.tcFilter;
+    const value = key === 'all' ? counts.all : counts[key] != null ? counts[key] : 0;
+    button.innerHTML = `${{ all: '全部任务', processing: '进行中', scheduled: '已预约', completed: '已完成', failed: '失败' }[key]} ${value}`;
+  });
+  const tasks = filterTaskCenter();
+  wrap.innerHTML = '';
+  tasks.forEach((task, index) => wrap.appendChild(taskCenterRow(task, index)));
+  const empty = $('#tcEmpty');
+  if (empty) empty.hidden = tasks.length > 0;
+}
+function taskCenterRow(task, index) {
+  const tr = document.createElement('tr');
+  tr.dataset.taskId = task.id;
+  const status = taskStatus(task);
+  const progress = status === 'processing' ? Math.max(5, Math.min(100, Number(task.progress) || 8)) : null;
+  const progressHtml = progress != null ? `<div class="tc-progress"><div class="tc-progress-bar" style="width:${progress}%"></div></div><small>${progress}%</small>` : '<span class="mono">—</span>';
+  const actions = [];
+  if (status === 'completed') actions.push(`<button type="button" class="text-button" data-tc-download="${escapeHtml(task.id)}">⇩ 下载</button>`);
+  if (status === 'scheduled') {
+    actions.push(`<button type="button" class="text-button" data-tc-run="${escapeHtml(task.id)}">立即执行</button>`);
+    actions.push(`<button type="button" class="text-button danger" data-tc-cancel="${escapeHtml(task.id)}">取消预约</button>`);
+  }
+  if (['failed', 'timeout'].includes(status)) actions.push(`<button type="button" class="text-button" data-tc-retry="${escapeHtml(task.id)}">↻ 重新提交</button>`);
+  actions.push(`<button type="button" class="text-button" data-tc-view="${escapeHtml(task.id)}">查看</button>`);
+  tr.innerHTML = `
+    <td class="mono">${index + 1}</td>
+    <td>${taskPreviewHtml(task)}</td>
+    <td class="task-name-cell"><b>${escapeHtml(task.name)}</b><small>${escapeHtml(String(task.prompt || '').slice(0, 50))}</small>${typeof task.cost === 'number' ? `<small class="tc-cost">费用 ${formatTaskCost(task)}</small>` : ''}</td>
+    <td>${typeBadgeHtml(task)}</td>
+    <td class="tc-model">${escapeHtml(task.model_name || '—')}</td>
+    <td>${statusBadgeHtml(task)}</td>
+    <td>${progressHtml}</td>
+    <td class="mono">${escapeHtml(task.time || taskTime(task.created_at))}</td>
+    <td class="col-actions"><div class="tc-actions">${actions.join('')}</div></td>`;
+  tr.querySelectorAll('[data-tc-view]').forEach((button) => button.addEventListener('click', () => openTaskDetailDrawer(task.id)));
+  tr.querySelectorAll('[data-tc-download]').forEach((button) => button.addEventListener('click', () => task.kind === 'image' ? downloadImageTask(task) : downloadTasks([task])));
+  tr.querySelectorAll('[data-tc-run]').forEach((button) => button.addEventListener('click', () => runScheduledAction(task.id, 'submit')));
+  tr.querySelectorAll('[data-tc-cancel]').forEach((button) => button.addEventListener('click', () => runScheduledAction(task.id, 'cancel')));
+  tr.querySelectorAll('[data-tc-retry]').forEach((button) => button.addEventListener('click', () => retryTask(task)));
+  tr.querySelector('.task-name-cell').addEventListener('click', () => openTaskDetailDrawer(task.id));
+  return tr;
+}
+async function retryTask(task) {
+  try {
+    const res = await fetch(`${settings.apiBase}/api/batches`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: task.name,
+        model_id: task.model_id,
+        tasks: [{ prompt: task.prompt, duration: task.duration, resolution: task.resolution, params: task.params || {}, reference_images: task.reference_images || [] }],
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+    (data.tasks || []).forEach((record) => {
+      state.tasks.unshift(record.kind === 'image' ? imageTaskFromRecord(record) : {
+        id: record.local_id, kind: 'video', name: record.name, prompt: record.prompt || '', status: record.status || 'submitting', progress: 8, duration: record.duration, resolution: record.resolution, model_id: record.model_id, model_name: record.model_name, cost: typeof record.cost === 'number' ? record.cost : null, cost_currency: record.cost_currency || 'CNY', created_at: record.created_at, time: taskTime(record.created_at),
+      });
+      if (record.local_id) pollTask(record.local_id);
+    });
+    renderTasks();
+    showToast('已重新提交任务', 'ok');
+  } catch (err) {
+    alert(`重新提交失败：${err.message}`);
+  }
+}
 function scheduledTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '-';
@@ -1644,21 +1854,6 @@ function scheduledTime(value) {
     timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   }).format(date);
-}
-
-function renderScheduledTasks(tasks) {
-  const wrap = $('#scheduledList');
-  wrap.innerHTML = '';
-  tasks.forEach((task, index) => {
-    const item = document.createElement('div');
-    item.className = 'scheduled-item';
-    item.innerHTML = `<div class="scheduled-item-copy"><b>${escapeHtml(task.name)}</b><p>${escapeHtml(task.prompt)}</p></div><div class="scheduled-time"><span>预约顺序 ${index + 1}</span><b>${scheduledTime(task.scheduled_at)}</b></div><div class="scheduled-actions"><button class="submit-now" type="button">立即提交</button><button class="cancel-schedule" type="button">取消预约</button></div>`;
-    item.querySelector('.submit-now').addEventListener('click', () => runScheduledAction(task.id, 'submit'));
-    item.querySelector('.cancel-schedule').addEventListener('click', () => runScheduledAction(task.id, 'cancel'));
-    wrap.appendChild(item);
-  });
-  $('#scheduledTotal').textContent = String(tasks.length);
-  $('#scheduledEmpty').hidden = tasks.length > 0;
 }
 
 async function runScheduledAction(id, action) {
@@ -1670,7 +1865,7 @@ async function runScheduledAction(id, action) {
   try {
     const res = await fetch(`${settings.apiBase}/api/scheduled/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
     const data = await res.json();
-    if (!data.ok) throw new Error(data.msg || `HTTP ${modelRes.status}`);
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
     if (isSubmit) {
       const task = state.tasks.find((item) => item.id === id);
       if (task) {
@@ -1737,15 +1932,19 @@ async function loadTasks() {
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
-function updateSelection(filtered = state.tasks.filter((t) => matchesTaskFilter(t, state.filter))) {
+function updateSelection() {
   const n = state.selected.size;
-  $('#selectedCount').textContent = n;
-  $('#downloadSelected').disabled = !n;
-  $('#deleteSelected').disabled = !n;
+  const count = $('#selectedCount');
+  if (count) count.textContent = String(n);
+  const downloadButton = $('#downloadSelected');
+  if (downloadButton) downloadButton.disabled = !n;
+  const deleteButton = $('#deleteSelected');
+  if (deleteButton) deleteButton.disabled = !n;
+  const filtered = filterTaskCenter();
   const visibleSelected = filtered.filter((t) => state.selected.has(t.id)).length;
-  $("#selectAll").checked = filtered.length > 0 && visibleSelected === filtered.length;
+  const selectAll = $('#selectAll');
+  if (selectAll) selectAll.checked = filtered.length > 0 && visibleSelected === filtered.length;
 }
-
 // 演示模式：模拟任务从排队到完成
 function simulateTask(localId) {
   const t = state.tasks.find((x) => x.id === localId);
@@ -1761,143 +1960,80 @@ function simulateTask(localId) {
 }
 
 async function submitBatch() {
-  if (!$('#taskName').readOnly) {
-    alert('任务名字正在修改，请先点击“保存”');
-    $('#saveTaskName').focus();
-    return;
-  }
-  const taskName = ($('#taskName').dataset.savedValue || $('#taskName').value).trim();
-  const sequence = Number($('#taskSequence').value);
-  if (!taskName) {
-    alert('请先设置并保存任务名字');
-    $('#editTaskName').click();
-    $('#taskName').focus();
-    return;
-  }
-  if (!Number.isInteger(sequence) || sequence < 1) {
-    alert('序号必须是从 1 开始的整数');
-    $('#taskSequence').focus();
-    return;
-  }
-  const numberedTaskName = `${taskName}_${sequence}`;
-  const scheduled = $('#scheduleSubmit').checked;
   const model = selectedModel();
   if (!model) { alert('请选择生成模型'); return; }
-  const dynamicParams = {};
-  for (const input of $$('[data-model-field]')) {
-    if (input.required && input.value.trim() === '') {
-      alert(`请填写必填参数：${input.dataset.modelField}`);
-      input.focus();
-      return;
-    }
-    if (input.value === '') continue;
-    dynamicParams[input.dataset.modelField] = input.type === 'number' ? Number(input.value) : input.value;
-  }
-  const prompt = $('#prompt').value.trim();
-  if (!prompt) { $('#prompt').focus(); return; }
-  const images = state.imageItems.filter((item) => item.value.trim()).map((item) => item.value.trim());
+  const taskName = ($('#taskName').value || '未命名任务').trim() || '未命名任务';
+  const sequence = Number($('#taskSequence').value);
+  if (!Number.isInteger(sequence) || sequence < 1) { alert('序号必须是从 1 开始的整数'); $('#taskSequence').focus(); return; }
+  const prompt = ($('#prompt').value || '').trim();
+  if (!prompt) { alert('请填写提示词'); $('#prompt').focus(); return; }
+  const params = getGenParams('video', model);
+  const duration = Number(params.duration) || 5;
+  const scheduled = $('#scheduleSubmit').checked;
+  const seed = genValues.video.values.seed;
+  const refs = state.imageItems.filter((item) => item.value.trim()).map((item) => item.value.trim());
   const refField = (model.fields || []).find((field) => field && field.key === 'reference_images');
   const refsRequired = !refField || refField.required !== false;
-  if (refsRequired && !images[0]) {
-    alert('请添加至少一张图片或填写图片链接');
-    $('#imageLinks input')?.focus?.();
-    return;
-  }
-  const resolution = $('#resolution').value;
-  const duration = Number($('#duration').value || 5);
-  if (!Number.isInteger(duration) || duration < 1 || duration > 15) {
-    alert('duration 必须是 1-15 的整数');
-    $('#duration').focus();
-    return;
-  }
-  const seedText = $('#seed').value.trim();
-  const enteredSeed = seedText === '' ? NaN : Number(seedText);
-  const seed = Number.isInteger(enteredSeed) && enteredSeed >= 1 && enteredSeed <= MAX_SEED
-    ? enteredSeed
-    : randomSeed();
-  $('#seed').value = String(seed);
-  saveForm();
-
-  const localTask = {
-    id: `WV-${Date.now().toString().slice(-6)}-001`,
-    name: numberedTaskName,
-    prompt,
-    duration,
-    resolution,
-    seed,
-    status: settings.mock ? 'processing' : 'submitting',
-    progress: settings.mock ? 8 : 0,
-    time: '刚刚',
-    reference_images: images,
-    image_count: images.filter(Boolean).length,
-    model_id: model.id,
-    model_name: model.name,
-    scheduled_at: null,
-  };
-
-  // 演示模式：本地模拟，不请求后端
-  if (settings.mock) {
-    state.tasks.unshift(localTask);
-    renderTasks();
-    localTask.status = 'processing';
-    simulateTask(localTask.id);
-    $('#taskSequence').value = String(sequence + 1);
-    saveForm();
-    return;
-  }
-
-  // 真实模式：提交到本地后端
+  if (refsRequired && !refs[0]) { alert('请添加至少一张参考图片'); return; }
+  $('#submitBatch').disabled = true;
   try {
     const res = await fetch(`${settings.apiBase}/api/batches`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: numberedTaskName,
-        scheduled,
+        name: `${taskName}_${sequence}`,
         model_id: model.id,
+        scheduled,
         tasks: [{
           prompt,
           duration,
-          ...(resolution ? { resolution } : {}),
-          ...(seed == null ? {} : { seed }),
-          reference_images: images,
-          params: dynamicParams,
+          resolution: params.resolution || '',
+          seed: seed != null && seed !== '' && Number.isFinite(Number(seed)) ? Number(seed) : undefined,
+          reference_images: refs,
+          params,
         }],
       }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
-
-    // 用后端返回的本地任务 id 重新登记
-    const t = data.tasks[0];
-    state.tasks.unshift({
-      id: t.local_id,
-      name: localTask.name,
-      prompt: t.prompt,
-      duration: t.duration || duration,
-      image_count: t.image_count || t.reference_images?.length || images.length,
-      resolution: t.resolution || resolution,
-      seed: Number.isInteger(t.seed) ? t.seed : seed,
-      status: t.status,
-      progress: t.status === 'submitting' ? 8 : 0,
-      error: t.error,
-      provider_task_id: t.provider_task_id,
-      model_id: t.model_id || model.id,
-      model_name: t.model_name || model.name,
-      scheduled_at: t.scheduled_at,
-      submitted_at: t.submitted_at,
-      time: '刚刚',
+    (data.tasks || []).forEach((record) => {
+      state.tasks.unshift({
+        id: record.local_id,
+        kind: 'video',
+        name: record.name,
+        prompt: record.prompt || '',
+        status: record.status || 'submitting',
+        progress: 8,
+        duration: record.duration,
+        resolution: record.resolution,
+        image_files: null,
+        model_id: record.model_id,
+        model_name: record.model_name,
+        cost: typeof record.cost === 'number' ? record.cost : null,
+        cost_currency: record.cost_currency || 'CNY',
+        created_at: record.created_at,
+        time: taskTime(record.created_at),
+      });
+      if (record.local_id) pollTask(record.local_id);
     });
     renderTasks();
     $('#taskSequence').value = String(sequence + 1);
     saveForm();
-    // 开始轮询真实任务
-    if (t.local_id && t.status !== 'failed') pollTask(t.local_id);
+    showToast(`已提交生成（${(data.tasks || []).length} 条）`, 'ok');
   } catch (err) {
     alert(`提交失败：${err.message}`);
+  } finally {
+    $('#submitBatch').disabled = false;
+    syncVideoSubmitLabel();
   }
 }
-
+function syncVideoSubmitLabel() {
+  const scheduled = $('#scheduleSubmit') && $('#scheduleSubmit').checked;
+  const label = $('#videoSubmitText');
+  if (label) label.textContent = scheduled ? '预约生成' : '提交任务';
+  const icon = $('#videoSubmitIcon');
+  if (icon) icon.textContent = scheduled ? '🕑' : '▶';
+}
 function notifyTaskFinished(task, ok) {
   if (!appSettings.notifyOnFinish) return;
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
@@ -1930,8 +2066,8 @@ function pollTask(localId) {
       if (remote.image_files) t.image_files = remote.image_files;
       if (remote.cost != null) { t.cost = remote.cost; t.cost_currency = remote.cost_currency || 'CNY'; }
       const status = taskStatus(t);
-      if (status === 'completed') { t.progress = 100; state.pollingTasks.delete(localId); notifyTaskFinished(t, true); }
-      else if (['failed', 'timeout'].includes(status)) { state.pollingTasks.delete(localId); notifyTaskFinished(t, false); }
+      if (status === 'completed') { t.progress = 100; state.pollingTasks.delete(localId); notifyTaskFinished(t, true); showToast('生成完成', 'ok'); }
+      else if (['failed', 'timeout'].includes(status)) { state.pollingTasks.delete(localId); notifyTaskFinished(t, false); showToast('生成失败，可在任务中心查看详情', 'error'); }
       else { t.progress = remote.progress || t.progress || 8; }
       renderTasks();
       if (!['completed', 'failed', 'timeout'].includes(status)) scheduleNext();
@@ -2119,71 +2255,104 @@ async function openTokens() {
   } catch (err) { $('#tokenStatus').textContent = `读取令牌失败：${err.message}`; }
 }
 
+const tokenTestResults = {};
 function renderTokens() {
-  $('#tokenList').innerHTML = state.tokens.map((token) => `<div class="token-row" data-token-row="${escapeHtml(token.id)}" title="双击编辑名称和 Key"><div><b>${escapeHtml(token.name)}</b><small>${escapeHtml(token.masked)}</small></div><button type="button" data-delete-token="${escapeHtml(token.id)}">删除</button></div>`).join('');
-  $$('[data-delete-token]').forEach((button) => button.addEventListener('click', () => deleteToken(button.dataset.deleteToken)));
-  $$('[data-token-row]').forEach((row) => row.addEventListener('dblclick', () => editToken(row.dataset.tokenRow)));
+  const tbody = $('#tokenTable');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  state.tokens.forEach((token) => {
+    const bound = state.models.filter((model) => model.token_id === token.id).length;
+    const test = tokenTestResults[token.id];
+    const statusHtml = test ? (test.ok ? `<span class="model-status status-enabled"><i></i>正常 · ${test.latency}ms</span>` : `<span class="model-status status-error"><i></i>验证失败</span>`) : '<span class="model-status status-enabled"><i></i>正常</span>';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><b>${escapeHtml(token.name)}</b>${token.remark ? `<small class="token-remark">${escapeHtml(token.remark)}</small>` : ''}</td>
+      <td>${escapeHtml(token.provider || '自定义')}</td>
+      <td class="mono">${escapeHtml(token.masked)}</td>
+      <td>${bound}</td>
+      <td class="mono">${token.updated_at ? relativeTime(token.updated_at) : '—'}</td>
+      <td>${statusHtml}</td>
+      <td class="col-actions"><div class="model-row-actions">
+        <button type="button" class="model-action-button" data-token-test="${escapeHtml(token.id)}">测试</button>
+        <button type="button" class="model-action-button primary" data-token-edit="${escapeHtml(token.id)}">编辑</button>
+        <button type="button" class="model-action-button" data-token-del="${escapeHtml(token.id)}">删除</button>
+      </div></td>`;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll('[data-token-test]').forEach((button) => button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.textContent = '测试中…';
+    try {
+      const res = await fetch(`${settings.apiBase}/api/tokens/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: button.dataset.tokenTest }) });
+      const data = await res.json();
+      tokenTestResults[button.dataset.tokenTest] = { ok: Boolean(data.ok), latency: data.latency_ms };
+    } catch (err) {
+      tokenTestResults[button.dataset.tokenTest] = { ok: false };
+    }
+    button.disabled = false;
+    renderTokens();
+  }));
+  tbody.querySelectorAll('[data-token-edit]').forEach((button) => button.addEventListener('click', () => editToken(button.dataset.tokenEdit)));
+  tbody.querySelectorAll('[data-token-del]').forEach((button) => button.addEventListener('click', () => deleteToken(button.dataset.tokenDel)));
 }
-
-// 双击令牌行进入编辑：名称必填，Key 留空表示保留原值。
+function addToken() {
+  const name = $('#tokenName').value.trim();
+  const provider = $('#tokenProvider').value;
+  const value = $('#tokenValue').value.trim();
+  const remark = $('#tokenRemark').value.trim();
+  if (!name || !value) return alert('令牌名称和 API Key 不能为空');
+  fetch(`${settings.apiBase}/api/tokens`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, provider, value, remark }) })
+    .then(async (res) => {
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+      $('#tokenName').value = '';
+      $('#tokenValue').value = '';
+      $('#tokenRemark').value = '';
+      await openTokens();
+      showToast('令牌已添加，并已自动绑定到未配置令牌的模型', 'ok');
+    })
+    .catch((err) => alert(`添加失败：${err.message}`));
+}
 function editToken(id) {
   const token = state.tokens.find((item) => item.id === id);
   if (!token) return;
-  const row = $('[data-token-row="' + id + '"]');
-  if (!row || row.classList.contains('token-editing')) return;
-  row.classList.add('token-editing');
-  row.innerHTML = `<div class="token-edit-fields"><input data-edit-name type="text" value="${escapeHtml(token.name)}" placeholder="令牌名称" /><input data-edit-value type="text" placeholder="留空则不修改 Key" /></div><div class="token-edit-actions"><button class="primary-button" type="button" data-save-token="${escapeHtml(id)}">保存</button><button class="delete-selected-button" type="button" data-cancel-token="${escapeHtml(id)}">取消</button></div>`;
-  row.querySelector('[data-edit-name]').focus();
-  row.querySelector('[data-save-token]').addEventListener('click', () => saveTokenEdit(row));
-  row.querySelector('[data-edit-value]').addEventListener('keydown', (event) => { if (event.key === 'Enter') saveTokenEdit(row); });
-  row.querySelector('[data-cancel-token]').addEventListener('click', () => openTokens());
+  $('#tokenEditName').value = token.name;
+  $('#tokenEditProvider').value = token.provider || '自定义';
+  $('#tokenEditValue').value = '';
+  $('#tokenEditValue').placeholder = token.masked || '••••••••';
+  const bound = state.models.filter((model) => model.token_id === id);
+  const list = $('#tokenBoundModels');
+  if (list) list.innerHTML = bound.length ? bound.map((model) => `<div class="token-bound-item">${escapeHtml(model.name)}</div>`).join('') : '<div class="token-bound-item">暂无绑定模型</div>';
+  const backdrop = $('#tokenDrawerBackdrop');
+  backdrop.hidden = false;
+  backdrop.dataset.editId = id;
 }
-
-async function saveTokenEdit(row) {
-  const saveButton = row.querySelector('[data-save-token]');
-  const id = saveButton.dataset.saveToken;
-  const name = row.querySelector('[data-edit-name]').value.trim();
-  const value = row.querySelector('[data-edit-value]').value.trim();
-  if (!name) { alert('令牌名称不能为空'); return; }
-  try {
-    const res = await fetch(`${settings.apiBase}/api/tokens`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, name, value }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
-    await openTokens();
-    const status = $('#tokenStatus');
-    if (status) { status.textContent = '令牌已更新'; status.style.color = 'var(--green)'; }
-  } catch (err) {
-    alert(`令牌更新失败：${err.message}`);
-  }
-}
-
-async function saveToken() {
-  const name = $('#tokenName').value.trim();
-  const value = $('#tokenValue').value.trim();
-  if (!name || !value) return alert('请填写令牌名称和 API Key');
-  const res = await fetch(`${settings.apiBase}/api/tokens`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, value }) });
+async function saveTokenEdit() {
+  const backdrop = $('#tokenDrawerBackdrop');
+  const id = backdrop.dataset.editId;
+  const name = $('#tokenEditName').value.trim();
+  const provider = $('#tokenEditProvider').value;
+  const value = $('#tokenEditValue').value.trim();
+  if (!name) return alert('令牌名称不能为空');
+  const res = await fetch(`${settings.apiBase}/api/tokens`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name, provider, value }) });
   const data = await res.json();
-  if (!data.ok) return alert(`添加令牌失败：${data.msg}`);
-  $('#tokenName').value = '';
-  $('#tokenValue').value = '';
+  if (!data.ok) return alert(`保存失败：${data.msg}`);
+  backdrop.hidden = true;
   await openTokens();
-  const status = $('#tokenStatus');
-  if (status) { status.textContent = '令牌已添加，并已自动绑定到未配置令牌的模型'; status.style.color = 'var(--green)'; }
+  showToast('令牌已更新', 'ok');
 }
-
 async function deleteToken(id) {
-  if (!confirm('确定删除这个令牌吗？')) return;
+  const bound = state.models.filter((model) => model.token_id === id);
+  const message = bound.length
+    ? `该令牌正在被 ${bound.length} 个模型使用：\n${bound.map((m) => `· ${m.name}`).join('\n')}\n删除后这些模型将无法调用。确定删除吗？`
+    : '确定删除这个令牌吗？';
+  if (!window.confirm(message)) return;
   const res = await fetch(`${settings.apiBase}/api/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' });
   const data = await res.json();
-  if (!data.ok) return alert(`删除令牌失败：${data.msg}`);
+  if (!data.ok) return alert(`删除失败：${data.msg}`);
   await openTokens();
+  showToast('令牌已删除', 'ok');
 }
-
-// 应用设置面板（右下角 ⚙ 按钮）
 async function openAppSettingsPanel() {
   $('#settingNotify').checked = Boolean(appSettings.notifyOnFinish);
   $('#settingPollInterval').value = String(appSettings.pollIntervalSeconds);
@@ -2240,74 +2409,54 @@ function selectedImageModel() {
   return state.models.find((model) => model.kind === 'image' && model.id === ($('#imageModelSelect')?.value || state.imageModelId));
 }
 
-function imageFormParams() {
-  return Object.fromEntries($$('[data-image-field]').map((input) => [input.dataset.imageField, input.type === 'number' && input.value !== '' ? Number(input.value) : input.value]));
-}
-
 function applySelectedImageModel() {
   const model = selectedImageModel();
   if (!model) return;
   state.imageModelId = model.id;
-  const wrap = $('#imageExtraFields');
-  if (!wrap) return;
-  wrap.innerHTML = '';
-  const fields = Array.isArray(model.fields) ? model.fields.filter((field) => field && field.key !== 'prompt') : [];
-  fields.forEach((field) => {
-    const label = document.createElement('label');
-    label.className = 'field';
-    label.innerHTML = `<span><b class="param-key">${escapeHtml(field.label || field.key)}</b>${field.required ? '<i>必填</i>' : '<small>可选</small>'}</span>`;
-    let input;
-    if (field.type === 'select') {
-      input = document.createElement('select');
-      input.innerHTML = '<option value="">请选择</option>' + (field.options || []).map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('');
-    } else if (field.type === 'textarea') {
-      input = document.createElement('textarea');
-      input.rows = 3;
-    } else {
-      input = document.createElement('input');
-      input.type = field.type === 'number' ? 'number' : 'text';
-      if (field.type === 'number') input.step = field.step != null ? field.step : 1;
-    }
-    input.dataset.imageField = field.key;
-    input.required = Boolean(field.required);
-    if (field.default != null) input.value = String(field.default);
-    input.addEventListener('input', () => { saveImageForm(); renderImageCurrentPrice(); });
-    input.addEventListener('change', () => { saveImageForm(); renderImageCurrentPrice(); });
-    label.appendChild(input);
-    wrap.appendChild(label);
-  });
-  const refPanel = $('#imageRefPanel');
-  if (refPanel) refPanel.hidden = !fields.some((field) => field && field.key === 'reference_images');
-  renderImageCurrentPrice();
+  renderGenFields('image', model);
+  renderImagePricePanel();
 }
-
-function renderImageCurrentPrice() {
-  const el = $('#imageCurrentPrice');
-  if (!el) return;
-  const pricing = (selectedImageModel() || {}).pricing;
+function getImageParams(model) {
+  const params = {};
+  const values = genValues.image.values;
+  const fields = Array.isArray(model.fields) ? model.fields : [];
+  fields.forEach((field) => {
+    if (!field || !field.key || field.key === 'reference_images') return;
+    const raw = values[field.key] != null && values[field.key] !== '' ? values[field.key] : field.default;
+    if (field.type === 'number') {
+      if (raw != null && raw !== '' && Number.isFinite(Number(raw))) params[field.key] = Number(raw);
+      return;
+    }
+    if (raw != null && raw !== '') params[field.key] = raw;
+  });
+  return params;
+}
+function renderImagePricePanel() {
+  const model = selectedImageModel();
+  const pricing = model ? model.pricing : null;
+  const params = getImageParams(model || {});
+  const big = $('#imageCurrentPrice');
+  const lines = $('#imagePriceLines');
+  if (!big) return;
   if (!pricing || (pricing.peak == null && pricing.valley == null && !pricing.by_resolution)) {
-    el.textContent = '当前模型未配置价格';
-    el.title = '可在「模型管理」里为模型设置价格（可选按张计费）';
+    big.textContent = '未配置价格';
+    if (lines) lines.innerHTML = '';
     return;
   }
-  const params = imageFormParams();
+  const symbol = priceSymbol(pricing);
   const size = typeof params.size === 'string' ? params.size : '';
   const rate = modelRateFor(pricing, size, new Date().toISOString());
-  if (rate == null) { el.textContent = ''; el.title = ''; return; }
-  const perImage = pricing.unit === 'per_image';
-  const symbol = priceSymbol(pricing);
-  let text = `${symbol}${rate}/${perImage ? '张' : '秒'}`;
-  if (size) text += `（${size}）`;
-  if (perImage) {
-    const n = Math.max(1, Math.round(Number(params.n) || 1));
-    text += ` × ${n} 张 = ${symbol}${(rate * n).toFixed(2)}`;
+  if (rate == null) { big.textContent = '—'; if (lines) lines.innerHTML = ''; return; }
+  const n = Math.max(1, Math.round(Number(params.n) || 1));
+  big.textContent = `${symbol}${rate} / 张${size ? `（${size}）` : ''}`;
+  if (lines) {
+    const rows = [];
+    rows.push(`尺寸：${size || '默认'}`);
+    rows.push(`数量：${n}`);
+    rows.push(`预计：${symbol}${(rate * n).toFixed(2)}`);
+    lines.innerHTML = rows.map((row) => `<div>${escapeHtml(row)}</div>`).join('');
   }
-  el.textContent = text;
-  el.title = pricingBreakdown(pricing);
 }
-
-const IMAGE_FORM_KEY = 'wenvedio-image-form';
-
 function imageFormParamsSnapshot() {
   return imageFormParams();
 }
@@ -2341,7 +2490,7 @@ function restoreImageForm() {
       if (value != null) input.value = String(value);
     });
   }
-  renderImageCurrentPrice();
+  renderImagePricePanel();
 }
 
 function imageRefCount() {
@@ -2515,43 +2664,64 @@ function imageTaskFromRecord(record) {
 async function submitImageBatch() {
   const model = selectedImageModel();
   if (!model) { alert('请选择生图模型'); return; }
-  const taskName = ($('#imageTaskName').dataset.savedValue || $('#imageTaskName').value).trim();
+  const taskName = ($('#imageTaskName').value || '未命名图片任务').trim() || '未命名图片任务';
   const sequence = Number($('#imageTaskSequence').value);
-  if (!taskName) { alert('请先设置并保存任务名字'); return; }
   if (!Number.isInteger(sequence) || sequence < 1) { alert('序号必须是从 1 开始的整数'); $('#imageTaskSequence').focus(); return; }
-  const prompt = $('#imagePrompt').value.trim();
+  const prompt = ($('#imagePrompt').value || '').trim();
   if (!prompt) { alert('请填写提示词'); $('#imagePrompt').focus(); return; }
-  const refs = $('#imageRefPanel')?.hidden ? [] : state.imageRefItems.filter((item) => item.value.trim()).map((item) => item.value.trim());
-  const params = {};
-  for (const input of $$('[data-image-field]')) {
-    if (input.required && input.value.trim() === '') {
-      alert(`请填写必填参数：${input.dataset.imageField}`);
-      input.focus();
-      return;
-    }
-    if (input.value === '') continue;
-    params[input.dataset.imageField] = input.type === 'number' ? Number(input.value) : input.value;
-  }
+  const params = getImageParams(model);
+  const refs = state.imageRefItems.filter((item) => item.value.trim()).map((item) => item.value.trim());
+  $('#submitImageBatch').disabled = true;
   try {
     const res = await fetch(`${settings.apiBase}/api/batches`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: `${taskName}_${sequence}`, model_id: model.id, tasks: [{ prompt, params, ...(refs.length ? { reference_images: refs } : {}) }] }),
+      body: JSON.stringify({
+        name: `${taskName}_${sequence}`,
+        model_id: model.id,
+        tasks: [{ prompt, params, ...(refs.length ? { reference_images: refs } : {}) }],
+      }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
     (data.tasks || []).forEach((record) => {
-      state.tasks.unshift(imageTaskFromRecord(record));
+      state.tasks.unshift({
+        id: record.local_id,
+        kind: 'image',
+        name: record.name,
+        prompt: record.prompt || '',
+        status: record.status || 'processing',
+        image_files: record.image_files || null,
+        image_count: record.image_count || 0,
+        params: record.params || params,
+        model_id: record.model_id,
+        model_name: record.model_name,
+        cost: typeof record.cost === 'number' ? record.cost : null,
+        cost_currency: record.cost_currency || 'CNY',
+        created_at: record.created_at,
+        time: taskTime(record.created_at),
+      });
       if (record.local_id) pollTask(record.local_id);
     });
     renderTasks();
     $('#imageTaskSequence').value = String(sequence + 1);
     saveImageForm();
+    showToast(`已提交生成（${(data.tasks || []).length} 张）`, 'ok');
   } catch (err) {
     alert(`提交失败：${err.message}`);
+  } finally {
+    $('#submitImageBatch').disabled = false;
   }
 }
-
+function clearImageForm() {
+  $('#imagePrompt').value = '';
+  genValues.image.values = {};
+  saveGenValues();
+  clearImageRefDraft();
+  renderGenFields('image', selectedImageModel() || {});
+  renderImagePricePanel();
+  updateCharCount('imagePrompt');
+}
 async function downloadImageTask(task) {
   const files = task.image_files || [];
   if (!files.length) { alert('该任务还没有生成的图片'); return; }
@@ -2599,48 +2769,13 @@ function renderUsageStats() {
       const cur = task.cost_currency === 'USD' ? 'USD' : 'CNY';
       sums[cur] = Math.round(((sums[cur] || 0) + task.cost) * 100) / 100;
     });
-    const text = Object.entries(sums).map(([cur, value]) => `${cur === 'USD' ? '$' : '¥'}${value.toFixed(2)}`).join(' + ');
-    return text || null;
+    return Object.entries(sums).map(([cur, value]) => `${cur === 'USD' ? '$' : '¥'}${value.toFixed(2)}`).join(' + ') || null;
   };
   totalEl.textContent = sumCosts(state.tasks) || '—';
-  $('#statMonthCost').textContent = sumCosts(monthTasks) || '—';
-  $('#statMonthTasks').textContent = String(monthTasks.length);
-  const settled = monthTasks.filter((task) => ['completed', 'failed', 'timeout'].includes(taskStatus(task)));
-  const okCount = settled.filter((task) => taskStatus(task) === 'completed').length;
-  const monthRate = settled.length ? Math.round((okCount / settled.length) * 100) : null;
-  $('#statMonthRate').textContent = monthRate != null ? `${monthRate}%` : '—';
-  const [statYear, statMonth] = monthKey.split('-').map(Number);
-  const lastMonthDate = new Date(Date.UTC(statYear, statMonth - 2, 1));
-  const lastMonthKey = `${lastMonthDate.getUTCFullYear()}-${String(lastMonthDate.getUTCMonth() + 1).padStart(2, '0')}`;
-  const lastMonthTasks = state.tasks.filter((task) => (beijingDayKey(task.created_at) || '').slice(0, 7) === lastMonthKey);
-  const monthSpendText = sumCosts(monthTasks);
-  const lastSpendText = sumCosts(lastMonthTasks);
-  const spendDelta = $('#statMonthCostDelta');
-  if (spendDelta) {
-    if (monthSpendText && lastSpendText && monthSpendText.charAt(0) === lastSpendText.charAt(0)) {
-      const diff = Math.round((Number(monthSpendText.replace(/[^0-9.]/g, '')) - Number(lastSpendText.replace(/[^0-9.]/g, ''))) * 100) / 100;
-      spendDelta.textContent = `较上月 ${monthSpendText.charAt(0)}${diff >= 0 ? '+' : ''}${diff.toFixed(2)}`;
-    } else if (lastSpendText) {
-      spendDelta.textContent = `较上月 ${lastSpendText}`;
-    } else {
-      spendDelta.textContent = '较上月 —';
-    }
-  }
-  const taskDiff = monthTasks.length - lastMonthTasks.length;
-  const taskDelta = $('#statMonthTasksDelta');
-  if (taskDelta) taskDelta.textContent = `较上月 ${taskDiff >= 0 ? '+' : ''}${taskDiff}${taskDiff > 0 ? ' ↗' : taskDiff < 0 ? ' ↘' : ''}`;
-  const lastSettled = lastMonthTasks.filter((task) => ['completed', 'failed', 'timeout'].includes(taskStatus(task)));
-  const lastOk = lastSettled.filter((task) => taskStatus(task) === 'completed').length;
-  const lastRate = lastSettled.length ? Math.round((lastOk / lastSettled.length) * 100) : null;
-  const rateDelta = $('#statMonthRateDelta');
-  if (rateDelta) {
-    if (monthRate != null && lastRate != null) {
-      const diff = monthRate - lastRate;
-      rateDelta.textContent = `较上月 ${diff >= 0 ? '+' : ''}${diff}%`;
-    } else {
-      rateDelta.textContent = '较上月 —';
-    }
-  }
+  const monthEl = $('#statMonthCost');
+  if (monthEl) monthEl.textContent = sumCosts(monthTasks) || '—';
+  const table = $('#usageModelTable');
+  if (!table) return;
   const byModel = new Map();
   state.tasks.forEach((task) => {
     if (typeof task.cost !== 'number') return;
@@ -2651,45 +2786,8 @@ function renderUsageStats() {
     entry.sums[cur] = Math.round(((entry.sums[cur] || 0) + task.cost) * 100) / 100;
     byModel.set(key, entry);
   });
-  const rows = [...byModel.values()].map((entry) => `<tr><td>${escapeHtml(entry.name)}</td><td>${entry.count}</td><td>${Object.entries(entry.sums).map(([cur, value]) => `${cur === 'USD' ? '$' : '¥'}${value.toFixed(2)}`).join(' + ')}</td></tr>`).join('');
-  $('#usageModelTable').innerHTML = rows || '<tr><td colspan="3" class="usage-empty">暂无花费数据，新提交的任务完成后会计入</td></tr>';
+  table.innerHTML = [...byModel.values()].map((entry) => `<tr><td>${escapeHtml(entry.name)}</td><td>${entry.count}</td><td>${Object.entries(entry.sums).map(([cur, value]) => `${cur === 'USD' ? '$' : '¥'}${value.toFixed(2)}`).join(' + ')}</td></tr>`).join('') || '<tr><td colspan="3" class="usage-empty">暂无花费数据，新提交的任务完成后会计入</td></tr>';
 }
-
-function renderImageTasks() {
-  const tbody = $('#imageTaskTable');
-  if (!tbody) return;
-  const imageTasks = state.tasks.filter((task) => task.kind === 'image');
-  tbody.innerHTML = '';
-  imageTasks.forEach((task) => {
-    const tr = document.createElement('tr');
-    tr.dataset.id = task.id;
-    const thumbs = task.image_files || [];
-    const thumbsHtml = thumbs.length
-      ? thumbs.map((_, index) => `<img src="${settings.apiBase}/api/tasks/${encodeURIComponent(task.id)}/image/${index}" alt="生成图片" loading="lazy" />`).join('')
-      : (taskStatus(task) === 'failed' ? '<span class="image-thumb-empty">无图片</span>' : '<span class="image-thumb-empty">生成中…</span>');
-    tr.innerHTML = `<td class="task-summary-cell"><div class="task-name">${escapeHtml(task.name)}</div><div class="task-id">${escapeHtml(task.id)} · ${escapeHtml(task.prompt)}${typeof task.cost === 'number' ? ` · ${formatTaskCost(task)}` : ''}</div></td><td class="progress-cell">${statusMarkup(task)}</td><td><div class="image-thumbs">${thumbsHtml}</div></td><td>${task.time}</td><td class="row-menu"><button class="row-menu-button" type="button" aria-label="任务操作">•••</button><div class="row-action-menu" hidden><button class="row-image-download" type="button" ${thumbs.length ? '' : 'disabled'}>下载图片</button><button class="row-delete-action" type="button">删除记录</button></div></td>`;
-    const menu = tr.querySelector('.row-action-menu');
-    tr.querySelector('.row-menu-button').addEventListener('click', (event) => {
-      event.stopPropagation();
-      $$('.row-action-menu').forEach((item) => { if (item !== menu) item.hidden = true; });
-      menu.hidden = !menu.hidden;
-    });
-    tr.querySelector('.row-image-download').addEventListener('click', () => { menu.hidden = true; downloadImageTask(task); });
-    tr.querySelector('.row-delete-action').addEventListener('click', () => { menu.hidden = true; deleteTasks([task.id]); });
-    tbody.appendChild(tr);
-  });
-  $('#imageTaskTotal').textContent = String(imageTasks.length);
-  $('#imageEmptyState').hidden = imageTasks.length > 0;
-}
-
-function clearImageForm() {
-  $('#imagePrompt').value = '';
-  $$('[data-image-field]').forEach((input) => { input.value = ''; });
-  clearImageRefDraft();
-  saveImageForm();
-  renderImageCurrentPrice();
-}
-
 const TASKS_GROUP_KEY = 'wenvedio-tasks-group-collapsed';
 
 function isTasksGroupCollapsed() {
@@ -2760,94 +2858,138 @@ function toggleSidebar() {
   $('#sidebarToggle').setAttribute('aria-label', $('#sidebarToggle').title);
 }
 
+let taskDrawerCurrentId = null;
+function openTaskDetailDrawer(id) {
+  const task = state.tasks.find((t) => t.id === id);
+  if (!task) return;
+  taskDrawerCurrentId = id;
+  $('#taskDrawerName').textContent = task.name || '任务详情';
+  $('#taskDrawerId').textContent = task.id;
+  const statusMeta = {
+    completed: ['已完成', 'enabled'], processing: ['生成中', 'enabled'], queued: ['排队中', 'enabled'],
+    submitting: ['提交中', 'enabled'], scheduled: ['已预约', 'enabled'], failed: ['失败', 'failed'], timeout: ['失败', 'failed'],
+  }[taskStatus(task)] || ['—', 'enabled'];
+  const statusEl = $('#taskDrawerStatus');
+  statusEl.className = `state ${statusMeta[1]}`;
+  statusEl.innerHTML = `<i></i>${statusMeta[0]}`;
+  $('#taskDrawerPreview').innerHTML = taskPreviewHtml(task);
+  $('#taskDrawerPrompt').textContent = task.prompt || '—';
+  const facts = [];
+  facts.push(['类型', task.kind === 'image' ? '图片生成' : '视频生成']);
+  facts.push(['模型', task.model_name || task.model_id || '—']);
+  if (task.kind === 'image') {
+    facts.push(['尺寸', (task.params && task.params.size) || '—']);
+    facts.push(['数量', String((task.image_files || []).length || (task.params && task.params.n) || '—')]);
+  } else {
+    facts.push(['分辨率', task.resolution || '—']);
+    facts.push(['时长', task.duration ? `${task.duration} 秒` : '—']);
+    if (task.seed != null) facts.push(['seed', String(task.seed)]);
+  }
+  if (typeof task.cost === 'number') facts.push(['费用', formatTaskCost(task)]);
+  facts.push(['创建时间', task.created_at ? taskTime(task.created_at) : '—']);
+  if (task.completed_at) facts.push(['完成时间', taskTime(task.completed_at)]);
+  if (task.error) facts.push(['错误', task.error]);
+  $('#taskDrawerFacts').innerHTML = facts.map(([k, v]) => `<div class="task-fact"><span>${escapeHtml(k)}</span><b>${escapeHtml(String(v))}</b></div>`).join('');
+  const errorGroup = $('#taskDrawerErrorGroup');
+  if (errorGroup) errorGroup.hidden = !task.error;
+  $('#taskDrawerError').textContent = task.error || '';
+  const downloadable = task.status === 'completed' && (task.kind === 'image' ? (task.image_files || []).length : task.video_url);
+  $('#taskDrawerDownload').hidden = !downloadable;
+  $('#taskDrawerRetry').hidden = !['failed', 'timeout'].includes(taskStatus(task));
+  const note = $('#taskDrawerFootNote');
+  if (note) note.textContent = task.kind === 'image' && (task.image_files || []).length > 1 ? `共 ${(task.image_files || []).length} 张图片，下载将逐张保存` : '';
+  $('#taskDrawerBackdrop').hidden = false;
+}
+function closeTaskDetail() {
+  $('#taskDrawerBackdrop').hidden = true;
+  taskDrawerCurrentId = null;
+}
+function downloadFromTaskDrawer() {
+  const task = state.tasks.find((t) => t.id === taskDrawerCurrentId);
+  if (!task) return;
+  if (task.kind === 'image') downloadImageTask(task);
+  else downloadTasks([task]);
+}
+function retryFromTaskDrawer() {
+  const task = state.tasks.find((t) => t.id === taskDrawerCurrentId);
+  if (!task) return;
+  closeTaskDetail();
+  retryTask(task);
+}
+function showToast(message, type = 'ok') {
+  const wrap = $('#toastWrap');
+  if (!wrap) return;
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  wrap.appendChild(toast);
+  setTimeout(() => toast.classList.add('show'), 30);
+  setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 3200);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  loadGenValues();
   loadTasks();
   initializeSidebar();
   applyTasksGroupCollapsed(isTasksGroupCollapsed());
+  showView('workspace');
 
+  // 视频生成
   $('#submitBatch').addEventListener('click', submitBatch);
+  $('#scheduleSubmit').addEventListener('change', () => { saveForm(); syncVideoSubmitLabel(); });
+  $('#videoSeed').addEventListener('input', () => { genValues.video.values.seed = $('#videoSeed').value; saveGenValues(); });
+  // 图片生成
+  $('#submitImageBatch').addEventListener('click', submitImageBatch);
+  $('#imageModelSelect').addEventListener('change', () => { applySelectedImageModel(); saveImageForm(); });
+  $('#imagePrompt').addEventListener('input', () => { updateCharCount('imagePrompt'); saveImageForm(); });
+  $('#imageTaskName').addEventListener('input', saveImageForm);
+  $('#imageTaskSequence').addEventListener('input', saveImageForm);
+  $('#clearImageForm').addEventListener('click', clearImageForm);
+  $('#imageHelpBtn').addEventListener('click', () => showToast('使用更具体的提示词，可以获得更稳定的生成效果。添加参考图后按图生图方式生成。', 'ok'));
+  $('#videoHelpBtn').addEventListener('click', () => showToast('使用清晰主体和连续场景描述，视频稳定性更好。', 'ok'));
+  // 参考图上传（图片页 + 视频页拖拽上传区）
+  $('#imageRefUpload').addEventListener('change', addImageRefFiles);
+  $('#imageRefDropzone').addEventListener('click', () => $('#imageRefUpload').click());
+  ['dragover', 'dragenter'].forEach((type) => $('#imageRefDropzone').addEventListener(type, (event) => { event.preventDefault(); $('#imageRefDropzone').classList.add('dragging'); }));
+  ['dragleave', 'drop'].forEach((type) => $('#imageRefDropzone').addEventListener(type, (event) => { event.preventDefault(); $('#imageRefDropzone').classList.remove('dragging'); }));
+  $('#imageRefDropzone').addEventListener('drop', addImageRefFiles);
+  $('#localImageUpload').addEventListener('change', addLocalImages);
+  $('#refDropzone').addEventListener('click', () => $('#localImageUpload').click());
+  ['dragover', 'dragenter'].forEach((type) => $('#refDropzone').addEventListener(type, (event) => { event.preventDefault(); $('#refDropzone').classList.add('dragging'); }));
+  ['dragleave', 'drop'].forEach((type) => $('#refDropzone').addEventListener(type, (event) => { event.preventDefault(); $('#refDropzone').classList.remove('dragging'); }));
+  $('#refDropzone').addEventListener('drop', addLocalImages);
+  $('#addImageLink').addEventListener('click', addImageLink);
+
+  // 任务中心
   $('#downloadSelected').addEventListener('click', downloadSelected);
   $('#deleteSelected').addEventListener('click', () => deleteTasks([...state.selected]));
+  $('#tcSearch').addEventListener('input', () => { state.tc.search = $('#tcSearch').value; renderTaskCenter(); });
+  $('#tcType').addEventListener('change', () => { state.tc.type = $('#tcType').value; renderTaskCenter(); });
+  $('#tcModel').addEventListener('change', () => { state.tc.model = $('#tcModel').value; renderTaskCenter(); });
+  $('#tcDate').addEventListener('change', () => { state.tc.date = $('#tcDate').value; renderTaskCenter(); });
+  $$('.tc-tabs [data-tc-filter]').forEach((button) => button.addEventListener('click', () => {
+    state.tc.filter = button.dataset.tcFilter;
+    $$('.tc-tabs [data-tc-filter]').forEach((b) => b.classList.toggle('active', b === button));
+    renderTaskCenter();
+  }));
+  $('#selectAll').addEventListener('change', (event) => {
+    filterTaskCenter().forEach((task) => {
+      if (event.target.checked) state.selected.add(task.id);
+      else state.selected.delete(task.id);
+    });
+    renderTaskCenter();
+    updateSelection();
+  });
+
+  // 模型管理
   $('#openSettings').addEventListener('click', openSettings);
-  $('#openTokens').addEventListener('click', openTokens);
-  $('#saveSettings').addEventListener('click', saveSettings);
   $('#addModel').addEventListener('click', () => openModelDrawer(null));
+  $('#saveSettings').addEventListener('click', saveSettings);
   $('#deleteModel').addEventListener('click', deleteModelFromDrawer);
   $('#closeModelEditor').addEventListener('click', requestCloseModelDrawer);
+  $('#cancelModelEditor').addEventListener('click', requestCloseModelDrawer);
   $('#modelEditorBackdrop').addEventListener('click', (event) => { if (event.target === $('#modelEditorBackdrop')) requestCloseModelDrawer(); });
-  $('#saveToken').addEventListener('click', saveToken);
-  $('#addImageLink').addEventListener('click', addImageLink);
-  $('#localImageUpload').addEventListener('change', addLocalImages);
-  $('#closeTaskDetail').addEventListener('click', closeTaskDetail);
-  $('#taskDetailModal').addEventListener('click', (event) => { if (event.target === $('#taskDetailModal')) closeTaskDetail(); });
-  $('#copyTaskDetail').addEventListener('click', () => {
-    const task = state.tasks.find((item) => item.id === $('#copyTaskDetail').dataset.taskId);
-    if (task) copyPrompt(task.prompt, $('#copyTaskDetail'));
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return;
-    if (!$('#taskDetailModal').hidden) closeTaskDetail();
-    if (!$('#appSettingsModal').hidden) closeAppSettingsPanel();
-  });
-  document.addEventListener('click', () => $$('.row-action-menu').forEach((menu) => { menu.hidden = true; }));
-  $('#navImage').addEventListener('click', (event) => { event.preventDefault(); showView('image'); });
-  $('#navTasks').addEventListener('click', (event) => {
-    event.preventDefault();
-    toggleTasksGroup();
-    showView('tasks');
-  });
-  $('#navTasksImage').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('image'); });
-  $('#navTasksVideo').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('video'); });
-  $('#recordGoto').addEventListener('click', () => showView(state.recordsKind === 'image' ? 'image' : 'workspace'));
-  $('#navWorkspace').addEventListener('click', (event) => { event.preventDefault(); showView('workspace'); });
-  $('#navQuery').addEventListener('click', (event) => { event.preventDefault(); showView('query'); });
-  $('#mobileImage').addEventListener('click', () => showView('image'));
-  $('#mobileWorkspace').addEventListener('click', () => showView('workspace'));
-  $('#mobileTasks').addEventListener('click', () => showView('tasks'));
-  $('#mobileQuery').addEventListener('click', () => showView('query'));
-  $('#mobileApi').addEventListener('click', openSettings);
-  $('#openAppSettings').addEventListener('click', openAppSettingsPanel);
-  $('#closeAppSettings').addEventListener('click', closeAppSettingsPanel);
-  $('#appSettingsModal').addEventListener('click', (event) => { if (event.target === $('#appSettingsModal')) closeAppSettingsPanel(); });
-  $('#settingOpenAtLogin').addEventListener('change', async (event) => { if (desktopBridge?.setAppSettings) await desktopBridge.setAppSettings({ openAtLogin: event.target.checked }); });
-  $('#settingMinimizeToTray').addEventListener('change', async (event) => { if (desktopBridge?.setAppSettings) await desktopBridge.setAppSettings({ minimizeToTray: event.target.checked }); });
-  $('#settingNotify').addEventListener('change', async (event) => {
-    saveAppSettings({ notifyOnFinish: event.target.checked });
-    if (event.target.checked && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
-      try { await Notification.requestPermission(); } catch (_) { /* 用户拒绝通知 */ }
-    }
-  });
-  $('#settingPollInterval').addEventListener('change', (event) => saveAppSettings({ pollIntervalSeconds: Number(event.target.value) || 60 }));
-  $('#settingScheduleInterval').addEventListener('change', (event) => saveScheduleIntervalSeconds(event.target.value));
-  initializeModels().then(() => { initializeFormDraft(); initializeImageFormDraft(); });
-  initializeDownloadDirectory();
-  $('#chooseDownloadDirectory').addEventListener('click', chooseDownloadDirectory);
-  $('#modelSearch').addEventListener('input', () => { modelUI.search = $('#modelSearch').value; modelUI.page = 1; renderModelTable(); });
-  $('#modelFilterKind').addEventListener('change', () => { modelUI.kind = $('#modelFilterKind').value; modelUI.page = 1; renderModelTable(); });
-  $('#modelFilterProvider').addEventListener('change', () => { modelUI.provider = $('#modelFilterProvider').value; modelUI.page = 1; renderModelTable(); });
-  $('#modelFilterStatus').addEventListener('change', () => { modelUI.status = $('#modelFilterStatus').value; modelUI.page = 1; renderModelTable(); });
-  $('#modelSort').addEventListener('change', () => { modelUI.sort = $('#modelSort').value; modelUI.page = 1; renderModelTable(); });
-  $('#modelPageSize').addEventListener('change', () => { modelUI.pageSize = Number($('#modelPageSize').value) || 10; modelUI.page = 1; renderModelTable(); });
-  $('#modelSelectAll').addEventListener('change', (event) => {
-    document.querySelectorAll('#modelTableBody [data-model-check]').forEach((input) => {
-      input.checked = event.target.checked;
-      if (input.checked) modelUI.selected.add(input.dataset.modelCheck);
-      else modelUI.selected.delete(input.dataset.modelCheck);
-      input.closest('tr').classList.toggle('selected', input.checked);
-    });
-    renderModelBatchBar();
-  });
-  $('#modelBatchEnable').addEventListener('click', () => batchUpdateEnabled(true));
-  $('#modelBatchDisable').addEventListener('click', () => batchUpdateEnabled(false));
-  $('#modelBatchDelete').addEventListener('click', batchDeleteSelected);
-  $('#sidebarToggle').addEventListener('click', toggleSidebar);
-  ['prompt', 'duration', 'resolution', 'seed', 'taskSequence'].forEach((id) => {
-    $(`#${id}`).addEventListener('input', saveForm);
-    $(`#${id}`).addEventListener('change', saveForm);
-  });
-  $('#scheduleSubmit').addEventListener('change', saveForm);
-  $('#modelSelect').addEventListener('change', () => { applySelectedModel(); saveForm(); });
-  $('#modelDrawer').addEventListener('input', () => { modelUI.dirty = true; if (!$('#modelDrawer').querySelector('[data-model-pane="pricing"]').hidden) renderPricingPreview(); });
+  $('#modelDrawer').addEventListener('input', () => { modelUI.dirty = true; const pane = $('#modelDrawer').querySelector('[data-model-pane="pricing"]'); if (pane && !pane.hidden) renderPricingPreview(); });
   $('#modelDrawer').addEventListener('change', () => { modelUI.dirty = true; });
   $$('.drawer-tabs [data-model-tab]').forEach((button) => button.addEventListener('click', () => setDrawerTab(button.dataset.modelTab)));
   $('#toggleFieldsJson').addEventListener('click', () => setFieldsMode(modelUI.fieldsMode === 'visual' ? 'json' : 'visual'));
@@ -2876,99 +3018,70 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#priceResEnabled').addEventListener('change', () => { markDrawerDirty(); syncPricingPaneVisibility(); renderPricingPreview(); });
   $('#pricingUnit').addEventListener('change', () => { markDrawerDirty(); syncPricingPaneVisibility(); renderPricingPreview(); });
   $('#testModelConnection').addEventListener('click', runDrawerModelTest);
-  $('#cancelModelEditor').addEventListener('click', requestCloseModelDrawer);
-  $('#disableModelBtn').addEventListener('click', () => {
-    $('#advEnabled').checked = false;
-    saveSettings();
+  $('#disableModelBtn').addEventListener('click', () => { $('#advEnabled').checked = false; saveSettings(); });
+
+  // 令牌管理
+  $('#openTokens').addEventListener('click', openTokens);
+  $('#saveToken').addEventListener('click', addToken);
+  $('#closeTokenDrawer').addEventListener('click', () => { $('#tokenDrawerBackdrop').hidden = true; });
+  $('#cancelTokenEdit').addEventListener('click', () => { $('#tokenDrawerBackdrop').hidden = true; });
+  $('#saveTokenEdit').addEventListener('click', saveTokenEdit);
+  $('#tokenDrawerBackdrop').addEventListener('click', (event) => { if (event.target === $('#tokenDrawerBackdrop')) $('#tokenDrawerBackdrop').hidden = true; });
+
+  // 应用设置
+  $('#openAppSettings').addEventListener('click', openAppSettingsPanel);
+  $('#closeAppSettings').addEventListener('click', closeAppSettingsPanel);
+  $('#appSettingsModal').addEventListener('click', (event) => { if (event.target === $('#appSettingsModal')) closeAppSettingsPanel(); });
+  $('#settingOpenAtLogin').addEventListener('change', async (event) => { if (desktopBridge?.setAppSettings) await desktopBridge.setAppSettings({ openAtLogin: event.target.checked }); });
+  $('#settingMinimizeToTray').addEventListener('change', async (event) => { if (desktopBridge?.setAppSettings) await desktopBridge.setAppSettings({ minimizeToTray: event.target.checked }); });
+  $('#settingNotify').addEventListener('change', async (event) => {
+    saveAppSettings({ notifyOnFinish: event.target.checked });
+    if (event.target.checked && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+      try { await Notification.requestPermission(); } catch (_) { /* 用户拒绝通知 */ }
+    }
   });
+  $('#settingPollInterval').addEventListener('change', (event) => saveAppSettings({ pollIntervalSeconds: Number(event.target.value) || 60 }));
+  $('#settingScheduleInterval').addEventListener('change', (event) => saveScheduleIntervalSeconds(event.target.value));
+  $('#chooseDownloadDirectory').addEventListener('click', chooseDownloadDirectory);
+
+  // 任务详情抽屉
+  $('#closeTaskDetail').addEventListener('click', closeTaskDetail);
+  $('#taskDrawerClose2').addEventListener('click', closeTaskDetail);
+  $('#taskDrawerDownload').addEventListener('click', downloadFromTaskDrawer);
+  $('#taskDrawerRetry').addEventListener('click', retryFromTaskDrawer);
+  $('#taskDrawerBackdrop').addEventListener('click', (event) => { if (event.target === $('#taskDrawerBackdrop')) closeTaskDetail(); });
+
+  // 导航
+  $('#navImage').addEventListener('click', (event) => { event.preventDefault(); showView('image'); });
+  $('#navWorkspace').addEventListener('click', (event) => { event.preventDefault(); showView('workspace'); });
+  $('#navTasks').addEventListener('click', (event) => { event.preventDefault(); toggleTasksGroup(); showView('tasks'); });
+  $('#navTasksImage').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('image'); });
+  $('#navTasksVideo').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('video'); });
+  $('#navQuery').addEventListener('click', (event) => { event.preventDefault(); showView('query'); });
+  $('#gotoImageRecords').addEventListener('click', () => { setRecordsKind('image'); showView('tasks'); });
+  $('#gotoVideoRecords').addEventListener('click', () => { setRecordsKind('video'); showView('tasks'); });
+  $('#mobileImage').addEventListener('click', () => showView('image'));
+  $('#mobileWorkspace').addEventListener('click', () => showView('workspace'));
+  $('#mobileTasks').addEventListener('click', () => showView('tasks'));
+  $('#mobileQuery').addEventListener('click', () => showView('query'));
+  $('#mobileApi').addEventListener('click', openSettings);
+
+  // 通用
+  document.addEventListener('click', () => $$('.row-action-menu').forEach((menu) => { menu.hidden = true; }));
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !$('#modelEditorBackdrop').hidden) requestCloseModelDrawer();
+    if (event.key !== 'Escape') return;
+    if (!$('#taskDrawerBackdrop').hidden) closeTaskDetail();
+    if (!$('#modelEditorBackdrop').hidden) requestCloseModelDrawer();
+    if (!$('#tokenDrawerBackdrop').hidden) $('#tokenDrawerBackdrop').hidden = true;
   });
-  $('#imageModelSelect').addEventListener('change', () => { applySelectedImageModel(); saveImageForm(); });
-  $('#submitImageBatch').addEventListener('click', submitImageBatch);
-  $('#addImageRefLink').addEventListener('click', () => {
-    if (state.imageRefItems.filter((item) => item.kind === 'link').length === 0) {
-      state.imageRefItems.push({ id: imageId('link'), kind: 'link', value: '' });
-    } else if (state.imageRefItems.length < 10) {
-      state.imageRefItems.push({ id: imageId('link'), kind: 'link', value: '' });
-    } else {
-      alert('参考图最多 10 张');
-      return;
-    }
-    renderImageRefInputs();
-    renderImageRefPreviews();
-    saveImageRefDraftSoon();
+  ['prompt', 'taskName', 'taskSequence'].forEach((id) => {
+    const el = $(`#${id}`);
+    if (!el) return;
+    el.addEventListener('input', () => { saveForm(); updateCharCount(id === 'prompt' ? 'prompt' : id); });
+    el.addEventListener('change', saveForm);
   });
-  $('#imageRefUpload').addEventListener('change', addImageRefFiles);
-  $('#clearImageForm').addEventListener('click', clearImageForm);
-  $('#imagePrompt').addEventListener('input', saveImageForm);
-  $('#imageTaskSequence').addEventListener('input', saveImageForm);
-  $('#editImageTaskName').addEventListener('click', () => {
-    const input = $('#imageTaskName');
-    input.readOnly = false;
-    $('#editImageTaskName').hidden = true;
-    $('#saveImageTaskName').hidden = false;
-    input.focus();
-    input.select();
-  });
-  $('#saveImageTaskName').addEventListener('click', () => {
-    const input = $('#imageTaskName');
-    const nextName = input.value.trim();
-    if (!nextName) { alert('任务名字不能为空'); input.focus(); return; }
-    const previousName = input.dataset.savedValue || '未命名图片任务';
-    input.value = nextName;
-    input.dataset.savedValue = nextName;
-    input.readOnly = true;
-    $('#saveImageTaskName').hidden = true;
-    $('#editImageTaskName').hidden = false;
-    if (nextName !== previousName) $('#imageTaskSequence').value = '1';
-    saveImageForm();
-  });
-  setInterval(() => { renderCurrentPrice(); renderImageCurrentPrice(); }, 30 * 1000);
-  $('#modelFields').addEventListener('change', renderPriceByResolutionRows);
-  $('#resolution').addEventListener('change', renderCurrentPrice);
-  $('#clearForm').addEventListener('click', async () => {
-    $('#prompt').value = '';
-    state.imageItems = [{ id: imageId('link'), kind: 'link', value: '' }];
-    $('#seed').value = '';
-    imageDraftFingerprint = '';
-    clearTimeout(imageDraftTimer);
-    await clearImageDraft();
-    renderImageRows();
-    saveForm();
-  });
-  $('#editTaskName').addEventListener('click', () => {
-    $('#taskName').readOnly = false;
-    $('#editTaskName').hidden = true;
-    $('#saveTaskName').hidden = false;
-    $('#taskName').focus();
-    $('#taskName').select();
-  });
-  $('#saveTaskName').addEventListener('click', () => {
-    const input = $('#taskName');
-    const nextName = input.value.trim();
-    if (!nextName) {
-      alert('任务名字不能为空');
-      input.focus();
-      return;
-    }
-    const previousName = input.dataset.savedValue || '未命名任务';
-    input.value = nextName;
-    input.dataset.savedValue = nextName;
-    input.readOnly = true;
-    $('#saveTaskName').hidden = true;
-    $('#editTaskName').hidden = false;
-    if (nextName !== previousName) $('#taskSequence').value = '1';
-    saveForm();
-  });
-  $('#selectAll').addEventListener('change', (e) => {
-    state.tasks.filter((t) => matchesTaskFilter(t, state.filter)).forEach((t) => (e.target.checked ? state.selected.add(t.id) : state.selected.delete(t.id)));
-    renderTasks();
-  });
-  $$('[data-record-filter]').forEach((b) => b.addEventListener('click', () => {
-    $$('[data-record-filter]').forEach((x) => x.classList.remove('selected'));
-    b.classList.add('selected');
-    state.filter = b.dataset.recordFilter;
-    renderTasks();
-  }));
+  $('#sidebarToggle').addEventListener('click', toggleSidebar);
+  setInterval(() => { renderCurrentPrice(); renderImagePricePanel(); }, 30 * 1000);
+  initializeModels().then(() => { initializeFormDraft(); initializeImageFormDraft(); });
+  initializeDownloadDirectory();
 });
