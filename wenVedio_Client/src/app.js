@@ -1877,7 +1877,8 @@ function taskCenterRow(task, index) {
   }
   if (['failed', 'timeout'].includes(status)) actions.push(`<button type="button" data-tc-retry="${escapeHtml(task.id)}">↻ 重新提交</button>`);
   actions.push(`<button type="button" data-tc-locate="${escapeHtml(task.id)}">📁 文件位置</button>`);
-  actions.push(`<button type="button" data-tc-view="${escapeHtml(task.id)}">查看</button>`);
+  actions.push(`<button type="button" data-tc-view="${escapeHtml(task.id)}">👁 查看</button>`);
+  actions.push(`<button type="button" class="danger" data-tc-delete="${escapeHtml(task.id)}">🗑 删除</button>`);
   tr.innerHTML = `
     <td class="check-col"><div class="tc-check-cell"><input type="checkbox" data-tc-check="${escapeHtml(task.id)}" ${state.selected.has(task.id) ? 'checked' : ''} aria-label="选择任务" /><span class="tc-index">${index + 1}</span></div></td>
     <td>${taskPreviewHtml(task)}</td>
@@ -1906,6 +1907,7 @@ function taskCenterRow(task, index) {
     updateSelection();
   }));
   tr.querySelectorAll('[data-tc-locate]').forEach((button) => button.addEventListener('click', () => showTaskFileLocation(task)));
+  tr.querySelectorAll('[data-tc-delete]').forEach((button) => button.addEventListener('click', () => deleteTasks([task.id])));
   tr.querySelectorAll('[data-tc-view]').forEach((button) => button.addEventListener('click', () => openTaskDetailDrawer(task.id)));
   tr.querySelectorAll('[data-tc-download]').forEach((button) => button.addEventListener('click', () => task.kind === 'image' ? downloadImageTask(task) : downloadTasks([task])));
   tr.querySelectorAll('[data-tc-run]').forEach((button) => button.addEventListener('click', () => runScheduledAction(task.id, 'submit')));
