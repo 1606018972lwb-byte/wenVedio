@@ -279,8 +279,6 @@ th, td { padding: 13px 12px; }
   .task-detail-modal { max-height: calc(100vh - 24px); padding: 18px; }
 }
 
-.settings-fab { position: fixed; right: 22px; bottom: 22px; z-index: 15; width: 46px; height: 46px; border: 1px solid var(--line); border-radius: 50%; background: #fff; color: #5b6674; font-size: 19px; box-shadow: 0 10px 26px rgba(23, 33, 43, .16); }
-.settings-fab:hover { border-color: var(--blue); color: var(--blue); }
 .app-settings-backdrop { position: fixed; inset: 0; z-index: 25; display: grid; place-items: center; padding: 24px; background: rgba(15, 23, 34, .48); }
 .app-settings-modal { width: min(560px, 100%); max-height: calc(100vh - 48px); overflow-y: auto; padding: 24px; border-radius: 10px; background: #fff; box-shadow: 0 24px 70px rgba(15, 23, 34, .24); }
 .app-settings-list { margin-top: 14px; }
@@ -292,7 +290,6 @@ th, td { padding: 13px 12px; }
 .app-setting-select, .app-setting-input { width: 130px; flex: 0 0 auto; border: 1px solid #d7dfe8; border-radius: 6px; padding: 8px 10px; background: #fff; color: var(--ink); outline: none; }
 .app-setting-select:focus, .app-setting-input:focus { border-color: var(--blue); }
 .app-setting-input { text-align: right; font: 12px "DM Mono", monospace; }
-@media (max-width: 680px) { .settings-fab { right: 14px; bottom: 14px; } }
 
 .pricing-editor { margin-top: 18px; padding: 15px; border: 1px solid var(--line); border-radius: 7px; background: #fafbfc; }
 .pricing-editor-head b { font-size: 12px; color: #343e4e; }
@@ -321,3 +318,4 @@ th, td { padding: 13px 12px; }
 .image-thumbs img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); display: block; }
 .image-thumb-empty { color: #9ba4af; font-size: 10px; }
 @media (max-width: 680px) { .image-view .records-intro { padding: 20px 2px 17px; } .image-view .records-intro h2 { font-size: 24px; } }
+.sidebar-bottom { margin-top: auto; padding-top: 12px; }
