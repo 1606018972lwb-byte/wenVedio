@@ -841,9 +841,9 @@ async function handleApi(req, res, url) {
     const workflow = String(model.workflow || id).trim();
     const requestUrl = String(model.request_url || '').trim();
     const queryUrl = String(model.query_url || '').trim();
-    const kind = model.kind === 'image' ? 'image' : 'video';
+    const kind = model.kind === 'image' ? 'image' : model.kind === 'text' ? 'text' : 'video';
     if (!id || !name || !workflow || !requestUrl || (kind === 'video' && !queryUrl)) {
-      return sendJson(res, 400, { ok: false, msg: kind === 'image' ? '模型 ID、名称、工作流 ID 和提交地址为必填' : '模型 ID、名称、工作流 ID、提交地址和查询地址均为必填' });
+      return sendJson(res, 400, { ok: false, msg: kind === 'video' ? '模型 ID、名称、工作流 ID、提交地址和查询地址均为必填' : '模型 ID、名称、工作流 ID 和提交地址为必填' });
     }
     if (!Array.isArray(model.fields) || !model.fields.length) {
       return sendJson(res, 400, { ok: false, msg: '参数字段定义必须是非空数组' });
@@ -860,6 +860,7 @@ async function handleApi(req, res, url) {
       enabled: model.enabled !== false,
       visible: model.visible !== false,
       provider: String(model.provider || '').trim(),
+      type: String(model.type || '').trim().slice(0, 32),
       description: String(model.description || '').slice(0, 500),
       sort: Number.isFinite(Number(model.sort)) ? Number(model.sort) : 0,
       timeout_seconds: Number.isFinite(Number(model.timeout_seconds)) && Number(model.timeout_seconds) >= 5 ? Number(model.timeout_seconds) : 300,

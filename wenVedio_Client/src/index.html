@@ -206,6 +206,7 @@
               <option value="img2vid">图生视频</option>
               <option value="multi_ref">多图参考</option>
               <option value="first_last">首尾帧</option>
+              <option value="text">文本生成</option>
               <option value="other">其他</option>
             </select>
             <select id="modelFilterProvider"><option value="">全部供应商</option></select>
@@ -216,9 +217,9 @@
               <option value="error">配置异常</option>
             </select>
             <select id="modelSort">
+              <option value="name" selected>名称</option>
               <option value="manual">手动排序</option>
               <option value="created">创建时间</option>
-              <option value="name">名称</option>
               <option value="updated">最近修改</option>
             </select>
           </section>
@@ -274,9 +275,17 @@
                       <label class="field"><span>模型名称 <i class="req">*</i></span><input id="modelName" type="text" /></label>
                       <label class="field"><span>模型 ID <i class="req">*</i></span><input id="modelId" type="text" /></label>
                       <label class="field field-wide"><span>工作流 ID</span><input id="modelWorkflow" type="text" /></label>
-                      <label class="field"><span>模型类型</span><select id="modelKind"><option value="video">视频生成</option><option value="image">图片生成</option></select></label>
+                      <label class="field"><span>模型类型</span><select id="modelKind"><option value="video">视频生成</option><option value="image">图片生成</option><option value="text">文本生成</option></select></label>
                       <label class="field"><span>供应商</span><input id="modelProvider" type="text" placeholder="如 MiniMax / OpenAI / 自定义" list="providerList" /><datalist id="providerList"><option value="MiniMax"></option><option value="OpenAI"></option><option value="Stability AI"></option><option value="Black Forest Labs"></option><option value="AutoDL"></option><option value="自定义"></option></datalist></label>
-                      <label class="field"><span>排序</span><input id="modelSort" type="number" step="1" /></label>
+                      <label class="field"><span>类型</span><select id="modelType">
+                        <option value="image">图片生成</option>
+                        <option value="video">视频生成</option>
+                        <option value="img2vid">图生视频</option>
+                        <option value="multi_ref">多图参考</option>
+                        <option value="first_last">首尾帧</option>
+                        <option value="text">文本生成</option>
+                        <option value="other">其他</option>
+                      </select></label>
                       <label class="field field-wide"><span>描述</span><textarea id="modelDescription" rows="2" maxlength="200" placeholder="模型用途说明（可选）"></textarea></label>
                       <label class="switch-row"><span>是否显示在生成页面</span><label class="switch"><input id="modelVisible" type="checkbox" /><span></span></label></label>
                     </div>
@@ -355,7 +364,6 @@
                     <label class="switch-row"><span>是否启用</span><label class="switch"><input id="advEnabled" type="checkbox" /><span></span></label></label>
                     <label class="switch-row"><span>是否显示在生成页面</span><label class="switch"><input id="advVisible" type="checkbox" /><span></span></label></label>
                     <div class="drawer-grid">
-                      <label class="field"><span>排序</span><input id="advSort" type="number" step="1" /></label>
                       <label class="field"><span>失败重试次数</span><input id="advMaxRetry" type="number" min="0" step="1" /></label>
                     </div>
                     <label class="switch-row"><span>调试模式</span><label class="switch"><input id="advDebug" type="checkbox" /><span></span></label></label>

@@ -254,7 +254,7 @@ async function initializeModels() {
     if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
     const previousModelId = $('#modelSelect')?.value || state.selectedModelId;
     state.models = data.models || [];
-    const videoModels = state.models.filter((model) => model.kind !== 'image' && model.enabled !== false && model.visible !== false);
+    const videoModels = state.models.filter((model) => model.kind !== 'image' && model.kind !== 'text' && model.enabled !== false && model.visible !== false);
     const imageModels = state.models.filter((model) => model.kind === 'image' && model.enabled !== false && model.visible !== false);
     const select = $('#modelSelect');
     select.innerHTML = videoModels.map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.name)}</option>`).join('');
@@ -388,7 +388,7 @@ const modelUI = {
   kind: '',
   provider: '',
   status: '',
-  sort: 'manual',
+  sort: 'name',
   page: 1,
   pageSize: 10,
   selected: new Set(),
@@ -416,7 +416,7 @@ function normalizeModel(model) {
     id: m.id || '',
     name: m.name || '未命名模型',
     workflow: m.workflow || m.id || '',
-    kind: m.kind === 'image' ? 'image' : 'video',
+    kind: m.kind === 'image' ? 'image' : m.kind === 'text' ? 'text' : 'video',
     request_url: m.request_url || '',
     query_url: m.query_url || '',
     edit_url: m.edit_url || '',
@@ -437,13 +437,27 @@ function normalizeModel(model) {
   };
 }
 
+const MODEL_TYPE_OPTIONS = [
+  { value: 'image', label: '图片生成', cls: 'tag-image' },
+  { value: 'video', label: '视频生成', cls: 'tag-video' },
+  { value: 'img2vid', label: '图生视频', cls: 'tag-img2vid' },
+  { value: 'multi_ref', label: '多图参考', cls: 'tag-multiref' },
+  { value: 'first_last', label: '首尾帧', cls: 'tag-firstlast' },
+  { value: 'text', label: '文本生成', cls: 'tag-text' },
+  { value: 'other', label: '其他', cls: 'tag-other' },
+];
+
 function modelTypeTag(model) {
-  if (model.kind === 'image') return { value: 'image', label: '图片生成', cls: 'tag-image' };
+  const stored = MODEL_TYPE_OPTIONS.find((option) => option.value === model.type);
+  if (stored) return stored;
+  // 兼容未保存类型的旧模型：按模型类型与名称/工作流推断
+  if (model.kind === 'image') return MODEL_TYPE_OPTIONS[0];
+  if (model.kind === 'text') return MODEL_TYPE_OPTIONS[5];
   const text = `${model.name || ''}${model.workflow || ''}`;
-  if (/首尾帧/.test(text)) return { value: 'first_last', label: '首尾帧', cls: 'tag-firstlast' };
-  if (/多图/.test(text)) return { value: 'multi_ref', label: '多图参考', cls: 'tag-multiref' };
-  if (/音频|对口型/.test(text)) return { value: 'img2vid', label: '图生视频', cls: 'tag-img2vid' };
-  return { value: 'video', label: '视频生成', cls: 'tag-video' };
+  if (/首尾帧/.test(text)) return MODEL_TYPE_OPTIONS[4];
+  if (/多图/.test(text)) return MODEL_TYPE_OPTIONS[3];
+  if (/音频|对口型/.test(text)) return MODEL_TYPE_OPTIONS[2];
+  return MODEL_TYPE_OPTIONS[1];
 }
 
 function modelProvider(model) {
@@ -496,6 +510,12 @@ function defaultFieldsFor(kind) {
       { key: 'size', label: '尺寸', type: 'select', options: ['1024x1024', '2048x2048', '4096x4096'], default: '1024x1024' },
       { key: 'n', label: '数量', type: 'number', min: 1, max: 4, default: 1 },
       { key: 'reference_images', label: '参考图片（可选）', type: 'images', required: false, min: 0, max: 10 },
+    ];
+  }
+  if (kind === 'text') {
+    return [
+      { key: 'prompt', label: '提示词', type: 'textarea', required: true, maxLength: 500000 },
+      { key: 'max_tokens', label: '最大长度', type: 'number', min: 1, max: 32768, default: 2048 },
     ];
   }
   return [
@@ -788,8 +808,8 @@ async function batchDeleteSelected() {
 function openModelDrawer(id) {
   const source = id ? state.models.find((m) => m.id === id) : null;
   const draft = normalizeModel(source || {
-    kind: modelUI.kind === 'image' ? 'image' : 'video',
-    fields: defaultFieldsFor(modelUI.kind === 'image' ? 'image' : 'video'),
+    kind: modelUI.kind === 'image' || modelUI.kind === 'text' ? modelUI.kind : 'video',
+    fields: defaultFieldsFor(modelUI.kind === 'image' || modelUI.kind === 'text' ? modelUI.kind : 'video'),
     pricing: { unit: 'per_second', peak: 0.04, valley: 0.03, valley_start: '00:00', valley_end: '08:00' },
   });
   if (!source) draft.fields = defaultFieldsFor(draft.kind);
@@ -818,7 +838,8 @@ function populateDrawer(model) {
   $('#modelWorkflow').value = model.workflow;
   $('#modelKind').value = model.kind;
   $('#modelProvider').value = model.provider || '';
-  $('#modelSort').value = String(model.sort || 0);
+  const typeSelect = $('#modelType');
+  if (typeSelect) typeSelect.value = model.type || modelTypeTag(model).value;
   $('#modelDescription').value = model.description || '';
   $('#modelVisible').checked = model.visible !== false;
   $('#requestUrl').value = model.request_url;
@@ -832,7 +853,6 @@ function populateDrawer(model) {
   $('#modelConcurrency').value = String(model.max_concurrency);
   $('#advEnabled').checked = model.enabled !== false;
   $('#advVisible').checked = model.visible !== false;
-  $('#advSort').value = String(model.sort || 0);
   $('#advMaxRetry').value = String(model.max_retry || 0);
   $('#advDebug').checked = model.debug === true;
   renderFieldBuilder();
@@ -1144,7 +1164,8 @@ function collectDrawerModel() {
     provider: $('#modelProvider').value.trim(),
     description: $('#modelDescription').value.trim(),
     visible: $('#modelVisible').checked,
-    sort: Number($('#modelSort').value) || 0,
+    sort: Number(base.sort) || 0,
+    type: $('#modelType') ? $('#modelType').value : '',
     request_url: $('#requestUrl').value.trim(),
     query_url: $('#modelKind').value === 'video' ? $('#queryUrl').value.trim() : '',
     token_id: $('#modelToken').value,
