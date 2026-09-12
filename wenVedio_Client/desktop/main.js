@@ -20,6 +20,9 @@ app.setName(APP_NAME);
 try {
   app.setPath('userData', path.join(app.getPath('appData'), APP_NAME));
 } catch (_) { /* 路径不可用时退回 Electron 默认目录 */ }
+// 固定任务栏/托盘身份：安装版、解压版、便携版分别从不同路径启动时，
+// 不再被 Windows 当成多个应用而显示多个图标。
+try { app.setAppUserModelId('com.wenvedio.desktop'); } catch (_) { /* 非 Windows 平台忽略 */ }
 
 let mainWindow = null;
 let serverProcess = null;
@@ -370,6 +373,7 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     quitting = true;
+    destroyTray();
     if (serverProcess) {
       serverProcess.kill();
       serverProcess = null;
