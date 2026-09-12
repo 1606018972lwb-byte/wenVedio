@@ -533,6 +533,38 @@ function createMockImage(index) {
   return Buffer.concat([header, pixels]);
 }
 
+// 参考图解析：data URL 直接解码，http(s) 链接下载。
+async function resolveRefBuffer(ref) {
+  const value = String(ref || '').trim();
+  if (!value) throw new Error('参考图为空');
+  const dataMatch = value.match(/^data:([^;]+);base64,(.+)$/s);
+  if (dataMatch) return { type: dataMatch[1], data: Buffer.from(dataMatch[2], 'base64') };
+  if (/^https?:\/\//i.test(value)) {
+    const res = await fetch(value, { signal: AbortSignal.timeout(60 * 1000) });
+    if (!res.ok) throw new Error(`下载参考图失败 HTTP ${res.status}`);
+    return { type: res.headers.get('content-type') || 'image/png', data: Buffer.from(await res.arrayBuffer()) };
+  }
+  throw new Error('参考图仅支持图片链接或 base64 图片');
+}
+
+// 零依赖 multipart/form-data 构建
+function buildMultipartBody(fields, files) {
+  const boundary = '----wenVedioForm' + crypto.randomBytes(10).toString('hex');
+  const chunks = [];
+  for (const [name, value] of Object.entries(fields)) {
+    if (value === '' || value == null) continue;
+    chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+  }
+  files.forEach((file) => {
+    const fieldName = files.length > 1 ? 'image[]' : 'image';
+    chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${file.filename}"\r\nContent-Type: ${file.type}\r\n\r\n`));
+    chunks.push(file.data);
+    chunks.push(Buffer.from('\r\n'));
+  });
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  return { contentType: `multipart/form-data; boundary=${boundary}`, body: Buffer.concat(chunks) };
+}
+
 async function runImageGeneration(record) {
   const model = models.get(record.model_id);
   try {
@@ -560,16 +592,35 @@ async function runImageGeneration(record) {
         body[key] = value;
       }
       if (body.n != null) body.n = Math.min(10, Math.max(1, Math.round(Number(body.n) || 1)));
+      const refs = Array.isArray(record.reference_images) ? record.reference_images.filter((ref) => ref && String(ref).trim()) : [];
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 300 * 1000);
+      const timeout = setTimeout(() => controller.abort(), 900 * 1000);
       let res;
       try {
-        res = await fetch(model.request_url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
+        if (refs.length) {
+          // 图生图：multipart 提交到 edits 接口
+          const editUrl = model.edit_url || String(model.request_url || '').replace('generations', 'edits');
+          if (!editUrl || editUrl === model.request_url) throw new Error('该模型未配置图生图地址，无法使用参考图');
+          const refBuffers = [];
+          for (let i = 0; i < refs.length; i += 1) {
+            const ref = await resolveRefBuffer(refs[i]);
+            refBuffers.push({ filename: `ref-${i + 1}.png`, type: ref.type, data: ref.data });
+          }
+          const form = buildMultipartBody(body, refBuffers);
+          res = await fetch(editUrl, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': form.contentType },
+            body: form.body,
+            signal: controller.signal,
+          });
+        } else {
+          res = await fetch(model.request_url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+        }
       } finally {
         clearTimeout(timeout);
       }
@@ -793,6 +844,7 @@ async function handleApi(req, res, url) {
     const saved = {
       id, name, workflow, kind, request_url: requestUrl,
       ...(kind === 'video' ? { query_url: queryUrl } : {}),
+      ...(kind === 'image' && model.edit_url && String(model.edit_url).trim() ? { edit_url: String(model.edit_url).trim() } : {}),
       token_id: String(model.token_id || '').trim(),
       request_params: model.request_params && typeof model.request_params === 'object' && !Array.isArray(model.request_params) ? model.request_params : {},
       fields: model.fields,

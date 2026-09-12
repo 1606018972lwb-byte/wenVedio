@@ -23,6 +23,8 @@ const state = {
   adminModelId: '',
   tokens: [],
   imageModelId: '',
+  imageRefItems: [],
+  recordsKind: 'video',
 };
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -829,7 +831,8 @@ function renderTasks() {
   const unfinished = state.tasks.filter((t) => t.kind !== 'image' && !['completed', 'scheduled'].includes(taskStatus(t)));
   const scheduled = state.tasks.filter((t) => taskStatus(t) === 'scheduled')
     .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
-  const recordFiltered = state.tasks.filter((t) => t.kind !== 'image' && matchesTaskFilter(t, state.filter));
+  const recordTasks = state.tasks.filter((t) => t.kind === state.recordsKind);
+  const recordFiltered = recordTasks.filter((t) => matchesTaskFilter(t, state.filter));
   renderTaskRows($('#taskTable'), unfinished);
   renderTaskRows($('#recordTaskTable'), recordFiltered, true);
   renderScheduledTasks(scheduled);
@@ -838,7 +841,7 @@ function renderTasks() {
   $('#taskTotal').textContent = unfinished.length;
   const navTaskCount = $('#navTaskCount');
   if (navTaskCount) navTaskCount.textContent = String(state.tasks.filter((t) => t.kind !== 'image').length);
-  const counts = state.tasks.filter((t) => t.kind !== 'image').reduce((acc, t) => {
+  const counts = recordTasks.reduce((acc, t) => {
     acc.all += 1;
     const status = taskStatus(t);
     if (status === 'scheduled') acc.processing += 1;
@@ -854,9 +857,11 @@ function renderTasks() {
   setCount('processing', counts.processing);
   setCount('completed', counts.completed);
   setCount('failed', counts.failed);
-  $('#recordTaskTotal').textContent = state.tasks.length;
+  $('#recordTaskTotal').textContent = String(recordTasks.length);
   $('#emptyState').hidden = unfinished.length > 0;
   $('#recordEmptyState').hidden = recordFiltered.length > 0;
+  const gotoButton = $('#recordGoto');
+  if (gotoButton) gotoButton.textContent = state.recordsKind === 'image' ? '立即生成图片 →' : '立即生成视频 →';
   updateSelection(recordFiltered);
 }
 
@@ -1597,6 +1602,8 @@ function applySelectedImageModel() {
     label.appendChild(input);
     wrap.appendChild(label);
   });
+  const refPanel = $('#imageRefPanel');
+  if (refPanel) refPanel.hidden = !fields.some((field) => field && field.key === 'reference_images');
   renderImageCurrentPrice();
 }
 
@@ -1663,7 +1670,152 @@ function restoreImageForm() {
   renderImageCurrentPrice();
 }
 
+function imageRefCount() {
+  return state.imageRefItems.filter((item) => item.value.trim()).length;
+}
+
+function renderImageRefInputs() {
+  const wrap = $('#imageRefLinks');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  const links = state.imageRefItems.filter((item) => item.kind === 'link');
+  if (!links.length) {
+    state.imageRefItems.unshift({ id: imageId('link'), kind: 'link', value: '' });
+    return renderImageRefInputs();
+  }
+  links.forEach((item, i) => {
+    const row = document.createElement('div');
+    row.className = 'image-link-row';
+    const label = document.createElement('span');
+    label.className = 'image-link-label';
+    label.textContent = i === 0 ? '参考图链接' : `链接 ${i + 1}`;
+    const input = document.createElement('input');
+    input.value = item.value;
+    input.placeholder = '输入图片 URL 或 base64';
+    input.type = 'text';
+    input.addEventListener('input', (event) => { item.value = event.target.value; renderImageRefPreviews(); saveImageRefDraftSoon(); });
+    const remove = document.createElement('button');
+    remove.className = 'remove-image-link';
+    remove.type = 'button';
+    remove.title = '删除图片链接';
+    remove.textContent = '×';
+    remove.disabled = links.length === 1;
+    remove.addEventListener('click', () => {
+      state.imageRefItems = state.imageRefItems.filter((candidate) => candidate.id !== item.id);
+      renderImageRefInputs();
+      renderImageRefPreviews();
+      saveImageRefDraftSoon();
+    });
+    row.append(label, input, remove);
+    wrap.appendChild(row);
+  });
+  updateImageRefMeta();
+}
+
+function renderImageRefPreviews() {
+  const wrap = $('#imageRefPreviews');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  state.imageRefItems.filter((item) => item.value.trim()).forEach((item) => {
+    const tile = document.createElement('div');
+    tile.className = 'image-preview-tile';
+    const image = document.createElement('img');
+    image.src = item.kind === 'file' || /^(https?:|data:|blob:)/i.test(item.value) ? item.value : `data:image/png;base64,${item.value}`;
+    image.alt = item.name || '参考图';
+    const remove = document.createElement('button');
+    remove.className = 'image-preview-remove';
+    remove.type = 'button';
+    remove.title = '删除图片';
+    remove.textContent = '×';
+    remove.addEventListener('click', () => {
+      state.imageRefItems = state.imageRefItems.filter((candidate) => candidate.id !== item.id);
+      renderImageRefInputs();
+      renderImageRefPreviews();
+      saveImageRefDraftSoon();
+    });
+    tile.append(image, remove);
+    wrap.appendChild(tile);
+  });
+  updateImageRefMeta();
+}
+
+function updateImageRefMeta() {
+  const count = imageRefCount();
+  const note = $('#imageRefNote');
+  if (note) note.textContent = count >= 10 ? '已达到 10 张上限，可删除后重新添加。' : '支持 JPG / PNG / WebP，可多选本地图片；添加参考图后按图生图方式生成。';
+}
+
+async function addImageRefFiles(event) {
+  const files = [...event.target.files].filter((file) => ['image/jpeg', 'image/png', 'image/webp'].includes(file.type)).slice(0, 10 - imageRefCount());
+  if (files.length) {
+    const values = await Promise.all(files.map((file) => readImageFile(file)));
+    values.forEach((value, i) => state.imageRefItems.push({ id: imageId('file'), kind: 'file', value, name: files[i].name }));
+    renderImageRefPreviews();
+    saveImageRefDraftSoon();
+  }
+  event.target.value = '';
+}
+
+async function writeImageRefDraft() {
+  const db = await openFormDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction(FORM_DB_STORE, 'readwrite');
+    transaction.objectStore(FORM_DB_STORE).put(state.imageRefItems.map(({ id, kind, value, name }) => ({ id, kind, value, name })), 'image-refs');
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  db.close();
+}
+
+async function readImageRefDraft() {
+  const db = await openFormDb();
+  const result = await new Promise((resolve, reject) => {
+    const request = db.transaction(FORM_DB_STORE).objectStore(FORM_DB_STORE).get('image-refs');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return Array.isArray(result) ? result : null;
+}
+
+let imageRefDraftTimer = null;
+function saveImageRefDraftSoon() {
+  clearTimeout(imageRefDraftTimer);
+  imageRefDraftTimer = setTimeout(() => { writeImageRefDraft().catch((err) => console.warn('参考图草稿保存失败', err)); }, 250);
+}
+
+function clearImageRefDraft() {
+  state.imageRefItems = [{ id: imageId('link'), kind: 'link', value: '' }];
+  clearTimeout(imageRefDraftTimer);
+  openFormDb().then(async (db) => {
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(FORM_DB_STORE, 'readwrite');
+      transaction.objectStore(FORM_DB_STORE).delete('image-refs');
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    db.close();
+  }).catch(() => {});
+  renderImageRefInputs();
+  renderImageRefPreviews();
+}
+
 function initializeImageFormDraft() {
+  readImageRefDraft().then((refs) => {
+    if (refs && refs.length) {
+      state.imageRefItems = refs.slice(0, 10).map((item, i) => ({
+        id: String(item.id || `link-${i}`),
+        kind: item.kind === 'file' ? 'file' : 'link',
+        value: String(item.value || ''),
+        name: String(item.name || ''),
+      }));
+    }
+    renderImageRefInputs();
+    renderImageRefPreviews();
+  }).catch(() => {
+    renderImageRefInputs();
+    renderImageRefPreviews();
+  });
   restoreImageForm();
   saveImageForm();
 }
@@ -1695,6 +1847,7 @@ async function submitImageBatch() {
   if (!Number.isInteger(sequence) || sequence < 1) { alert('序号必须是从 1 开始的整数'); $('#imageTaskSequence').focus(); return; }
   const prompt = $('#imagePrompt').value.trim();
   if (!prompt) { alert('请填写提示词'); $('#imagePrompt').focus(); return; }
+  const refs = $('#imageRefPanel')?.hidden ? [] : state.imageRefItems.filter((item) => item.value.trim()).map((item) => item.value.trim());
   const params = {};
   for (const input of $$('[data-image-field]')) {
     if (input.required && input.value.trim() === '') {
@@ -1709,7 +1862,7 @@ async function submitImageBatch() {
     const res = await fetch(`${settings.apiBase}/api/batches`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: `${taskName}_${sequence}`, model_id: model.id, tasks: [{ prompt, params }] }),
+      body: JSON.stringify({ name: `${taskName}_${sequence}`, model_id: model.id, tasks: [{ prompt, params, ...(refs.length ? { reference_images: refs } : {}) }] }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
@@ -1780,7 +1933,40 @@ function renderUsageStats() {
   $('#statMonthTasks').textContent = String(monthTasks.length);
   const settled = monthTasks.filter((task) => ['completed', 'failed', 'timeout'].includes(taskStatus(task)));
   const okCount = settled.filter((task) => taskStatus(task) === 'completed').length;
-  $('#statMonthRate').textContent = settled.length ? `${Math.round((okCount / settled.length) * 100)}%` : '—';
+  const monthRate = settled.length ? Math.round((okCount / settled.length) * 100) : null;
+  $('#statMonthRate').textContent = monthRate != null ? `${monthRate}%` : '—';
+  const [statYear, statMonth] = monthKey.split('-').map(Number);
+  const lastMonthDate = new Date(Date.UTC(statYear, statMonth - 2, 1));
+  const lastMonthKey = `${lastMonthDate.getUTCFullYear()}-${String(lastMonthDate.getUTCMonth() + 1).padStart(2, '0')}`;
+  const lastMonthTasks = state.tasks.filter((task) => (beijingDayKey(task.created_at) || '').slice(0, 7) === lastMonthKey);
+  const monthSpendText = sumCosts(monthTasks);
+  const lastSpendText = sumCosts(lastMonthTasks);
+  const spendDelta = $('#statMonthCostDelta');
+  if (spendDelta) {
+    if (monthSpendText && lastSpendText && monthSpendText.charAt(0) === lastSpendText.charAt(0)) {
+      const diff = Math.round((Number(monthSpendText.replace(/[^0-9.]/g, '')) - Number(lastSpendText.replace(/[^0-9.]/g, ''))) * 100) / 100;
+      spendDelta.textContent = `较上月 ${monthSpendText.charAt(0)}${diff >= 0 ? '+' : ''}${diff.toFixed(2)}`;
+    } else if (lastSpendText) {
+      spendDelta.textContent = `较上月 ${lastSpendText}`;
+    } else {
+      spendDelta.textContent = '较上月 —';
+    }
+  }
+  const taskDiff = monthTasks.length - lastMonthTasks.length;
+  const taskDelta = $('#statMonthTasksDelta');
+  if (taskDelta) taskDelta.textContent = `较上月 ${taskDiff >= 0 ? '+' : ''}${taskDiff}${taskDiff > 0 ? ' ↗' : taskDiff < 0 ? ' ↘' : ''}`;
+  const lastSettled = lastMonthTasks.filter((task) => ['completed', 'failed', 'timeout'].includes(taskStatus(task)));
+  const lastOk = lastSettled.filter((task) => taskStatus(task) === 'completed').length;
+  const lastRate = lastSettled.length ? Math.round((lastOk / lastSettled.length) * 100) : null;
+  const rateDelta = $('#statMonthRateDelta');
+  if (rateDelta) {
+    if (monthRate != null && lastRate != null) {
+      const diff = monthRate - lastRate;
+      rateDelta.textContent = `较上月 ${diff >= 0 ? '+' : ''}${diff}%`;
+    } else {
+      rateDelta.textContent = '较上月 —';
+    }
+  }
   const byModel = new Map();
   state.tasks.forEach((task) => {
     if (typeof task.cost !== 'number') return;
@@ -1825,8 +2011,34 @@ function renderImageTasks() {
 function clearImageForm() {
   $('#imagePrompt').value = '';
   $$('[data-image-field]').forEach((input) => { input.value = ''; });
+  clearImageRefDraft();
   saveImageForm();
   renderImageCurrentPrice();
+}
+
+const TASKS_GROUP_KEY = 'wenvedio-tasks-group-collapsed';
+
+function isTasksGroupCollapsed() {
+  try { return localStorage.getItem(TASKS_GROUP_KEY) === 'true'; } catch (_) { return false; }
+}
+
+function applyTasksGroupCollapsed(collapsed) {
+  $('#sidebar').classList.toggle('tasks-collapsed', collapsed);
+  const chevron = $('#navTasks .nav-chevron');
+  if (chevron) chevron.textContent = collapsed ? '⌄' : '⌃';
+}
+
+function toggleTasksGroup() {
+  const collapsed = !isTasksGroupCollapsed();
+  try { localStorage.setItem(TASKS_GROUP_KEY, String(collapsed)); } catch (_) { /* 忽略 */ }
+  applyTasksGroupCollapsed(collapsed);
+}
+
+function setRecordsKind(kind) {
+  state.recordsKind = kind === 'image' ? 'image' : 'video';
+  $$('.nav-sub-item').forEach((item) => item.classList.toggle('active', item.id === `navTasks${state.recordsKind === 'image' ? 'Image' : 'Video'}`));
+  renderTasks();
+  showView('tasks');
 }
 
 function showView(view) {
@@ -1855,6 +2067,8 @@ function showView(view) {
   $(`#${isImage ? 'navImage' : isQuery ? 'navQuery' : isRecords ? 'navTasks' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : 'navWorkspace'}`).classList.add('active');
   $$('.mobile-nav button').forEach((item) => item.classList.remove('active'));
   $(`#${isImage ? 'mobileImage' : isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace'}`).classList.add('active');
+  $$('.nav-sub-item').forEach((item) => item.classList.remove('active'));
+  if (isRecords) $(`#navTasks${state.recordsKind === 'image' ? 'Image' : 'Video'}`).classList.add('active');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -1875,6 +2089,7 @@ function toggleSidebar() {
 document.addEventListener('DOMContentLoaded', () => {
   loadTasks();
   initializeSidebar();
+  applyTasksGroupCollapsed(isTasksGroupCollapsed());
 
   $('#submitBatch').addEventListener('click', submitBatch);
   $('#downloadSelected').addEventListener('click', downloadSelected);
@@ -1902,8 +2117,15 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.addEventListener('click', () => $$('.row-action-menu').forEach((menu) => { menu.hidden = true; }));
   $('#navImage').addEventListener('click', (event) => { event.preventDefault(); showView('image'); });
+  $('#navTasks').addEventListener('click', (event) => {
+    event.preventDefault();
+    toggleTasksGroup();
+    showView('tasks');
+  });
+  $('#navTasksImage').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('image'); });
+  $('#navTasksVideo').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('video'); });
+  $('#recordGoto').addEventListener('click', () => showView(state.recordsKind === 'image' ? 'image' : 'workspace'));
   $('#navWorkspace').addEventListener('click', (event) => { event.preventDefault(); showView('workspace'); });
-  $('#navTasks').addEventListener('click', (event) => { event.preventDefault(); showView('tasks'); });
   $('#navQuery').addEventListener('click', (event) => { event.preventDefault(); showView('query'); });
   $('#mobileImage').addEventListener('click', () => showView('image'));
   $('#mobileWorkspace').addEventListener('click', () => showView('workspace'));
@@ -1935,6 +2157,20 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#modelSelect').addEventListener('change', () => { applySelectedModel(); saveForm(); });
   $('#imageModelSelect').addEventListener('change', () => { applySelectedImageModel(); saveImageForm(); });
   $('#submitImageBatch').addEventListener('click', submitImageBatch);
+  $('#addImageRefLink').addEventListener('click', () => {
+    if (state.imageRefItems.filter((item) => item.kind === 'link').length === 0) {
+      state.imageRefItems.push({ id: imageId('link'), kind: 'link', value: '' });
+    } else if (state.imageRefItems.length < 10) {
+      state.imageRefItems.push({ id: imageId('link'), kind: 'link', value: '' });
+    } else {
+      alert('参考图最多 10 张');
+      return;
+    }
+    renderImageRefInputs();
+    renderImageRefPreviews();
+    saveImageRefDraftSoon();
+  });
+  $('#imageRefUpload').addEventListener('change', addImageRefFiles);
   $('#clearImageForm').addEventListener('click', clearImageForm);
   $('#imagePrompt').addEventListener('input', saveImageForm);
   $('#imageTaskSequence').addEventListener('input', saveImageForm);

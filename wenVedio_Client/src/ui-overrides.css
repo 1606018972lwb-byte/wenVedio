@@ -342,3 +342,30 @@ th, td { padding: 13px 12px; }
 .token-edit-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .token-edit-actions .primary-button, .token-edit-actions .delete-selected-button { padding: 8px 12px; white-space: nowrap; }
 @media (max-width: 680px) { .token-row.token-editing { flex-direction: column; align-items: stretch; } }
+
+#imageRefPanel .preview-label small { font-weight: 400; color: #a2a9b2; }
+
+.nav-sub { display: grid; gap: 2px; margin: 2px 0 6px; }
+.nav-sub-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 26px; border-radius: 6px; color: #65717e; font-size: 12px; font-weight: 600; text-decoration: none; }
+.nav-sub-item:hover { background: #f1f4f8; color: var(--ink); }
+.nav-sub-item.active { background: var(--blue-soft); color: var(--blue); }
+.nav-chevron { margin-left: auto; color: #9aa4b0; font-size: 11px; }
+.sidebar.collapsed .nav-sub, .sidebar.collapsed .nav-chevron { display: none; }
+.usage-card { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.usage-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; font-size: 18px; flex: 0 0 auto; }
+.ui-blue { background: #e8f0ff; }
+.ui-green { background: #e5f7ef; }
+.ui-purple { background: #f1ebff; }
+.ui-orange { background: #fff3e2; }
+.usage-copy { min-width: 0; }
+.usage-copy span { display: flex; align-items: center; gap: 5px; color: #8a95a2; font-size: 10px; }
+.usage-help { display: inline-grid; place-items: center; width: 13px; height: 13px; border: 1px solid #c9d2dd; border-radius: 50%; color: #98a4b2; font-size: 9px; font-style: normal; cursor: help; }
+.usage-card b { display: block; margin-top: 4px; color: var(--ink); font-size: 18px; }
+.usage-card small { display: block; margin-top: 3px; color: #9aa4b0; font-size: 10px; }
+.download-hint { margin-left: auto; display: flex; align-items: center; gap: 5px; color: #9aa4b0; font-size: 10px; }
+.dl-icon { font-style: normal; margin-right: 4px; }
+.empty-state .primary-button { margin-top: 14px; }
+
+#sidebar.tasks-collapsed .nav-sub { display: none; }
+#sidebar.tasks-collapsed .nav-chevron { transform: rotate(180deg); }
+.nav-chevron { transition: transform .15s ease; }
