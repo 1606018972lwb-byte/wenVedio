@@ -720,3 +720,14 @@ span.task-thumb-icon { width: 64px; height: 40px; display: grid; place-items: ce
 @keyframes bootSlide { 0% { transform: translateX(-110%); } 100% { transform: translateX(260%); } }
 body.booting { overflow: hidden; }
 .tag-unknown { background: #f1f4f8; color: #8a95a2; }
+/* ===== 模型类型多标签 ===== */
+.tag-editor { display: grid; gap: 8px; }
+.tag-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 26px; align-items: center; }
+.tag-chips .model-tag { display: inline-flex; align-items: center; gap: 4px; }
+.tag-chips .tag-remove { border: 0; background: transparent; color: inherit; font-size: 13px; line-height: 1; padding: 0 2px; cursor: pointer; opacity: .7; }
+.tag-chips .tag-remove:hover { opacity: 1; }
+.tag-empty { color: #9aa4b2; font-size: 11px; }
+.tag-input-row { display: flex; gap: 8px; }
+.tag-input-row input { flex: 1; }
+.tag-input-row .outline-button { width: auto; padding: 8px 14px; font-size: 12px; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 4px; }

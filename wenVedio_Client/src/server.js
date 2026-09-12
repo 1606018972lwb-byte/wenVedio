@@ -861,6 +861,9 @@ async function handleApi(req, res, url) {
       visible: model.visible !== false,
       provider: String(model.provider || '').trim(),
       type: String(model.type || '').trim().slice(0, 32),
+      tags: Array.isArray(model.tags)
+        ? model.tags.map((tag) => String(tag || '').trim().slice(0, 24)).filter(Boolean).slice(0, 8)
+        : [],
       description: String(model.description || '').slice(0, 500),
       sort: Number.isFinite(Number(model.sort)) ? Number(model.sort) : 0,
       timeout_seconds: Number.isFinite(Number(model.timeout_seconds)) && Number(model.timeout_seconds) >= 5 ? Number(model.timeout_seconds) : 300,

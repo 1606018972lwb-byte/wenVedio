@@ -275,7 +275,16 @@
                       <label class="field field-wide"><span>工作流 ID</span><input id="modelWorkflow" type="text" /></label>
                       <label class="field"><span>模型类型</span><select id="modelKind"><option value="video">视频生成</option><option value="image">图片生成</option><option value="text">文本生成</option></select></label>
                       <label class="field"><span>供应商</span><input id="modelProvider" type="text" list="providerList" placeholder="选择或输入供应商，留空为未知供应商" maxlength="50" /><datalist id="providerList"></datalist></label>
-                      <label class="field"><span>类型</span><input id="modelType" type="text" list="modelTypeList" placeholder="选择或输入类型，留空为未知类型" maxlength="32" /><datalist id="modelTypeList"></datalist></label>
+                      <label class="field field-wide"><span>类型标签 <small>可添加多个</small></span>
+                        <div class="tag-editor">
+                          <div class="tag-chips" id="modelTagChips"></div>
+                          <div class="tag-input-row">
+                            <input id="modelTagInput" type="text" list="modelTypeList" placeholder="输入标签后按回车添加，如：多图参考" maxlength="24" />
+                            <button class="outline-button" id="modelTagAdd" type="button">添加</button>
+                          </div>
+                        </div>
+                        <datalist id="modelTypeList"></datalist>
+                      </label>
                       <label class="field field-wide"><span>描述</span><textarea id="modelDescription" rows="2" maxlength="200" placeholder="模型用途说明（可选）"></textarea></label>
                       <label class="switch-row"><span>是否显示在生成页面</span><label class="switch"><input id="modelVisible" type="checkbox" /><span></span></label></label>
                     </div>

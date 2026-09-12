@@ -397,6 +397,7 @@ const modelUI = {
   dirty: false,
   fieldsMode: 'visual',
   drawerFields: [],
+  drawerTags: [],
   drawerPricing: null,
   loadedFieldsSnapshot: '[]',
   savedAt: null,
@@ -423,6 +424,9 @@ function normalizeModel(model) {
     edit_url: m.edit_url || '',
     token_id: m.token_id || '',
     provider: m.provider || '',
+    tags: Array.isArray(m.tags)
+      ? m.tags.map((tag) => String(tag).trim()).filter(Boolean).slice(0, 8)
+      : (String(m.type || '').trim() ? [String(m.type).trim()] : []),
     description: m.description || '',
     enabled: m.enabled !== false,
     visible: m.visible !== false,
@@ -448,12 +452,19 @@ const MODEL_TYPE_OPTIONS = [
   { value: 'other', label: '其他', cls: 'tag-other' },
 ];
 
-// 类型可自由填写：命中预设则用预设样式，自定义文本按原样展示，留空为未知类型
-function modelTypeTag(model) {
-  const stored = String(model.type || '').trim();
-  if (!stored) return { value: 'unknown', label: UNKNOWN_TYPE, cls: 'tag-unknown' };
-  const preset = MODEL_TYPE_OPTIONS.find((option) => option.value === stored || option.label === stored);
-  return preset || { value: stored, label: stored, cls: 'tag-other' };
+// 单个标签的展示样式：命中预设用预设样式，自定义文本按原样展示
+function modelTagMeta(tag) {
+  const text = String(tag || '').trim();
+  if (!text) return { value: 'unknown', label: UNKNOWN_TYPE, cls: 'tag-unknown' };
+  const preset = MODEL_TYPE_OPTIONS.find((option) => option.value === text || option.label === text);
+  return preset || { value: text, label: text, cls: 'tag-other' };
+}
+
+// 类型标签：一个模型可以有多个；没有任何标签时展示「未知类型」
+function modelTags(model) {
+  const list = (Array.isArray(model.tags) ? model.tags : []).map((tag) => String(tag || '').trim()).filter(Boolean);
+  const metas = list.map(modelTagMeta);
+  return metas.length ? metas : [{ value: 'unknown', label: UNKNOWN_TYPE, cls: 'tag-unknown' }];
 }
 
 const UNKNOWN_PROVIDER = '未知供应商';
@@ -557,18 +568,26 @@ function renderModelProviderOptions() {
 
 // 类型筛选与类型候选（候选取已用类型 + 预设标签，输入框可自由填写）
 function renderModelTypeOptions() {
+  const labelSet = new Set();
+  let hasUntagged = false;
+  // 用规范化后的模型读取标签，兼容只存了旧 type 字段的历史数据
+  state.models.map(normalizeModel).forEach((model) => {
+    const labels = (Array.isArray(model.tags) ? model.tags : []).map((tag) => modelTagMeta(tag).label).filter(Boolean);
+    if (labels.length) labels.forEach((label) => labelSet.add(label));
+    else hasUntagged = true;
+  });
+  const labels = [...labelSet].sort((a, b) => a.localeCompare(b, 'zh'));
   const select = $('#modelFilterKind');
   if (select) {
     const current = select.value;
-    const labels = [...new Set(state.models.map((model) => modelTypeTag(model).label))].sort((a, b) => a.localeCompare(b, 'zh'));
-    select.innerHTML = '<option value="">全部类型</option>' + labels.map((label) => `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`).join('');
-    if (labels.includes(current)) select.value = current;
+    select.innerHTML = '<option value="">全部类型</option>'
+      + labels.map((label) => `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`).join('')
+      + (hasUntagged ? `<option value="unknown">${UNKNOWN_TYPE}</option>` : '');
+    if (labels.includes(current) || current === 'unknown') select.value = current;
   }
   const datalist = $('#modelTypeList');
   if (datalist) {
-    const used = state.models.map((model) => String(model.type || '').trim()).filter(Boolean)
-      .map((value) => (MODEL_TYPE_OPTIONS.find((option) => option.value === value || option.label === value) || {}).label || value);
-    const names = [...new Set([...used, ...MODEL_TYPE_OPTIONS.map((option) => option.label)])];
+    const names = [...new Set([...labels, ...MODEL_TYPE_OPTIONS.map((option) => option.label)])];
     datalist.innerHTML = names.map((name) => `<option value="${escapeHtml(name)}"></option>`).join('');
   }
 }
@@ -576,8 +595,12 @@ function renderModelTypeOptions() {
 function modelListFiltered() {
   const keyword = modelUI.search.trim().toLowerCase();
   let list = state.models.map(normalizeModel);
-  if (keyword) list = list.filter((m) => [m.name, m.id, m.workflow, modelProviderLabel(m)].join(' ').toLowerCase().includes(keyword));
-  if (modelUI.kind) list = list.filter((m) => modelTypeTag(m).label === modelUI.kind);
+  if (keyword) list = list.filter((m) => [m.name, m.id, m.workflow, modelProviderLabel(m), (m.tags || []).join(' ')].join(' ').toLowerCase().includes(keyword));
+  if (modelUI.kind) {
+    const tagsOf = (m) => (Array.isArray(m.tags) ? m.tags : []).map((tag) => modelTagMeta(tag).label);
+    if (modelUI.kind === 'unknown') list = list.filter((m) => tagsOf(m).length === 0);
+    else list = list.filter((m) => tagsOf(m).includes(modelUI.kind));
+  }
   if (modelUI.provider) list = list.filter((m) => modelProviderLabel(m) === modelUI.provider);
   if (modelUI.status) list = list.filter((m) => modelStatusOf(m) === modelUI.status);
   if (modelUI.sort === 'name') list.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
@@ -617,7 +640,7 @@ function renderModelTable() {
   rows.forEach((model) => {
     const status = modelStatusOf(model);
     const statusMeta = MODEL_STATUS_META[status];
-    const tag = modelTypeTag(model);
+    const tags = modelTags(model);
     const provider = modelProvider(model);
     const providerLabel = modelProviderLabel(model);
     const tr = document.createElement('tr');
@@ -630,7 +653,7 @@ function renderModelTable() {
       <td class="model-info-cell">
         <div class="model-info"><span class="model-avatar" data-provider="${escapeHtml(provider)}">${escapeHtml(provider ? provider.charAt(0).toUpperCase() : '?')}</span><div class="model-info-copy"><b title="${escapeHtml(model.name)}">${escapeHtml(model.name)}</b><small title="${escapeHtml(model.id)}">${escapeHtml(model.id.length > 34 ? model.id.slice(0, 34) + '…' : model.id)}</small></div></div>
       </td>
-      <td><span class="model-tag ${tag.cls}">${escapeHtml(tag.label)}</span></td>
+      <td><div class="tag-list">${tags.map((tag) => `<span class="model-tag ${tag.cls}">${escapeHtml(tag.label)}</span>`).join('')}</div></td>
       <td class="col-provider">${escapeHtml(providerLabel)}</td>
       <td><span class="model-status ${statusMeta.cls}"><i></i>${statusMeta.label}</span></td>
       <td class="col-token" title="${escapeHtml(tokenById(model.token_id)?.masked || '未绑定令牌')}">${escapeHtml(tokenNameFor(model))}</td>
@@ -857,8 +880,8 @@ function populateDrawer(model) {
   $('#modelWorkflow').value = model.workflow;
   $('#modelKind').value = model.kind;
   $('#modelProvider').value = String(model.provider || '').trim();
-  const typeInput = $('#modelType');
-  if (typeInput) typeInput.value = String(model.type || '').trim();
+  modelUI.drawerTags = (Array.isArray(model.tags) ? model.tags : []).map((tag) => String(tag || '').trim()).filter(Boolean);
+  renderModelTagChips();
   $('#modelDescription').value = model.description || '';
   $('#modelVisible').checked = model.visible !== false;
   $('#requestUrl').value = model.request_url;
@@ -1184,7 +1207,7 @@ function collectDrawerModel() {
     description: $('#modelDescription').value.trim(),
     visible: $('#modelVisible').checked,
     sort: Number(base.sort) || 0,
-    type: $('#modelType') ? $('#modelType').value : '',
+    tags: [...modelUI.drawerTags],
     request_url: $('#requestUrl').value.trim(),
     query_url: $('#modelKind').value === 'video' ? $('#queryUrl').value.trim() : '',
     token_id: $('#modelToken').value,
@@ -1241,6 +1264,36 @@ async function deleteModelFromDrawer() {
 }
 
 
+
+function renderModelTagChips() {
+  const wrap = $('#modelTagChips');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!modelUI.drawerTags.length) {
+    const empty = document.createElement('span');
+    empty.className = 'tag-empty';
+    empty.textContent = '暂无标签（不添加则显示为未知类型）';
+    wrap.appendChild(empty);
+    return;
+  }
+  modelUI.drawerTags.forEach((tag, index) => {
+    const meta = modelTagMeta(tag);
+    const chip = document.createElement('span');
+    chip.className = `model-tag ${meta.cls}`;
+    chip.innerHTML = `${escapeHtml(meta.label)}<button type="button" class="tag-remove" data-tag-remove="${index}" aria-label="移除标签" title="移除">×</button>`;
+    wrap.appendChild(chip);
+  });
+}
+
+function addModelTag(value) {
+  const text = String(value || '').trim().slice(0, 24);
+  if (!text) return;
+  if (modelUI.drawerTags.some((tag) => tag.toLowerCase() === text.toLowerCase())) return;
+  if (modelUI.drawerTags.length >= 8) { alert('最多添加 8 个类型标签'); return; }
+  modelUI.drawerTags.push(text);
+  markDrawerDirty();
+  renderModelTagChips();
+}
 
 function markDrawerDirty() {
   modelUI.dirty = true;
@@ -3189,6 +3242,24 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#modelEditorBackdrop').addEventListener('click', (event) => { if (event.target === $('#modelEditorBackdrop')) requestCloseModelDrawer(); });
   $('#modelDrawer').addEventListener('input', () => { modelUI.dirty = true; const pane = $('#modelDrawer').querySelector('[data-model-pane="pricing"]'); if (pane && !pane.hidden) renderPricingPreview(); });
   $('#modelDrawer').addEventListener('change', () => { modelUI.dirty = true; });
+  $('#modelTagAdd').addEventListener('click', () => { addModelTag($('#modelTagInput').value); $('#modelTagInput').value = ''; });
+  $('#modelTagInput').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ',' || event.key === '，') {
+      event.preventDefault();
+      addModelTag($('#modelTagInput').value);
+      $('#modelTagInput').value = '';
+    }
+  });
+  $('#modelTagInput').addEventListener('blur', () => {
+    if ($('#modelTagInput').value.trim()) { addModelTag($('#modelTagInput').value); $('#modelTagInput').value = ''; }
+  });
+  $('#modelTagChips').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-tag-remove]');
+    if (!button) return;
+    modelUI.drawerTags.splice(Number(button.dataset.tagRemove), 1);
+    markDrawerDirty();
+    renderModelTagChips();
+  });
   $$('.drawer-tabs [data-model-tab]').forEach((button) => button.addEventListener('click', () => setDrawerTab(button.dataset.modelTab)));
   $('#toggleFieldsJson').addEventListener('click', () => setFieldsMode(modelUI.fieldsMode === 'visual' ? 'json' : 'visual'));
   $('#formatFieldsJson').addEventListener('click', () => {
