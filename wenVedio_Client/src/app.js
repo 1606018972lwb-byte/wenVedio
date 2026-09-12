@@ -550,7 +550,24 @@ function modelListFiltered() {
   return list;
 }
 
+// 供应商候选只展示系统中已有的：模型抽屉用模型数据、令牌表单用令牌数据，没出现过的预设不再显示
+function renderProviderOptions() {
+  const modelDatalist = $('#providerList');
+  if (modelDatalist) {
+    modelDatalist.innerHTML = [...new Set(state.models.map((model) => model.provider).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'zh'))
+      .map((name) => `<option value="${escapeHtml(name)}"></option>`).join('');
+  }
+  const tokenDatalist = $('#providerOptions');
+  if (tokenDatalist) {
+    tokenDatalist.innerHTML = [...new Set(state.tokens.map((token) => token.provider).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'zh'))
+      .map((name) => `<option value="${escapeHtml(name)}"></option>`).join('');
+  }
+}
+
 function renderModelTable() {
+  renderProviderOptions();
   const tbody = $('#modelTableBody');
   if (!tbody) return;
   const list = modelListFiltered();
@@ -1188,10 +1205,10 @@ async function saveSettings() {
     modelUI.editingId = saved.id;
     modelUI.dirty = false;
     modelUI.savedAt = saved.updated_at;
-    updateDrawerSavedAt();
-    populateDrawer(saved);
     renderModelPage();
     await initializeModels();
+    closeModelDrawer();
+    showToast('保存成功', 'ok');
   } catch (err) {
     alert(`保存失败：${err.message}`);
   }
@@ -2262,13 +2279,7 @@ async function openTokens() {
 
 const tokenTestResults = {};
 function renderTokens() {
-  // 供应商候选 = 常用预设 + 已有令牌用过的供应商，输入框可自由填写
-  const providerDatalist = $('#providerOptions');
-  if (providerDatalist) {
-    const defaults = ['OpenAI', 'MiniMax', 'AutoDL', '自定义'];
-    const used = state.tokens.map((token) => token.provider).filter(Boolean);
-    providerDatalist.innerHTML = [...new Set([...defaults, ...used])].map((name) => `<option value="${escapeHtml(name)}"></option>`).join('');
-  }
+  renderProviderOptions();
   const tbody = $('#tokenTable');
   if (!tbody) return;
   tbody.innerHTML = '';
