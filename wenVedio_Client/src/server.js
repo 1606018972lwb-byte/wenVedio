@@ -813,7 +813,7 @@ async function handleApi(req, res, url) {
       name,
       value: value || existing?.value || '',
       provider: String(payload.provider || existing?.provider || '').trim(),
-      remark: String(payload.remark || existing?.remark || '').slice(0, 200),
+      remark: payload.remark != null ? String(payload.remark).slice(0, 200) : String(existing?.remark || ''),
       created_at: existing?.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };

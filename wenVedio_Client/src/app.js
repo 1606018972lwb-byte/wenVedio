@@ -2282,6 +2282,8 @@ function renderTokens() {
         <button type="button" class="model-action-button primary" data-token-edit="${escapeHtml(token.id)}">编辑</button>
         <button type="button" class="model-action-button" data-token-del="${escapeHtml(token.id)}">删除</button>
       </div></td>`;
+    tr.title = '双击编辑名称、供应商、Key 和备注';
+    tr.addEventListener('dblclick', () => editToken(token.id));
     tbody.appendChild(tr);
   });
   tbody.querySelectorAll('[data-token-test]').forEach((button) => button.addEventListener('click', async () => {
@@ -2323,6 +2325,8 @@ function editToken(id) {
   if (!token) return;
   $('#tokenEditName').value = token.name;
   $('#tokenEditProvider').value = token.provider || '自定义';
+  const remarkInput = $('#tokenEditRemark');
+  if (remarkInput) remarkInput.value = token.remark || '';
   $('#tokenEditValue').value = '';
   $('#tokenEditValue').placeholder = token.masked || '••••••••';
   const bound = state.models.filter((model) => model.token_id === id);
@@ -2337,9 +2341,10 @@ async function saveTokenEdit() {
   const id = backdrop.dataset.editId;
   const name = $('#tokenEditName').value.trim();
   const provider = $('#tokenEditProvider').value;
+  const remark = $('#tokenEditRemark') ? $('#tokenEditRemark').value.trim() : '';
   const value = $('#tokenEditValue').value.trim();
   if (!name) return alert('令牌名称不能为空');
-  const res = await fetch(`${settings.apiBase}/api/tokens`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name, provider, value }) });
+  const res = await fetch(`${settings.apiBase}/api/tokens`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name, provider, remark, value }) });
   const data = await res.json();
   if (!data.ok) return alert(`保存失败：${data.msg}`);
   backdrop.hidden = true;

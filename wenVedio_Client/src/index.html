@@ -401,7 +401,7 @@
             <p class="test-result" id="tokenStatus" role="status"></p>
           </section>
           <section class="panel token-table-panel">
-            <b class="panel-title">令牌列表</b>
+            <b class="panel-title">令牌列表<span class="panel-title-hint">双击令牌行可快速编辑</span></b>
             <div class="table-wrap"><table class="token-table"><thead><tr><th>名称</th><th>供应商</th><th>API Key（掩码）</th><th>绑定模型数</th><th>最近更新</th><th>状态</th><th class="col-actions">操作</th></tr></thead><tbody id="tokenTable"></tbody></table></div>
           </section>
 
@@ -416,6 +416,7 @@
                   <label class="field"><span>令牌名称 <i class="req">*</i></span><input id="tokenEditName" type="text" /></label>
                   <label class="field"><span>供应商</span><select id="tokenEditProvider"><option value="OpenAI">OpenAI</option><option value="MiniMax">MiniMax</option><option value="AutoDL">AutoDL</option><option value="自定义">自定义</option></select></label>
                   <label class="field field-wide"><span>API Key <small>留空则不修改</small></span><input id="tokenEditValue" type="text" placeholder="••••••••" /></label>
+                  <label class="field field-wide"><span>备注 <small>可选</small></span><input id="tokenEditRemark" type="text" placeholder="用途说明" maxlength="200" /></label>
                 </div></div>
                 <div class="drawer-group"><b class="drawer-group-title">绑定模型</b><div id="tokenBoundModels" class="token-bound-list"></div></div>
               </div>

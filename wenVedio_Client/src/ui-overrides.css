@@ -691,3 +691,4 @@ span.task-thumb-icon { width: 64px; height: 40px; display: grid; place-items: ce
 .usage-models th { color: #8a95a2; font-weight: 600; background: #f6f8fb; }
 .usage-models .usage-empty { color: #9aa4b2; text-align: center; }
 .model-drawer-footer-actions .outline-button, .model-drawer-footer-actions .primary-button { width: auto; flex: 0 0 auto; white-space: nowrap; }
+.panel-title-hint { margin-left: 10px; font-weight: 400; font-size: 11px; color: #9aa4b2; }
