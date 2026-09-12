@@ -200,8 +200,8 @@ async function initializeModels() {
     if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
     const previousModelId = $('#modelSelect')?.value || state.selectedModelId;
     state.models = data.models || [];
-    const videoModels = state.models.filter((model) => model.kind !== 'image');
-    const imageModels = state.models.filter((model) => model.kind === 'image');
+    const videoModels = state.models.filter((model) => model.kind !== 'image' && model.enabled !== false && model.visible !== false);
+    const imageModels = state.models.filter((model) => model.kind === 'image' && model.enabled !== false && model.visible !== false);
     const select = $('#modelSelect');
     select.innerHTML = videoModels.map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.name)}</option>`).join('');
     state.selectedModelId = videoModels.some((model) => model.id === previousModelId) ? previousModelId : (videoModels[0]?.id || '');
@@ -313,109 +313,881 @@ function renderCurrentPrice() {
   el.title = pricingBreakdown(pricing);
 }
 
-function renderPriceByResolutionRows(initial) {
-  const wrap = $('#priceByResolution');
-  if (!wrap) return;
-  let options = [];
-  try {
-    const fields = JSON.parse($('#modelFields').value.trim() || '[]');
-    const resField = Array.isArray(fields) ? fields.find((field) => field && field.key === 'resolution' && Array.isArray(field.options)) : null;
-    options = resField ? resField.options.filter((option) => typeof option === 'string' && option.trim()) : [];
-  } catch (_) { options = []; }
-  const existing = {};
-  $$('#priceByResolution .price-res-row').forEach((row) => {
-    const name = row.querySelector('span').textContent;
-    const peakInput = row.querySelector('[data-res-peak]');
-    const valleyInput = row.querySelector('[data-res-valley]');
-    const value = initial ? initial[name] : (peakInput ? peakInput.value : '');
-    if (value && typeof value === 'object') {
-      existing[name] = { peak: value.peak != null ? String(value.peak) : '', valley: value.valley != null ? String(value.valley) : '' };
-    } else if (value != null && value !== '') {
-      existing[name] = { peak: String(value), valley: '' };
-    }
+// ===== 模型管理（新）=====
+const modelUI = {
+  search: '',
+  kind: '',
+  provider: '',
+  status: '',
+  sort: 'manual',
+  page: 1,
+  pageSize: 10,
+  selected: new Set(),
+  editingId: null,
+  dirty: false,
+  fieldsMode: 'visual',
+  drawerFields: [],
+  drawerPricing: null,
+  loadedFieldsSnapshot: '[]',
+  savedAt: null,
+};
+const modelTestResults = {};
+const FIELD_TYPE_META = {
+  text: { label: '单行文本', params: ['placeholder', 'default', 'maxLength'] },
+  textarea: { label: '多行文本', params: ['placeholder', 'default', 'maxLength'] },
+  number: { label: '数字', params: ['min', 'max', 'step', 'default'] },
+  select: { label: '下拉选择', params: ['options', 'default'] },
+  images: { label: '图片选择', params: ['accept', 'multiple', 'maxFiles'] },
+};
+const FIELD_TYPE_OPTIONS = Object.entries(FIELD_TYPE_META).map(([value, meta]) => ({ value, label: meta.label }));
+
+function normalizeModel(model) {
+  const m = model && typeof model === 'object' ? model : {};
+  return {
+    ...m,
+    id: m.id || '',
+    name: m.name || '未命名模型',
+    workflow: m.workflow || m.id || '',
+    kind: m.kind === 'image' ? 'image' : 'video',
+    request_url: m.request_url || '',
+    query_url: m.query_url || '',
+    edit_url: m.edit_url || '',
+    token_id: m.token_id || '',
+    provider: m.provider || '',
+    description: m.description || '',
+    enabled: m.enabled !== false,
+    visible: m.visible !== false,
+    sort: Number.isFinite(Number(m.sort)) ? Number(m.sort) : 0,
+    timeout_seconds: Number.isFinite(Number(m.timeout_seconds)) ? Number(m.timeout_seconds) : 300,
+    poll_interval: Number.isFinite(Number(m.poll_interval)) ? Number(m.poll_interval) : 3,
+    max_concurrency: Number.isFinite(Number(m.max_concurrency)) ? Number(m.max_concurrency) : 5,
+    max_retry: Number.isFinite(Number(m.max_retry)) ? Number(m.max_retry) : 0,
+    debug: m.debug === true,
+    pricing: m.pricing || null,
+    created_at: m.created_at || null,
+    updated_at: m.updated_at || null,
+  };
+}
+
+function modelTypeTag(model) {
+  if (model.kind === 'image') return { value: 'image', label: '图片生成', cls: 'tag-image' };
+  const text = `${model.name || ''}${model.workflow || ''}`;
+  if (/首尾帧/.test(text)) return { value: 'first_last', label: '首尾帧', cls: 'tag-firstlast' };
+  if (/多图/.test(text)) return { value: 'multi_ref', label: '多图参考', cls: 'tag-multiref' };
+  if (/音频|对口型/.test(text)) return { value: 'img2vid', label: '图生视频', cls: 'tag-img2vid' };
+  return { value: 'video', label: '视频生成', cls: 'tag-video' };
+}
+
+function modelProvider(model) {
+  if (model.provider) return model.provider;
+  const text = `${model.id || ''} ${model.workflow || ''} ${model.name || ''} ${model.request_url || ''}`;
+  if (/minimax/i.test(text)) return 'MiniMax';
+  if (/gpt-image|openai|dall|uuapi/i.test(text)) return 'OpenAI';
+  if (/flux/i.test(text)) return 'Black Forest Labs';
+  if (/stable|\/sd|sd-|sdxl/i.test(text)) return 'Stability AI';
+  if (/autodl/i.test(text)) return 'AutoDL';
+  return '自定义';
+}
+
+function tokenById(id) {
+  return state.tokens.find((token) => token.id === id) || null;
+}
+
+function tokenNameFor(model) {
+  const token = tokenById(model.token_id);
+  return token ? token.name : '未绑定';
+}
+
+function modelStatusOf(model) {
+  if (model.enabled === false) return 'disabled';
+  if (!model.request_url || !tokenById(model.token_id)) return 'error';
+  return 'enabled';
+}
+
+const MODEL_STATUS_META = {
+  enabled: { label: '已启用', cls: 'status-enabled' },
+  disabled: { label: '已停用', cls: 'status-disabled' },
+  error: { label: '配置异常', cls: 'status-error' },
+};
+
+function relativeTime(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(diff)) return '—';
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}
+
+function defaultFieldsFor(kind) {
+  if (kind === 'image') {
+    return [
+      { key: 'prompt', label: '提示词', type: 'textarea', required: true, maxLength: 500000 },
+      { key: 'size', label: '尺寸', type: 'select', options: ['1024x1024', '2048x2048', '4096x4096'], default: '1024x1024' },
+      { key: 'n', label: '数量', type: 'number', min: 1, max: 4, default: 1 },
+      { key: 'reference_images', label: '参考图片（可选）', type: 'images', required: false, min: 0, max: 10 },
+    ];
+  }
+  return [
+    { key: 'prompt', label: '提示词', type: 'textarea', required: true, max: 500000 },
+    { key: 'duration', label: '视频时长', type: 'number', min: 1, max: 15, default: 5 },
+    { key: 'resolution', label: '分辨率', type: 'select', options: ['480p竖', '768p竖', '480p横', '768p横', '480p(1:1)', '768p(1:1)'], default: '768p竖' },
+    { key: 'seed', label: 'seed', type: 'number', min: 1, max: 999999999999999 },
+    { key: 'reference_images', label: '参考图片', type: 'images', required: true, min: 1, max: 10 },
+  ];
+}
+
+function openSettings() {
+  showView('settings');
+  renderModelPage();
+}
+
+function renderModelPage() {
+  renderModelStats();
+  renderModelProviderOptions();
+  renderModelTable();
+}
+
+function renderModelStats() {
+  const models = state.models.map(normalizeModel);
+  $('#statAllModels').textContent = String(models.length);
+  $('#statImageModels').textContent = String(models.filter((m) => m.kind === 'image').length);
+  $('#statVideoModels').textContent = String(models.filter((m) => m.kind !== 'image').length);
+  $('#statDisabledModels').textContent = String(models.filter((m) => m.enabled === false).length);
+}
+
+function renderModelProviderOptions() {
+  const select = $('#modelFilterProvider');
+  if (!select) return;
+  const current = select.value;
+  const providers = [...new Set(state.models.map((model) => modelProvider(model)))].sort();
+  select.innerHTML = '<option value="">全部供应商</option>' + providers.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+  if (providers.includes(current)) select.value = current;
+}
+
+function modelListFiltered() {
+  const keyword = modelUI.search.trim().toLowerCase();
+  let list = state.models.map(normalizeModel);
+  if (keyword) list = list.filter((m) => [m.name, m.id, m.workflow, modelProvider(m)].join(' ').toLowerCase().includes(keyword));
+  if (modelUI.kind) list = list.filter((m) => modelTypeTag(m).value === modelUI.kind);
+  if (modelUI.provider) list = list.filter((m) => modelProvider(m) === modelUI.provider);
+  if (modelUI.status) list = list.filter((m) => modelStatusOf(m) === modelUI.status);
+  if (modelUI.sort === 'name') list.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+  else if (modelUI.sort === 'created') list.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  else if (modelUI.sort === 'updated') list.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+  else list.sort((a, b) => (a.sort || 0) - (b.sort || 0));
+  return list;
+}
+
+function renderModelTable() {
+  const tbody = $('#modelTableBody');
+  if (!tbody) return;
+  const list = modelListFiltered();
+  const pages = Math.max(1, Math.ceil(list.length / modelUI.pageSize));
+  if (modelUI.page > pages) modelUI.page = pages;
+  const start = (modelUI.page - 1) * modelUI.pageSize;
+  const rows = list.slice(start, start + modelUI.pageSize);
+
+  tbody.innerHTML = '';
+  rows.forEach((model) => {
+    const status = modelStatusOf(model);
+    const statusMeta = MODEL_STATUS_META[status];
+    const tag = modelTypeTag(model);
+    const provider = modelProvider(model);
+    const testResult = modelTestResults[model.id];
+    const tr = document.createElement('tr');
+    tr.dataset.modelId = model.id;
+    tr.draggable = modelUI.sort === 'manual';
+    tr.className = `${modelUI.selected.has(model.id) ? 'selected' : ''} ${status === 'disabled' ? 'model-disabled' : ''}`;
+    tr.innerHTML = `
+      <td class="drag-col"><span class="drag-handle" title="拖拽排序" aria-hidden="true">⋮⋮</span></td>
+      <td class="check-col"><input type="checkbox" data-model-check="${escapeHtml(model.id)}" ${modelUI.selected.has(model.id) ? 'checked' : ''} aria-label="选择模型" /></td>
+      <td class="model-info-cell">
+        <div class="model-info"><span class="model-avatar" data-provider="${escapeHtml(provider)}">${escapeHtml(provider.charAt(0).toUpperCase())}</span><div class="model-info-copy"><b title="${escapeHtml(model.name)}">${escapeHtml(model.name)}</b><small title="${escapeHtml(model.id)}">${escapeHtml(model.id.length > 34 ? model.id.slice(0, 34) + '…' : model.id)}</small></div></div>
+      </td>
+      <td><span class="model-tag ${tag.cls}">${escapeHtml(tag.label)}</span></td>
+      <td class="col-provider">${escapeHtml(provider)}</td>
+      <td><span class="model-status ${statusMeta.cls}"><i></i>${statusMeta.label}</span></td>
+      <td class="col-token" title="${escapeHtml(tokenById(model.token_id)?.masked || '未绑定令牌')}">${escapeHtml(tokenNameFor(model))}</td>
+      <td class="col-actions">
+        <div class="model-row-actions">
+          <button type="button" class="model-action-button" data-model-test="${escapeHtml(model.id)}">测试</button>
+          <button type="button" class="model-action-button primary" data-model-edit="${escapeHtml(model.id)}">编辑</button>
+          <button type="button" class="model-action-button more" data-model-more="${escapeHtml(model.id)}" aria-label="更多操作">···</button>
+        </div>
+        ${testResult ? `<div class="model-test-inline ${testResult.ok ? 'ok' : 'bad'}" title="${escapeHtml(testResult.message)}">${testResult.ok ? `连接正常 · ${testResult.latency}ms` : `连接失败 · ${escapeHtml(testResult.message)}`}</div>` : ''}
+      </td>`;
+    tbody.appendChild(tr);
   });
-  const values = initial ? null : existing;
+
+  $('#modelTotal').textContent = String(list.length);
+  renderModelPager(pages);
+  renderModelBatchBar();
+  bindModelRowEvents(tbody);
+}
+
+function renderModelPager(pages) {
+  const wrap = $('#modelPager');
   wrap.innerHTML = '';
-  if (!options.length) {
-    const hint = document.createElement('small');
-    hint.className = 'price-res-empty';
-    hint.textContent = '表单字段定义里没有 resolution 下拉选项，无法按分辨率设置价格';
-    wrap.appendChild(hint);
+  if (pages <= 1) return;
+  const addButton = (label, page, disabled, current) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    if (current) button.classList.add('current');
+    if (disabled) button.disabled = true;
+    else button.addEventListener('click', () => { modelUI.page = page; renderModelTable(); });
+    wrap.appendChild(button);
+  };
+  addButton('‹', modelUI.page - 1, modelUI.page <= 1, false);
+  for (let p = 1; p <= pages; p += 1) addButton(String(p), p, false, p === modelUI.page);
+  addButton('›', modelUI.page + 1, modelUI.page >= pages, false);
+}
+
+function renderModelBatchBar() {
+  const bar = $('#modelBatchBar');
+  bar.hidden = modelUI.selected.size === 0;
+  $('#modelSelectedCount').textContent = String(modelUI.selected.size);
+  $('#modelSelectAll').checked = false;
+}
+
+function bindModelRowEvents(tbody) {
+  tbody.querySelectorAll('[data-model-check]').forEach((input) => input.addEventListener('change', () => {
+    if (input.checked) modelUI.selected.add(input.dataset.modelCheck);
+    else modelUI.selected.delete(input.dataset.modelCheck);
+    input.closest('tr').classList.toggle('selected', input.checked);
+    renderModelBatchBar();
+  }));
+  tbody.querySelectorAll('[data-model-test]').forEach((button) => button.addEventListener('click', () => runModelTest(button.dataset.modelTest, button)));
+  tbody.querySelectorAll('[data-model-edit]').forEach((button) => button.addEventListener('click', () => openModelDrawer(button.dataset.modelEdit)));
+  tbody.querySelectorAll('[data-model-more]').forEach((button) => button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const menu = button.nextElementSibling ? button.parentElement.querySelector('.model-more-menu') : null;
+    if (!menu) return;
+    menu.hidden = !menu.hidden;
+  }));
+  tbody.querySelectorAll('[data-model-duplicate]').forEach((button) => button.addEventListener('click', () => duplicateModel(button.dataset.modelDuplicate)));
+  tbody.querySelectorAll('[data-model-toggle]').forEach((button) => button.addEventListener('click', () => toggleModelEnabled(button.dataset.modelToggle)));
+  tbody.querySelectorAll('[data-model-delete]').forEach((button) => button.addEventListener('click', () => deleteModelConfirm(button.dataset.modelDelete)));
+  // 每行的更多菜单
+  tbody.querySelectorAll('tr[data-model-id]').forEach((row) => {
+    const id = row.dataset.modelId;
+    const moreButton = row.querySelector('[data-model-more]');
+    if (!moreButton || row.querySelector('.model-more-menu')) return;
+    const menu = document.createElement('div');
+    menu.className = 'model-more-menu';
+    menu.hidden = true;
+    menu.innerHTML = `<button type="button" data-model-duplicate="${escapeHtml(id)}">复制模型</button><button type="button" data-model-toggle="${escapeHtml(id)}">${row.classList.contains('model-disabled') || normalizeModel(state.models.find((m) => m.id === id)).enabled === false ? '启用模型' : '停用模型'}</button><button type="button" class="danger" data-model-delete="${escapeHtml(id)}">删除模型</button>`;
+    moreButton.after(menu);
+  });
+  // 拖拽排序（手动排序时启用）
+  let draggingId = null;
+  tbody.addEventListener('dragstart', (event) => {
+    const row = event.target.closest('tr[data-model-id]');
+    if (!row || modelUI.sort !== 'manual') return;
+    draggingId = row.dataset.modelId;
+    event.dataTransfer.effectAllowed = 'move';
+  });
+  tbody.addEventListener('dragover', (event) => {
+    if (!draggingId) return;
+    event.preventDefault();
+    const row = event.target.closest('tr[data-model-id]');
+    if (!row || row.dataset.modelId === draggingId) return;
+    const draggingRow = tbody.querySelector(`tr[data-model-id="${draggingId}"]`);
+    if (draggingRow) tbody.insertBefore(draggingRow, row);
+  });
+  tbody.addEventListener('drop', (event) => { event.preventDefault(); saveModelOrder(tbody); });
+  tbody.addEventListener('dragend', () => { if (draggingId) saveModelOrder(tbody); draggingId = null; });
+}
+
+async function saveModelOrder(tbody) {
+  const ids = [...tbody.querySelectorAll('tr[data-model-id]')].map((row) => row.dataset.modelId);
+  try {
+    const res = await fetch(`${settings.apiBase}/api/models/order`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+    const ordered = [];
+    ids.forEach((id) => {
+      const model = state.models.find((m) => m.id === id);
+      if (model) { model.sort = ordered.length; ordered.push(model); }
+    });
+    const rest = state.models.filter((m) => !ids.includes(m.id));
+    state.models = [...ordered, ...rest];
+    renderModelTable();
+  } catch (err) { console.warn('保存排序失败', err); }
+}
+
+async function runModelTest(id, button) {
+  const model = normalizeModel(state.models.find((m) => m.id === id) || {});
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = '测试中…';
+  try {
+    const res = await fetch(`${settings.apiBase}/api/models/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
+    const data = await res.json();
+    modelTestResults[id] = { ok: Boolean(data.ok), latency: data.latency_ms, message: data.msg || (data.ok ? '连接正常' : '连接失败') };
+  } catch (err) {
+    modelTestResults[id] = { ok: false, latency: null, message: err.message };
+  }
+  button.disabled = false;
+  button.textContent = original;
+  renderModelTable();
+}
+
+async function duplicateModel(id) {
+  const source = state.models.find((m) => m.id === id);
+  if (!source) return;
+  const copy = normalizeModel(source);
+  copy.id = `${source.id}-copy-${Date.now().toString(36).slice(-4)}`;
+  copy.name = `${source.name} 副本`;
+  copy.enabled = false;
+  copy.created_at = new Date().toISOString();
+  copy.updated_at = copy.created_at;
+  try {
+    const res = await fetch(`${settings.apiBase}/api/models`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: copy }) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+    state.models.push(normalizeModel(data.model));
+    renderModelPage();
+  } catch (err) { alert(`复制模型失败：${err.message}`); }
+}
+
+async function toggleModelEnabled(id) {
+  const model = state.models.find((m) => m.id === id);
+  if (!model) return;
+  const next = normalizeModel({ ...model, enabled: model.enabled === false });
+  try {
+    const res = await fetch(`${settings.apiBase}/api/models`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: next }) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+    const index = state.models.findIndex((m) => m.id === id);
+    if (index >= 0) state.models[index] = normalizeModel(data.model);
+    renderModelPage();
+    await initializeModels();
+  } catch (err) { alert(`操作失败：${err.message}`); }
+}
+
+async function deleteModelConfirm(id) {
+  const model = state.models.find((m) => m.id === id);
+  if (!model) return;
+  if (!window.confirm(`确定删除模型「${model.name}」吗？此操作不可恢复。`)) return;
+  await deleteModelById(id);
+}
+
+async function deleteModelById(id) {
+  const res = await fetch(`${settings.apiBase}/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!data.ok) return alert(`删除失败：${data.msg}`);
+  state.models = state.models.filter((m) => m.id !== id);
+  modelUI.selected.delete(id);
+  if (modelUI.editingId === id) closeModelDrawer();
+  renderModelPage();
+  await initializeModels();
+}
+
+async function batchUpdateEnabled(enabled) {
+  const ids = [...modelUI.selected];
+  for (const id of ids) {
+    const model = state.models.find((m) => m.id === id);
+    if (!model) continue;
+    const next = normalizeModel({ ...model, enabled });
+    try {
+      const res = await fetch(`${settings.apiBase}/api/models`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: next }) });
+      const data = await res.json();
+      if (data.ok) {
+        const index = state.models.findIndex((m) => m.id === id);
+        if (index >= 0) state.models[index] = normalizeModel(data.model);
+      }
+    } catch (_) { /* 单个失败继续 */ }
+  }
+  modelUI.selected.clear();
+  renderModelPage();
+  await initializeModels();
+}
+
+async function batchDeleteSelected() {
+  const ids = [...modelUI.selected];
+  if (!ids.length) return;
+  if (!window.confirm(`确定删除选中的 ${ids.length} 个模型吗？此操作不可恢复。`)) return;
+  for (const id of ids) {
+    try { await fetch(`${settings.apiBase}/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch (_) { /* 继续 */ }
+  }
+  state.models = state.models.filter((m) => !ids.includes(m.id));
+  modelUI.selected.clear();
+  renderModelPage();
+  await initializeModels();
+}
+
+// ---- 抽屉编辑器 ----
+function openModelDrawer(id) {
+  const source = id ? state.models.find((m) => m.id === id) : null;
+  const draft = normalizeModel(source || {
+    kind: modelUI.kind === 'image' ? 'image' : 'video',
+    fields: defaultFieldsFor(modelUI.kind === 'image' ? 'image' : 'video'),
+    pricing: { unit: 'per_second', peak: 0.04, valley: 0.03, valley_start: '00:00', valley_end: '08:00' },
+  });
+  if (!source) draft.fields = defaultFieldsFor(draft.kind);
+  modelUI.editingId = id || null;
+  modelUI.drawerFields = JSON.parse(JSON.stringify(draft.fields || []));
+  modelUI.drawerPricing = draft.pricing ? JSON.parse(JSON.stringify(draft.pricing)) : null;
+  modelUI.loadedFieldsSnapshot = JSON.stringify(draft.fields || []);
+  modelUI.dirty = false;
+  modelUI.fieldsMode = 'visual';
+  populateDrawer(draft);
+  setDrawerTab('basic');
+  setFieldsMode('visual');
+  $('#modelEditorBackdrop').hidden = false;
+  updateDrawerSavedAt();
+}
+
+function populateDrawer(model) {
+  $('#drawerModelName').textContent = model.name || '—';
+  const status = modelStatusOf(model);
+  const statusEl = $('#drawerStatus');
+  statusEl.className = `state ${status === 'enabled' ? 'enabled' : status === 'disabled' ? 'disabled' : 'failed'}`;
+  statusEl.innerHTML = `<i></i>${MODEL_STATUS_META[status].label}`;
+  $('#modelName').value = model.name;
+  $('#modelId').value = model.id;
+  $('#modelId').readOnly = Boolean(model.id);
+  $('#modelWorkflow').value = model.workflow;
+  $('#modelKind').value = model.kind;
+  $('#modelProvider').value = model.provider || '';
+  $('#modelSort').value = String(model.sort || 0);
+  $('#modelDescription').value = model.description || '';
+  $('#modelVisible').checked = model.visible !== false;
+  $('#requestUrl').value = model.request_url;
+  $('#queryUrl').value = model.query_url;
+  $('#queryUrlField').hidden = model.kind !== 'video';
+  $('#editUrlField').hidden = model.kind !== 'image';
+  $('#modelEditUrl').value = model.edit_url || '';
+  renderModelTokenOptionsForDrawer(model.token_id);
+  $('#modelTimeout').value = String(model.timeout_seconds);
+  $('#modelPollInterval').value = String(model.poll_interval);
+  $('#modelConcurrency').value = String(model.max_concurrency);
+  $('#advEnabled').checked = model.enabled !== false;
+  $('#advVisible').checked = model.visible !== false;
+  $('#advSort').value = String(model.sort || 0);
+  $('#advMaxRetry').value = String(model.max_retry || 0);
+  $('#advDebug').checked = model.debug === true;
+  renderFieldBuilder();
+  renderPricingPane(model.pricing);
+}
+
+function renderModelTokenOptionsForDrawer(selectedId) {
+  const select = $('#modelToken');
+  select.innerHTML = '<option value="">请选择令牌</option>' + state.tokens.map((token) => `<option value="${escapeHtml(token.id)}">${escapeHtml(token.name)} · ${escapeHtml(token.masked)}</option>`).join('');
+  select.value = selectedId || '';
+}
+
+function setDrawerTab(tab) {
+  $$('.drawer-tabs [data-model-tab]').forEach((button) => button.classList.toggle('active', button.dataset.modelTab === tab));
+  $$('.model-drawer-body .drawer-pane').forEach((pane) => { pane.hidden = pane.dataset.modelPane !== tab; });
+}
+
+function requestCloseModelDrawer() {
+  if (modelUI.dirty) {
+    $('#modelCloseConfirm').hidden = false;
     return;
   }
-  options.forEach((option) => {
-    const row = document.createElement('div');
-    row.className = 'price-res-row';
-    const name = document.createElement('span');
-    name.textContent = option;
-    const peakInput = document.createElement('input');
-    peakInput.type = 'number';
-    peakInput.min = '0';
-    peakInput.step = '0.001';
-    peakInput.placeholder = '峰价';
-    peakInput.title = '峰价（白天时段）';
-    peakInput.dataset.resPeak = option;
-    const valleyInput = document.createElement('input');
-    valleyInput.type = 'number';
-    valleyInput.min = '0';
-    valleyInput.step = '0.001';
-    valleyInput.placeholder = '谷价';
-    valleyInput.title = '谷价（夜间时段）';
-    valleyInput.dataset.resValley = option;
-    const saved = initial ? (initial[option] || {}) : (existing[option] || {});
-    if (saved.peak != null && saved.peak !== '') peakInput.value = String(saved.peak);
-    if (saved.valley != null && saved.valley !== '') valleyInput.value = String(saved.valley);
-    row.append(name, peakInput, valleyInput);
-    wrap.appendChild(row);
+  closeModelDrawer();
+}
+
+function closeModelDrawer() {
+  $('#modelCloseConfirm').hidden = true;
+  $('#modelEditorBackdrop').hidden = true;
+  modelUI.editingId = null;
+  modelUI.dirty = false;
+}
+
+function updateDrawerSavedAt() {
+  const model = modelUI.editingId ? state.models.find((m) => m.id === modelUI.editingId) : null;
+  const stamp = model && model.updated_at ? relativeTime(model.updated_at) : (modelUI.savedAt ? '刚刚' : '—');
+  $('#drawerSavedAt').textContent = `上次保存：${stamp}`;
+}
+
+// ---- 表单字段构建器 ----
+function fieldTypeLabel(type) {
+  return (FIELD_TYPE_META[type] || {}).label || type || '—';
+}
+
+function renderFieldBuilder() {
+  const wrap = $('#fieldBuilder');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  modelUI.drawerFields.forEach((field, index) => {
+    const card = document.createElement('div');
+    card.className = 'field-card';
+    card.draggable = true;
+    card.dataset.index = String(index);
+    const summary = [];
+    summary.push(`key：${field.key || '—'}`);
+    summary.push(`类型：${fieldTypeLabel(field.type)}`);
+    if (field.required) summary.push('必填');
+    if (field.default != null && field.default !== '') summary.push(`默认：${field.default}`);
+    card.innerHTML = `
+      <div class="field-card-head">
+        <span class="field-handle" title="拖拽排序">☰</span>
+        <div class="field-card-copy"><b>${escapeHtml(field.label || field.key || '字段')}</b><small>${escapeHtml(summary.join(' · '))}</small></div>
+        <div class="field-card-actions">
+          <button type="button" data-field-edit="${index}">编辑</button>
+          <button type="button" data-field-copy="${index}">复制</button>
+          <button type="button" data-field-del="${index}">删除</button>
+        </div>
+      </div>
+      <div class="field-card-form" hidden></div>`;
+    wrap.appendChild(card);
+  });
+  bindFieldBuilderEvents(wrap);
+}
+
+function fieldFormHtml(field) {
+  const type = field.type || 'text';
+  const meta = FIELD_TYPE_META[type] || FIELD_TYPE_META.text;
+  const has = (key) => meta.params.includes(key);
+  return `
+    <div class="drawer-grid">
+      <label class="field"><span>key <i class="req">*</i></span><input data-f="key" type="text" value="${escapeHtml(field.key || '')}" /></label>
+      <label class="field"><span>显示名称</span><input data-f="label" type="text" value="${escapeHtml(field.label || '')}" /></label>
+      <label class="field"><span>类型</span><select data-f="type">${FIELD_TYPE_OPTIONS.map((option) => `<option value="${option.value}" ${option.value === type ? 'selected' : ''}>${option.label}</option>`).join('')}</select></label>
+      <label class="field switch-line"><span>必填</span><label class="switch"><input data-f="required" type="checkbox" ${field.required ? 'checked' : ''} /><span></span></label></label>
+      ${has('default') ? `<label class="field"><span>默认值</span><input data-f="default" type="text" value="${escapeHtml(field.default != null ? String(field.default) : '')}" /></label>` : ''}
+      ${has('placeholder') ? `<label class="field"><span>占位提示</span><input data-f="placeholder" type="text" value="${escapeHtml(field.placeholder || '')}" /></label>` : ''}
+      ${has('min') ? `<label class="field"><span>最小值</span><input data-f="min" type="number" value="${escapeHtml(field.min != null ? String(field.min) : '')}" /></label>` : ''}
+      ${has('max') ? `<label class="field"><span>最大值</span><input data-f="max" type="number" value="${escapeHtml(field.max != null ? String(field.max) : '')}" /></label>` : ''}
+      ${has('step') ? `<label class="field"><span>步长</span><input data-f="step" type="number" value="${escapeHtml(field.step != null ? String(field.step) : '')}" /></label>` : ''}
+      ${has('maxLength') ? `<label class="field"><span>最大长度</span><input data-f="maxLength" type="number" value="${escapeHtml(field.maxLength != null ? String(field.maxLength) : '')}" /></label>` : ''}
+      ${has('options') ? `<label class="field field-wide"><span>选项（每行一个）</span><textarea data-f="options" rows="3">${escapeHtml((field.options || []).join('\n'))}</textarea></label>` : ''}
+      ${has('accept') ? `<label class="field"><span>允许的图片类型</span><input data-f="accept" type="text" value="${escapeHtml(field.accept || 'image/jpeg,image/png,image/webp')}" /></label>` : ''}
+      ${has('multiple') ? `<label class="field switch-line"><span>允许多选</span><label class="switch"><input data-f="multiple" type="checkbox" ${field.multiple ? 'checked' : ''} /><span></span></label></label>` : ''}
+      ${has('maxFiles') ? `<label class="field"><span>最大文件数</span><input data-f="maxFiles" type="number" min="1" value="${escapeHtml(field.maxFiles != null ? String(field.maxFiles) : '10')}" /></label>` : ''}
+    </div>
+    <div class="field-card-edit-actions"><button type="button" class="primary-button" data-field-save>保存字段</button><button type="button" class="outline-button" data-field-cancel>取消</button></div>`;
+}
+
+function collectFieldForm(form) {
+  const value = (selector) => { const el = form.querySelector(selector); return el ? el.value : undefined; };
+  const checked = (selector) => { const el = form.querySelector(selector); return el ? el.checked : false; };
+  const field = { key: value('[data-f="key"]').trim(), label: value('[data-f="label"]').trim(), type: value('[data-f="type"]') || 'text' };
+  if (!field.key) throw new Error('字段 key 不能为空');
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(field.key)) throw new Error('字段 key 只能包含字母、数字与下划线，且以字母开头');
+  field.required = checked('[data-f="required"]');
+  const assignNumber = (key) => { const text = value(`[data-f="${key}"]`); if (text != null && text.trim() !== '') { const num = Number(text); if (!Number.isFinite(num)) throw new Error(`${key} 必须是数字`); field[key] = num; } };
+  ['min', 'max', 'step', 'maxLength', 'maxFiles'].forEach(assignNumber);
+  ['default', 'placeholder', 'accept'].forEach((key) => { const text = value(`[data-f="${key}"]`); if (text != null && text.trim() !== '') field[key] = text; });
+  if (FIELD_TYPE_META[field.type].params.includes('options')) {
+    const options = value('[data-f="options"]').split('\n').map((line) => line.trim()).filter(Boolean);
+    if (options.length) field.options = options;
+  }
+  if (checked('[data-f="multiple"]')) field.multiple = true;
+  return field;
+}
+
+function bindFieldBuilderEvents(wrap) {
+  wrap.querySelectorAll('.field-card').forEach((card) => {
+    const index = Number(card.dataset.index);
+    const editButton = card.querySelector('[data-field-edit]');
+    const form = card.querySelector('.field-card-form');
+    editButton.addEventListener('click', () => {
+      form.hidden = !form.hidden;
+      if (!form.hidden && !form.dataset.filled) {
+        form.dataset.filled = '1';
+        form.innerHTML = fieldFormHtml(modelUI.drawerFields[index] || {});
+        form.querySelector('[data-f="key"]').focus();
+        form.querySelector('[data-field-save]').addEventListener('click', () => {
+          try {
+            modelUI.drawerFields[index] = collectFieldForm(form);
+            markDrawerDirty();
+            renderFieldBuilder();
+          } catch (err) { alert(err.message); }
+        });
+        form.querySelector('[data-field-cancel]').addEventListener('click', () => { form.hidden = true; });
+      }
+    });
+    card.querySelector('[data-field-copy]').addEventListener('click', () => {
+      const copy = JSON.parse(JSON.stringify(modelUI.drawerFields[index] || {}));
+      copy.key = `${copy.key || 'field'}_copy`;
+      modelUI.drawerFields.splice(index + 1, 0, copy);
+      markDrawerDirty();
+      renderFieldBuilder();
+    });
+    card.querySelector('[data-field-del]').addEventListener('click', () => {
+      modelUI.drawerFields.splice(index, 1);
+      markDrawerDirty();
+      renderFieldBuilder();
+    });
+    card.addEventListener('dragstart', (event) => {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', String(index));
+      card.classList.add('dragging');
+    });
+    card.addEventListener('dragend', () => card.classList.remove('dragging'));
+    card.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      const dragging = wrap.querySelector('.field-card.dragging');
+      if (!dragging || dragging === card) return;
+      const rect = card.getBoundingClientRect();
+      const before = event.clientY < rect.top + rect.height / 2;
+      wrap.insertBefore(dragging, before ? card : card.nextSibling);
+    });
+    card.addEventListener('drop', (event) => {
+      event.preventDefault();
+      const order = [...wrap.querySelectorAll('.field-card')].map((node) => Number(node.dataset.index));
+      modelUI.drawerFields = order.map((i) => modelUI.drawerFields[i]).filter(Boolean);
+      markDrawerDirty();
+      renderFieldBuilder();
+    });
   });
 }
 
-function clearPricingEditor() {
-  $('#pricePeak').value = '';
-  $('#priceValley').value = '';
-  $('#priceValleyWindow').value = '';
-  renderPriceByResolutionRows();
+function setFieldsMode(mode) {
+  modelUI.fieldsMode = mode;
+  const visual = mode === 'visual';
+  $('#fieldBuilder').hidden = !visual;
+  $('#addField').hidden = !visual;
+  $('#fieldJsonWrap').hidden = visual;
+  $('#toggleFieldsJson').innerHTML = visual ? '&lt;&gt; JSON 模式' : '☰ 可视化模式';
+  if (!visual) {
+    $('#modelFields').value = JSON.stringify(modelUI.drawerFields, null, 2);
+    $('#fieldsJsonError').hidden = true;
+  } else {
+    try {
+      modelUI.drawerFields = JSON.parse($('#modelFields').value);
+      renderFieldBuilder();
+    } catch (_) { /* JSON 无效时保留原字段 */ }
+  }
 }
 
-function collectPricingFromEditor() {
-  const peakText = $('#pricePeak').value.trim();
-  const valleyText = $('#priceValley').value.trim();
-  const rangeText = $('#priceValleyWindow').value.trim();
-  const byResolution = {};
-  $$('#priceByResolution .price-res-row').forEach((row) => {
-    const name = row.querySelector('span').textContent;
-    const peakText = row.querySelector('[data-res-peak]').value.trim();
-    const valleyText = row.querySelector('[data-res-valley]').value.trim();
-    if (peakText === '' && valleyText === '') return;
-    const peak = toPrice(peakText);
-    const valley = toPrice(valleyText);
-    if (peak == null || valley == null) throw new Error(`分辨率 ${name} 的峰价/谷价必须是 ≥ 0 的数字`);
-    byResolution[name] = valley === peak ? peak : { peak, valley };
-  });
-  if (peakText === '' && valleyText === '' && !Object.keys(byResolution).length) return undefined;
+// ---- 价格配置面板 ----
+function renderPricingPane(pricing) {
+  const p = pricing || {};
+  $('#pricingUnit').value = p.unit || 'per_second';
+  $('#priceTierEnabled').checked = p.valley != null;
+  $('#pricePeak').value = p.peak != null ? String(p.peak) : '';
+  $('#priceValley').value = p.valley != null ? String(p.valley) : '';
+  $('#priceValleyStart').value = p.valley_start || '00:00';
+  $('#priceValleyEnd').value = p.valley_end || '08:00';
+  $('#priceResEnabled').checked = p.by_resolution != null && Object.keys(p.by_resolution).length > 0;
+  syncPricingPaneVisibility();
+  renderPriceResRows(p.by_resolution || {});
+  renderPricingPreview();
+}
+
+function syncPricingPaneVisibility() {
+  const unit = $('#pricingUnit').value;
+  const tierOn = $('#priceTierEnabled').checked;
+  const perUnit = unit === 'per_image' ? '张' : unit === 'per_call' ? '次' : unit === 'per_token' ? '1K Token' : unit === 'fixed' ? '次' : '秒';
+  $('#priceUnitPeak').textContent = `¥ / ${perUnit}`;
+  $('#priceUnitValley').textContent = `¥ / ${perUnit}`;
+  $$('#peakValleyFields .field').forEach((field, index) => { if (index === 1 || index === 2 || index === 3) field.hidden = !tierOn; });
+  const resOn = $('#priceResEnabled').checked;
+  $('#priceResWrap').hidden = !resOn;
+  $$('#priceResRows [data-res-valley]').forEach((input) => { input.hidden = !tierOn; });
+}
+
+function renderPriceResRows(byResolution) {
+  const wrap = $('#priceResRows');
+  wrap.innerHTML = '';
+  const options = drawerResolutionOptions();
+  Object.entries(byResolution).forEach(([resolution, value]) => addPriceResRow(resolution, value, options));
+  if (!wrap.children.length) addPriceResRow('', { peak: '', valley: '' }, options);
+}
+
+function drawerResolutionOptions() {
+  try {
+    const fields = modelUI.drawerFields || [];
+    const field = fields.find((item) => item && item.key === 'resolution' && Array.isArray(item.options));
+    return field ? field.options.filter((option) => typeof option === 'string') : [];
+  } catch (_) { return []; }
+}
+
+function addPriceResRow(resolution, value, options) {
+  const entry = value && typeof value === 'object' ? value : { peak: value != null ? value : '', valley: '' };
+  const wrap = $('#priceResRows');
+  const row = document.createElement('div');
+  row.className = 'price-res-row';
+  row.innerHTML = `
+    <input class="price-res-name" list="priceResOptions" type="text" placeholder="分辨率，如 480p竖" value="${escapeHtml(resolution)}" />
+    <input type="number" min="0" step="0.001" placeholder="峰价" data-res-peak value="${escapeHtml(entry.peak != null ? String(entry.peak) : '')}" />
+    <input type="number" min="0" step="0.001" placeholder="谷价" data-res-valley value="${escapeHtml(entry.valley != null ? String(entry.valley) : '')}" />
+    <button type="button" class="price-res-del" title="删除">×</button>`;
+  row.querySelector('.price-res-del').addEventListener('click', () => row.remove());
+  wrap.appendChild(row);
+}
+
+function collectDrawerPricing() {
+  const unit = $('#pricingUnit').value;
+  const tierOn = $('#priceTierEnabled').checked;
+  const resOn = $('#priceResEnabled').checked;
   const toPrice = (text) => {
-    if (text === '') return null;
+    if (text === '' || text == null) return null;
     const num = Number(text);
     if (!Number.isFinite(num) || num < 0) throw new Error('价格必须是 ≥ 0 的数字');
     return Math.round(num * 1000) / 1000;
   };
-  const pricing = {};
-  const peak = toPrice(peakText);
+  const pricing = { unit };
+  const peak = toPrice($('#pricePeak').value.trim());
   if (peak != null) pricing.peak = peak;
-  const valley = toPrice(valleyText);
-  if (valley != null) pricing.valley = valley;
-  if (rangeText !== '') {
-    const match = rangeText.match(/^((?:[01]\d|2[0-3]):[0-5]\d)\s*[-–~至到]\s*((?:[01]\d|2[0-3]):[0-5]\d)$/);
-    if (!match) throw new Error('谷值时段格式应为 00:00-08:00');
-    pricing.valley_start = match[1];
-    pricing.valley_end = match[2];
-  } else if (valley != null) {
-    pricing.valley_start = '00:00';
-    pricing.valley_end = '08:00';
+  if (tierOn) {
+    const valley = toPrice($('#priceValley').value.trim());
+    if (valley != null) {
+      pricing.valley = valley;
+      pricing.valley_start = $('#priceValleyStart').value || '00:00';
+      pricing.valley_end = $('#priceValleyEnd').value || '08:00';
+    }
   }
-  if (Object.keys(byResolution).length) pricing.by_resolution = byResolution;
-  return pricing;
+  if (resOn) {
+    const byResolution = {};
+    $$('#priceResRows .price-res-row').forEach((row) => {
+      const resolution = row.querySelector('.price-res-name').value.trim();
+      if (!resolution) return;
+      const peak = toPrice(row.querySelector('[data-res-peak]').value.trim());
+      const valley = tierOn ? toPrice(row.querySelector('[data-res-valley]').value.trim()) : null;
+      if (peak == null) return;
+      byResolution[resolution] = valley != null && valley !== peak ? { peak, valley } : peak;
+    });
+    if (Object.keys(byResolution).length) pricing.by_resolution = byResolution;
+  }
+  return Object.keys(pricing).length > 1 || pricing.peak != null ? pricing : undefined;
 }
+
+function renderPricingPreview() {
+  const pricing = (() => {
+    try { return collectDrawerPricing() || null; } catch (_) { return null; }
+  })();
+  const preview = (duration, resolution, when) => {
+    if (!pricing) return '未配置价格';
+    const rate = modelRateFor(pricing, resolution, when);
+    if (rate == null) return '—';
+    const unit = pricing.unit === 'per_image' ? '张' : pricing.unit === 'per_call' ? '次' : pricing.unit === 'per_token' ? 'Token' : '秒';
+    const symbol = pricing.currency === 'USD' ? '$' : '¥';
+    return `${symbol}${(rate * duration).toFixed(2)}`;
+  };
+  const options = drawerResolutionOptions();
+  const res1 = options[0] || '';
+  const res2 = options[1] || options[0] || '';
+  $('#preview1Label').textContent = `5 秒 / ${res1 || '默认规格'} / 峰值时段`;
+  $('#preview1Value').textContent = preview(pricing && pricing.unit === 'per_image' ? 1 : 5, res1, '2026-06-01T02:00:00Z');
+  $('#preview2Label').textContent = `10 秒 / ${res2 || '默认规格'} / 谷值时段`;
+  $('#preview2Value').textContent = preview(pricing && pricing.unit === 'per_image' ? 2 : 10, res2, '2026-06-01T17:00:00Z');
+}
+
+// ---- 保存 / 删除 / 关闭 ----
+function collectDrawerModel() {
+  const base = modelUI.editingId ? state.models.find((m) => m.id === modelUI.editingId) || {} : {};
+  const model = {
+    ...base,
+    id: $('#modelId').value.trim(),
+    name: $('#modelName').value.trim(),
+    workflow: $('#modelWorkflow').value.trim(),
+    kind: $('#modelKind').value,
+    provider: $('#modelProvider').value.trim(),
+    description: $('#modelDescription').value.trim(),
+    visible: $('#modelVisible').checked,
+    sort: Number($('#modelSort').value) || 0,
+    request_url: $('#requestUrl').value.trim(),
+    query_url: $('#modelKind').value === 'video' ? $('#queryUrl').value.trim() : '',
+    token_id: $('#modelToken').value,
+    timeout_seconds: Number($('#modelTimeout').value) || 300,
+    poll_interval: Number($('#modelPollInterval').value) || 3,
+    max_concurrency: Number($('#modelConcurrency').value) || 5,
+    enabled: $('#advEnabled').checked,
+    max_retry: Number($('#advMaxRetry').value) || 0,
+    debug: $('#advDebug').checked,
+    fields: modelUI.drawerFields,
+    ...(modelUI.drawerPricing && Object.keys(modelUI.drawerPricing).length ? { pricing: modelUI.drawerPricing } : {}),
+  };
+  if (!model.name || !model.id) throw new Error('模型名称和模型 ID 为必填');
+  if (!model.workflow) throw new Error('工作流 ID 为必填');
+  if (!model.request_url) throw new Error('提交地址为必填');
+  if (model.kind === 'video' && !model.query_url) throw new Error('视频模型的查询地址为必填');
+  if (!model.token_id) throw new Error('请选择使用令牌');
+  return model;
+}
+
+async function saveSettings() {
+  try {
+    modelUI.drawerPricing = collectDrawerPricing();
+    modelUI.drawerFields = [...modelUI.drawerFields];
+    if (modelUI.fieldsMode === 'json') {
+      modelUI.drawerFields = JSON.parse($('#modelFields').value);
+    }
+    const model = collectDrawerModel();
+    const res = await fetch(`${settings.apiBase}/api/models`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+    const saved = normalizeModel(data.model);
+    const index = state.models.findIndex((m) => m.id === saved.id);
+    if (index >= 0) state.models[index] = saved;
+    else state.models.push(saved);
+    modelUI.editingId = saved.id;
+    modelUI.dirty = false;
+    modelUI.savedAt = saved.updated_at;
+    updateDrawerSavedAt();
+    populateDrawer(saved);
+    renderModelPage();
+    await initializeModels();
+  } catch (err) {
+    alert(`保存失败：${err.message}`);
+  }
+}
+
+async function deleteModelFromDrawer() {
+  if (!modelUI.editingId) return;
+  const model = state.models.find((m) => m.id === modelUI.editingId);
+  if (!model) return;
+  if (!window.confirm(`确定删除模型「${model.name}」吗？此操作不可恢复。`)) return;
+  await deleteModelById(modelUI.editingId);
+}
+
+
+
+function markDrawerDirty() {
+  modelUI.dirty = true;
+}
+
+function showFieldsJsonError(message) {
+  const el = $('#fieldsJsonError');
+  if (!el) return;
+  el.hidden = false;
+  el.classList.add('json-error');
+  el.textContent = message;
+}
+
+async function runDrawerModelTest() {
+  const result = $('#modelTestResult');
+  if (!result) return;
+  result.className = 'model-test-result';
+  result.textContent = '测试中…';
+  let model;
+  try {
+    model = collectDrawerModel();
+  } catch (_) {
+    model = { kind: $('#modelKind').value, request_url: $('#requestUrl').value.trim(), query_url: $('#queryUrl').value.trim(), token_id: $('#modelToken').value };
+  }
+  try {
+    const res = await fetch(`${settings.apiBase}/api/models/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
+    const data = await res.json();
+    result.className = `model-test-result ${data.ok ? 'ok' : 'bad'}`;
+    result.textContent = `${data.ok ? '连接正常' : '连接失败'} · ${data.latency_ms}ms`;
+    result.title = data.msg || '';
+  } catch (err) {
+    result.className = 'model-test-result bad';
+    result.textContent = `连接失败：${err.message}`;
+  }
+}
+
+function addPriceResRowFromButton() {
+  const existing = {};
+  $$('#priceResRows .price-res-row').forEach((row) => {
+    const name = row.querySelector('.price-res-name').value.trim();
+    if (!name) return;
+    existing[name] = { peak: row.querySelector('[data-res-peak]').value, valley: row.querySelector('[data-res-valley]').value };
+  });
+  addPriceResRow('', { peak: '', valley: '' }, drawerResolutionOptions());
+}
+
 
 function applySelectedModel() {
   const model = selectedModel();
@@ -1336,104 +2108,6 @@ async function deleteTasks(ids) {
   }
 }
 
-async function openSettings() {
-  showView('settings');
-  try {
-    const [modelRes, tokenRes] = await Promise.all([fetch(`${settings.apiBase}/api/models`), fetch(`${settings.apiBase}/api/tokens`)]);
-    const data = await modelRes.json();
-    const tokenData = await tokenRes.json();
-    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
-    state.models = data.models || [];
-    state.tokens = tokenData.tokens || [];
-    renderModelAdminList();
-  } catch (err) {
-    $('#settingsStatus').textContent = `读取配置失败：${err.message}`;
-    $('#settingsStatus').style.color = '#db5c52';
-  }
-}
-
-function renderModelAdminList() {
-  $('#modelAdminList').innerHTML = state.models.map((model) => `<button type="button" data-model-admin="${escapeHtml(model.id)}"><b>${escapeHtml(model.name)}</b><small>${escapeHtml(model.workflow)}</small><span>${escapeHtml(state.tokens.find((token) => token.id === model.token_id)?.name || '未选择')}</span></button>`).join('');
-  $$('[data-model-admin]').forEach((button) => button.addEventListener('dblclick', () => selectAdminModel(button.dataset.modelAdmin)));
-}
-
-function selectAdminModel(id) {
-  const model = state.models.find((item) => item.id === id);
-  if (!model) return;
-  state.adminModelId = model.id;
-  $('#modelName').value = model.name || '';
-  $('#modelId').value = model.id || '';
-  $('#modelId').readOnly = true;
-  $('#modelWorkflow').value = model.workflow || '';
-  $('#requestUrl').value = model.request_url || '';
-  $('#queryUrl').value = model.query_url || '';
-  $('#modelFields').value = JSON.stringify(model.fields || [], null, 2);
-  const pricing = model.pricing || {};
-  $('#pricePeak').value = pricing.peak != null ? String(pricing.peak) : '';
-  $('#priceValley').value = pricing.valley != null ? String(pricing.valley) : '';
-  $('#priceValleyWindow').value = pricing.valley_start ? `${pricing.valley_start}-${pricing.valley_end || '00:00'}` : '';
-  renderPriceByResolutionRows(pricing.by_resolution || {});
-  renderModelTokenOptions(model.token_id);
-  $('#modelEditorBackdrop').hidden = false;
-}
-
-function newModelDraft() {
-  state.adminModelId = '';
-  ['modelName', 'modelId', 'modelWorkflow', 'requestUrl'].forEach((id) => { $(`#${id}`).value = ''; });
-  $('#modelId').readOnly = false;
-  $('#queryUrl').value = 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow/result/{task_id}';
-  $('#modelFields').value = JSON.stringify([{ key: 'prompt', label: 'prompt', type: 'textarea', required: true }, { key: 'reference_images', label: '参考图片', type: 'images', required: true, min: 1, max: 10 }], null, 2);
-  clearPricingEditor();
-  renderModelTokenOptions(state.tokens[0]?.id || '');
-  $('#modelEditorBackdrop').hidden = false;
-}
-
-function renderModelTokenOptions(selectedId) {
-  $('#modelToken').innerHTML = '<option value="">请选择令牌</option>' + state.tokens.map((token) => `<option value="${escapeHtml(token.id)}">${escapeHtml(token.name)} · ${escapeHtml(token.masked)}</option>`).join('');
-  $('#modelToken').value = selectedId || '';
-}
-
-async function saveSettings() {
-  const status = $('#settingsStatus');
-  let fields;
-  try { fields = JSON.parse($('#modelFields').value.trim() || '[]'); }
-  catch (_) { status.textContent = '保存失败：JSON 格式不正确'; status.style.color = '#db5c52'; return; }
-  let pricing;
-  try { pricing = collectPricingFromEditor(); }
-  catch (err) { status.textContent = `保存失败：${err.message}`; status.style.color = '#db5c52'; return; }
-  const model = { id: $('#modelId').value.trim(), name: $('#modelName').value.trim(), workflow: $('#modelWorkflow').value.trim(), request_url: $('#requestUrl').value.trim(), query_url: $('#queryUrl').value.trim(), token_id: $('#modelToken').value, request_params: {}, fields, ...(pricing ? { pricing } : {}) };
-  try {
-    const res = await fetch(`${settings.apiBase}/api/models`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
-    status.textContent = '模型已保存';
-    status.style.color = 'var(--green)';
-    state.adminModelId = data.model.id;
-    await initializeModels();
-    renderModelAdminList();
-    selectAdminModel(data.model.id);
-    $('#modelEditorBackdrop').hidden = true;
-  } catch (err) {
-    status.textContent = `保存失败：${err.message}`;
-    status.style.color = '#db5c52';
-  }
-}
-
-async function deleteAdminModel() {
-  if (!state.adminModelId || !confirm('确定删除这个模型配置吗？')) return;
-  const res = await fetch(`${settings.apiBase}/api/models/${encodeURIComponent(state.adminModelId)}`, { method: 'DELETE' });
-  const data = await res.json();
-  if (!data.ok) return alert(`删除失败：${data.msg}`);
-  state.adminModelId = '';
-  $('#modelEditorBackdrop').hidden = true;
-  await openSettings();
-  await initializeModels();
-}
-
 async function openTokens() {
   showView('tokens');
   try {
@@ -2097,10 +2771,10 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#openSettings').addEventListener('click', openSettings);
   $('#openTokens').addEventListener('click', openTokens);
   $('#saveSettings').addEventListener('click', saveSettings);
-  $('#addModel').addEventListener('click', newModelDraft);
-  $('#deleteModel').addEventListener('click', deleteAdminModel);
-  $('#closeModelEditor').addEventListener('click', () => { $('#modelEditorBackdrop').hidden = true; });
-  $('#modelEditorBackdrop').addEventListener('click', (event) => { if (event.target === $('#modelEditorBackdrop')) $('#modelEditorBackdrop').hidden = true; });
+  $('#addModel').addEventListener('click', () => openModelDrawer(null));
+  $('#deleteModel').addEventListener('click', deleteModelFromDrawer);
+  $('#closeModelEditor').addEventListener('click', requestCloseModelDrawer);
+  $('#modelEditorBackdrop').addEventListener('click', (event) => { if (event.target === $('#modelEditorBackdrop')) requestCloseModelDrawer(); });
   $('#saveToken').addEventListener('click', saveToken);
   $('#addImageLink').addEventListener('click', addImageLink);
   $('#localImageUpload').addEventListener('change', addLocalImages);
@@ -2148,6 +2822,24 @@ document.addEventListener('DOMContentLoaded', () => {
   initializeModels().then(() => { initializeFormDraft(); initializeImageFormDraft(); });
   initializeDownloadDirectory();
   $('#chooseDownloadDirectory').addEventListener('click', chooseDownloadDirectory);
+  $('#modelSearch').addEventListener('input', () => { modelUI.search = $('#modelSearch').value; modelUI.page = 1; renderModelTable(); });
+  $('#modelFilterKind').addEventListener('change', () => { modelUI.kind = $('#modelFilterKind').value; modelUI.page = 1; renderModelTable(); });
+  $('#modelFilterProvider').addEventListener('change', () => { modelUI.provider = $('#modelFilterProvider').value; modelUI.page = 1; renderModelTable(); });
+  $('#modelFilterStatus').addEventListener('change', () => { modelUI.status = $('#modelFilterStatus').value; modelUI.page = 1; renderModelTable(); });
+  $('#modelSort').addEventListener('change', () => { modelUI.sort = $('#modelSort').value; modelUI.page = 1; renderModelTable(); });
+  $('#modelPageSize').addEventListener('change', () => { modelUI.pageSize = Number($('#modelPageSize').value) || 10; modelUI.page = 1; renderModelTable(); });
+  $('#modelSelectAll').addEventListener('change', (event) => {
+    document.querySelectorAll('#modelTableBody [data-model-check]').forEach((input) => {
+      input.checked = event.target.checked;
+      if (input.checked) modelUI.selected.add(input.dataset.modelCheck);
+      else modelUI.selected.delete(input.dataset.modelCheck);
+      input.closest('tr').classList.toggle('selected', input.checked);
+    });
+    renderModelBatchBar();
+  });
+  $('#modelBatchEnable').addEventListener('click', () => batchUpdateEnabled(true));
+  $('#modelBatchDisable').addEventListener('click', () => batchUpdateEnabled(false));
+  $('#modelBatchDelete').addEventListener('click', batchDeleteSelected);
   $('#sidebarToggle').addEventListener('click', toggleSidebar);
   ['prompt', 'duration', 'resolution', 'seed', 'taskSequence'].forEach((id) => {
     $(`#${id}`).addEventListener('input', saveForm);
@@ -2155,6 +2847,43 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#scheduleSubmit').addEventListener('change', saveForm);
   $('#modelSelect').addEventListener('change', () => { applySelectedModel(); saveForm(); });
+  $('#modelDrawer').addEventListener('input', () => { modelUI.dirty = true; if (!$('#modelDrawer').querySelector('[data-model-pane="pricing"]').hidden) renderPricingPreview(); });
+  $('#modelDrawer').addEventListener('change', () => { modelUI.dirty = true; });
+  $$('.drawer-tabs [data-model-tab]').forEach((button) => button.addEventListener('click', () => setDrawerTab(button.dataset.modelTab)));
+  $('#toggleFieldsJson').addEventListener('click', () => setFieldsMode(modelUI.fieldsMode === 'visual' ? 'json' : 'visual'));
+  $('#formatFieldsJson').addEventListener('click', () => {
+    try { $('#modelFields').value = JSON.stringify(JSON.parse($('#modelFields').value), null, 2); showFieldsJsonError(''); }
+    catch (err) { showFieldsJsonError(`JSON 无效：${err.message}`); }
+  });
+  $('#validateFieldsJson').addEventListener('click', () => {
+    try { JSON.parse($('#modelFields').value); showFieldsJsonError(''); }
+    catch (err) { showFieldsJsonError(`JSON 无效：${err.message}`); }
+  });
+  $('#restoreFieldsJson').addEventListener('click', () => { $('#modelFields').value = modelUI.loadedFieldsSnapshot; showFieldsJsonError(''); });
+  $('#copyFieldsJson').addEventListener('click', () => {
+    navigator.clipboard.writeText($('#modelFields').value).then(() => showFieldsJsonError('已复制到剪贴板')).catch(() => {});
+  });
+  $('#addField').addEventListener('click', () => {
+    modelUI.drawerFields.push({ key: `field_${Date.now().toString(36)}`, label: '新字段', type: 'text' });
+    markDrawerDirty();
+    renderFieldBuilder();
+    const cards = document.querySelectorAll('#fieldBuilder .field-card');
+    const last = cards[cards.length - 1];
+    if (last) { last.querySelector('[data-field-edit]').click(); last.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+  });
+  $('#addPriceRes').addEventListener('click', addPriceResRowFromButton);
+  $('#priceTierEnabled').addEventListener('change', () => { markDrawerDirty(); syncPricingPaneVisibility(); renderPricingPreview(); });
+  $('#priceResEnabled').addEventListener('change', () => { markDrawerDirty(); syncPricingPaneVisibility(); renderPricingPreview(); });
+  $('#pricingUnit').addEventListener('change', () => { markDrawerDirty(); syncPricingPaneVisibility(); renderPricingPreview(); });
+  $('#testModelConnection').addEventListener('click', runDrawerModelTest);
+  $('#cancelModelEditor').addEventListener('click', requestCloseModelDrawer);
+  $('#disableModelBtn').addEventListener('click', () => {
+    $('#advEnabled').checked = false;
+    saveSettings();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !$('#modelEditorBackdrop').hidden) requestCloseModelDrawer();
+  });
   $('#imageModelSelect').addEventListener('change', () => { applySelectedImageModel(); saveImageForm(); });
   $('#submitImageBatch').addEventListener('click', submitImageBatch);
   $('#addImageRefLink').addEventListener('click', () => {

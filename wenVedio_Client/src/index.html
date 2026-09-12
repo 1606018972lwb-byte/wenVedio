@@ -143,39 +143,202 @@
         </section>
 
         <section class="settings-view" id="settingsView" hidden>
-          <div class="settings-intro"><span class="section-kicker">04 / MODELS</span><h2>模型管理</h2><p>双击模型行打开配置，表单字段会驱动视频生成页。</p></div>
-          <section class="panel settings-panel model-settings-panel" aria-labelledby="settingsTitle">
-            <div class="panel-heading settings-heading"><div><span class="section-kicker">MODEL REGISTRY</span><h3 id="settingsTitle">模型列表</h3></div></div>
-            <div class="model-manager">
-              <aside class="model-list-pane"><button class="add-model-button" id="addModel" type="button">＋ 新增模型</button><div class="model-list-header"><span>模型名称</span><span>工作流 ID</span><span>令牌</span></div><div id="modelAdminList" class="model-admin-list"></div></aside>
-              <div class="model-editor-backdrop" id="modelEditorBackdrop" hidden><div class="model-editor">
-                <div class="model-editor-header"><div><span class="section-kicker">MODEL CONFIG</span><h3>模型配置</h3></div><button id="closeModelEditor" type="button">×</button></div>
-                <div class="settings-form">
-                  <label class="field"><span>模型名称</span><input id="modelName" type="text" /></label>
-                  <label class="field"><span>模型 ID</span><input id="modelId" type="text" /></label>
-                  <label class="field field-wide"><span>工作流 ID</span><input id="modelWorkflow" type="text" /></label>
-                  <label class="field field-wide"><span>提交地址</span><input id="requestUrl" type="url" /></label>
-                  <label class="field field-wide"><span>查询地址</span><input id="queryUrl" type="url" /></label>
-                  <label class="field field-wide"><span>使用令牌</span><select id="modelToken"></select><small class="field-help">请先在令牌管理中添加 API Key</small></label>
-                  <label class="field field-wide"><span>表单字段定义 <small>JSON 数组</small></span><textarea id="modelFields" rows="16" spellcheck="false"></textarea><small class="field-help">支持 textarea、number、select、images；修改后视频生成页自动更新</small></label>
-                </div>
-                <div class="pricing-editor">
-                  <div class="pricing-editor-head"><b>价格设置（可选，单位 元/秒）</b><small>全部留空表示不配置价格；谷值时段外的时段按峰值计；设置了分辨率价格时，该分辨率按此价格计，不再区分峰谷</small></div>
-                  <div class="pricing-grid">
-                    <label class="field"><span>峰值价格</span><input id="pricePeak" type="number" min="0" step="0.001" placeholder="如 0.02" /></label>
-                    <label class="field"><span>谷值价格</span><input id="priceValley" type="number" min="0" step="0.001" placeholder="如 0.01" /></label>
-                    <label class="field"><span>谷值时段</span><input id="priceValleyWindow" type="text" placeholder="00:00-08:00" /></label>
-                  </div>
-                  <div class="pricing-res"><b>按分辨率价格</b><div id="priceByResolution" class="price-res-list"></div></div>
-                </div>
-                <div class="settings-actions"><button class="primary-button" id="saveSettings" type="button">保存模型</button><button class="delete-selected-button" id="deleteModel" type="button">删除模型</button></div>
-              </div></div>
-            </div>
-            <p class="test-result" id="settingsStatus" role="status"></p>
+          <div class="settings-intro">
+            <div><span class="section-kicker">04 / MODELS</span><h2>模型管理</h2><p>管理图片与视频生成模型、调用配置和启用状态</p></div>
+            <button class="primary-button" id="addModel" type="button"><span>＋</span> 新增模型</button>
+          </div>
+          <section class="model-stats" aria-label="模型统计">
+            <div class="model-stat-card"><span class="model-stat-icon stat-all">◫</span><div class="model-stat-copy"><span>全部模型</span><b id="statAllModels">0</b></div></div>
+            <div class="model-stat-card"><span class="model-stat-icon stat-image">▣</span><div class="model-stat-copy"><span>图片模型</span><b id="statImageModels">0</b></div></div>
+            <div class="model-stat-card"><span class="model-stat-icon stat-video">▶</span><div class="model-stat-copy"><span>视频模型</span><b id="statVideoModels">0</b></div></div>
+            <div class="model-stat-card"><span class="model-stat-icon stat-disabled">⊘</span><div class="model-stat-copy"><span>已停用</span><b id="statDisabledModels">0</b></div></div>
           </section>
+          <section class="model-toolbar" aria-label="模型筛选">
+            <input id="modelSearch" type="search" placeholder="搜索模型名称、Model ID 或供应商..." />
+            <select id="modelFilterKind">
+              <option value="">全部类型</option>
+              <option value="image">图片生成</option>
+              <option value="video">视频生成</option>
+              <option value="img2vid">图生视频</option>
+              <option value="multi_ref">多图参考</option>
+              <option value="first_last">首尾帧</option>
+              <option value="other">其他</option>
+            </select>
+            <select id="modelFilterProvider"><option value="">全部供应商</option></select>
+            <select id="modelFilterStatus">
+              <option value="">全部状态</option>
+              <option value="enabled">已启用</option>
+              <option value="disabled">已停用</option>
+              <option value="error">配置异常</option>
+            </select>
+            <select id="modelSort">
+              <option value="manual">手动排序</option>
+              <option value="created">创建时间</option>
+              <option value="name">名称</option>
+              <option value="updated">最近修改</option>
+            </select>
+          </section>
+          <section class="panel model-table-panel">
+            <div class="model-batch-bar" id="modelBatchBar" hidden>
+              <span>已选 <b id="modelSelectedCount">0</b> 项</span>
+              <button type="button" id="modelBatchEnable">启用</button>
+              <button type="button" id="modelBatchDisable">停用</button>
+              <button type="button" id="modelBatchDelete">删除</button>
+            </div>
+            <div class="table-wrap model-table-wrap">
+              <table class="model-table">
+                <thead><tr>
+                  <th class="drag-col" aria-label="拖拽排序"></th>
+                  <th class="check-col"><input id="modelSelectAll" type="checkbox" aria-label="全选" /></th>
+                  <th>模型信息</th>
+                  <th>类型</th>
+                  <th class="col-provider">供应商</th>
+                  <th>状态</th>
+                  <th class="col-token">调用配置</th>
+                  <th class="col-actions">操作</th>
+                </tr></thead>
+                <tbody id="modelTableBody"></tbody>
+              </table>
+            </div>
+            <div class="model-pagination">
+              <span>共 <b id="modelTotal">0</b> 条</span>
+              <select id="modelPageSize" aria-label="每页条数"><option value="10">10条/页</option><option value="20">20条/页</option><option value="50">50条/页</option></select>
+              <div class="model-pager" id="modelPager"></div>
+            </div>
+          </section>
+
+          <div class="model-editor-backdrop" id="modelEditorBackdrop" hidden>
+            <aside class="model-drawer" id="modelDrawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+              <header class="model-drawer-header">
+                <div class="model-drawer-title"><span class="section-kicker">MODEL CONFIG</span><h3 id="drawerTitle">模型配置</h3><p id="drawerModelName">—</p></div>
+                <div class="model-drawer-head-right">
+                  <span class="state enabled" id="drawerStatus"><i></i>已启用</span>
+                  <button class="model-drawer-close" id="closeModelEditor" type="button" aria-label="关闭">×</button>
+                </div>
+              </header>
+              <nav class="drawer-tabs" aria-label="配置分区">
+                <button type="button" class="active" data-model-tab="basic">基础配置</button>
+                <button type="button" data-model-tab="api">接口配置</button>
+                <button type="button" data-model-tab="fields">表单字段</button>
+                <button type="button" data-model-tab="pricing">价格配置</button>
+                <button type="button" data-model-tab="advanced">高级设置</button>
+              </nav>
+              <div class="model-drawer-body">
+                <div class="drawer-pane" data-model-pane="basic">
+                  <div class="drawer-group"><b class="drawer-group-title">基础信息</b>
+                    <div class="drawer-grid">
+                      <label class="field"><span>模型名称 <i class="req">*</i></span><input id="modelName" type="text" /></label>
+                      <label class="field"><span>模型 ID <i class="req">*</i></span><input id="modelId" type="text" /></label>
+                      <label class="field field-wide"><span>工作流 ID</span><input id="modelWorkflow" type="text" /></label>
+                      <label class="field"><span>模型类型</span><select id="modelKind"><option value="video">视频生成</option><option value="image">图片生成</option></select></label>
+                      <label class="field"><span>供应商</span><input id="modelProvider" type="text" placeholder="如 MiniMax / OpenAI / 自定义" list="providerList" /><datalist id="providerList"><option value="MiniMax"></option><option value="OpenAI"></option><option value="Stability AI"></option><option value="Black Forest Labs"></option><option value="AutoDL"></option><option value="自定义"></option></datalist></label>
+                      <label class="field"><span>排序</span><input id="modelSort" type="number" step="1" /></label>
+                      <label class="field field-wide"><span>描述</span><textarea id="modelDescription" rows="2" maxlength="200" placeholder="模型用途说明（可选）"></textarea></label>
+                      <label class="switch-row"><span>是否显示在生成页面</span><label class="switch"><input id="modelVisible" type="checkbox" /><span></span></label></label>
+                    </div>
+                  </div>
+                </div>
+                <div class="drawer-pane" data-model-pane="api" hidden>
+                  <div class="drawer-group"><b class="drawer-group-title">调用地址</b>
+                    <div class="drawer-grid">
+                      <label class="field field-wide"><span>提交地址 <i class="req">*</i></span><input id="requestUrl" type="url" placeholder="https://.../v1/images/generations" /></label>
+                      <label class="field field-wide" id="queryUrlField"><span>查询地址 <i class="req">*</i></span><input id="queryUrl" type="url" placeholder="https://.../result/{task_id}" /><small class="field-help">视频模型必填；{task_id} 会被替换为平台任务 ID</small></label>
+                      <label class="field field-wide" id="editUrlField"><span>图生图地址 <small>可选</small></span><input id="modelEditUrl" type="url" placeholder="https://.../v1/images/edits" /><small class="field-help">留空时按提交地址中的 generations→edits 推导</small></label>
+                      <label class="field field-wide"><span>使用令牌 <i class="req">*</i></span><select id="modelToken"></select><small class="field-help">完整 Key 不会显示；如需更换请到「令牌管理」</small></label>
+                    </div>
+                  </div>
+                  <div class="drawer-group"><b class="drawer-group-title">调用参数</b>
+                    <div class="drawer-grid">
+                      <label class="field"><span>超时时间（秒）</span><input id="modelTimeout" type="number" min="5" step="1" /></label>
+                      <label class="field"><span>轮询间隔（秒）</span><input id="modelPollInterval" type="number" min="1" step="1" /></label>
+                      <label class="field"><span>最大并发</span><input id="modelConcurrency" type="number" min="1" step="1" /></label>
+                    </div>
+                    <div class="model-test-row">
+                      <button class="outline-button" id="testModelConnection" type="button">🔗 测试连接</button>
+                      <span id="modelTestResult" class="model-test-result" role="status"></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="drawer-pane" data-model-pane="fields" hidden>
+                  <div class="fields-head">
+                    <b class="drawer-group-title">表单字段</b>
+                    <button class="text-button" id="toggleFieldsJson" type="button">&lt;&gt; JSON 模式</button>
+                  </div>
+                  <p class="field-help">生成页表单由这里的字段定义驱动；支持拖拽排序、编辑、复制与删除。</p>
+                  <div id="fieldBuilder"></div>
+                  <button class="add-field-button" id="addField" type="button"><span>＋</span> 添加字段</button>
+                  <div id="fieldJsonWrap" hidden>
+                    <div class="json-toolbar">
+                      <button type="button" id="formatFieldsJson">格式化</button>
+                      <button type="button" id="validateFieldsJson">校验</button>
+                      <button type="button" id="restoreFieldsJson">恢复</button>
+                      <button type="button" id="copyFieldsJson">复制</button>
+                    </div>
+                    <textarea id="modelFields" rows="16" spellcheck="false"></textarea>
+                    <p id="fieldsJsonError" class="json-error" role="alert" hidden></p>
+                  </div>
+                </div>
+                <div class="drawer-pane" data-model-pane="pricing" hidden>
+                  <div class="drawer-group"><b class="drawer-group-title">价格配置</b><p class="field-help">用于配置该模型的内部成本或计费规则。</p>
+                    <label class="field"><span>计费方式</span><select id="pricingUnit">
+                      <option value="per_second">按秒</option>
+                      <option value="per_image">按张</option>
+                      <option value="per_call">按次</option>
+                      <option value="per_token">按 Token</option>
+                      <option value="fixed">固定价格</option>
+                    </select></label>
+                    <label class="switch-row"><span>启用峰谷价格</span><label class="switch"><input id="priceTierEnabled" type="checkbox" /><span></span></label></label>
+                    <div class="drawer-grid" id="peakValleyFields">
+                      <label class="field"><span>峰值价格 <small id="priceUnitPeak">¥ / 秒</small></span><input id="pricePeak" type="number" min="0" step="0.001" placeholder="如 0.04" /></label>
+                      <label class="field"><span>谷值价格 <small id="priceUnitValley">¥ / 秒</small></span><input id="priceValley" type="number" min="0" step="0.001" placeholder="如 0.03" /></label>
+                      <label class="field"><span>谷值时段 · 开始</span><input id="priceValleyStart" type="time" value="00:00" /></label>
+                      <label class="field"><span>谷值时段 · 结束</span><input id="priceValleyEnd" type="time" value="08:00" /></label>
+                    </div>
+                  </div>
+                  <div class="drawer-group">
+                    <label class="switch-row"><span>分辨率差异定价</span><label class="switch"><input id="priceResEnabled" type="checkbox" /><span></span></label></label>
+                    <div id="priceResWrap" hidden>
+                      <div class="price-res-table" id="priceResRows"></div>
+                      <button class="add-field-button" id="addPriceRes" type="button"><span>＋</span> 添加价格规则</button>
+                      <datalist id="priceResOptions"></datalist>
+                    </div>
+                  </div>
+                  <div class="drawer-group"><b class="drawer-group-title">价格预览</b>
+                    <div class="pricing-preview">
+                      <div class="pricing-preview-row"><span id="preview1Label">—</span><b id="preview1Value">—</b></div>
+                      <div class="pricing-preview-row"><span id="preview2Label">—</span><b id="preview2Value">—</b></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="drawer-pane" data-model-pane="advanced" hidden>
+                  <div class="drawer-group"><b class="drawer-group-title">运行设置</b>
+                    <label class="switch-row"><span>是否启用</span><label class="switch"><input id="advEnabled" type="checkbox" /><span></span></label></label>
+                    <label class="switch-row"><span>是否显示在生成页面</span><label class="switch"><input id="advVisible" type="checkbox" /><span></span></label></label>
+                    <div class="drawer-grid">
+                      <label class="field"><span>排序</span><input id="advSort" type="number" step="1" /></label>
+                      <label class="field"><span>失败重试次数</span><input id="advMaxRetry" type="number" min="0" step="1" /></label>
+                    </div>
+                    <label class="switch-row"><span>调试模式</span><label class="switch"><input id="advDebug" type="checkbox" /><span></span></label></label>
+                    <small class="field-help">提示：接口超时、轮询间隔与最大并发在「接口配置」中设置；当前版本生成流程未接入并发与重试，仅保存配置。</small>
+                  </div>
+                  <div class="drawer-group danger-zone"><b class="drawer-group-title">危险操作</b>
+                    <button class="danger-button" id="disableModelBtn" type="button">停用模型</button>
+                    <button class="danger-button danger-delete" id="deleteModel" type="button">删除模型</button>
+                  </div>
+                </div>
+              </div>
+              <footer class="model-drawer-footer">
+                <span id="drawerSavedAt">上次保存：—</span>
+                <div class="model-drawer-footer-actions">
+                  <button class="outline-button" id="cancelModelEditor" type="button">取消</button>
+                  <button class="primary-button" id="saveSettings" type="button">保存修改</button>
+                </div>
+              </footer>
+            </aside>
+          </div>
         </section>
 
-        <section class="tokens-view" id="tokensView" hidden>
+                <section class="tokens-view" id="tokensView" hidden>
           <div class="settings-intro"><span class="section-kicker">05 / TOKENS</span><h2>令牌管理</h2><p>统一保存多个 API Key，模型配置只选择令牌，不直接保存 Key。新添加的令牌会自动绑定到尚未配置令牌的模型。</p></div>
           <section class="panel token-panel"><div class="token-create"><input id="tokenName" type="text" placeholder="令牌名称" /><input id="tokenValue" type="password" placeholder="粘贴 API Key" /><button class="primary-button" id="saveToken" type="button">添加令牌</button></div><div class="token-list" id="tokenList"></div><p class="test-result" id="tokenStatus"></p></section>
         </section>

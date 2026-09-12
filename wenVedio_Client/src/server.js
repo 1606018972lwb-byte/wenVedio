@@ -735,7 +735,7 @@ function sanitizePricing(pricing) {
     return Number.isFinite(num) && num >= 0 ? Math.round(num * 1000) / 1000 : null;
   };
   const out = {};
-  if (pricing.unit === 'per_image' || pricing.unit === 'per_second') out.unit = pricing.unit;
+  if (['per_image', 'per_second', 'per_call', 'per_token', 'fixed'].includes(pricing.unit)) out.unit = pricing.unit;
   if (pricing.currency === 'USD') out.currency = 'USD';
   const peak = toPrice(pricing.peak);
   if (peak != null) out.peak = peak;
@@ -849,6 +849,18 @@ async function handleApi(req, res, url) {
       request_params: model.request_params && typeof model.request_params === 'object' && !Array.isArray(model.request_params) ? model.request_params : {},
       fields: model.fields,
       ...(pricing ? { pricing } : {}),
+      enabled: model.enabled !== false,
+      visible: model.visible !== false,
+      provider: String(model.provider || '').trim(),
+      description: String(model.description || '').slice(0, 500),
+      sort: Number.isFinite(Number(model.sort)) ? Number(model.sort) : 0,
+      timeout_seconds: Number.isFinite(Number(model.timeout_seconds)) && Number(model.timeout_seconds) >= 5 ? Number(model.timeout_seconds) : 300,
+      poll_interval: Number.isFinite(Number(model.poll_interval)) && Number(model.poll_interval) >= 1 ? Number(model.poll_interval) : 3,
+      max_concurrency: Number.isFinite(Number(model.max_concurrency)) && Number(model.max_concurrency) >= 1 ? Number(model.max_concurrency) : 5,
+      max_retry: Number.isFinite(Number(model.max_retry)) && Number(model.max_retry) >= 0 ? Number(model.max_retry) : 0,
+      debug: model.debug === true,
+      created_at: models.get(id)?.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
     if (!saved.token_id || !tokens.has(saved.token_id)) return sendJson(res, 400, { ok: false, msg: '请为模型选择已保存的令牌' });
     models.set(id, saved);
@@ -856,6 +868,72 @@ async function handleApi(req, res, url) {
     if (apiKey) config.apiKey = apiKey;
     saveModels();
     return sendJson(res, 200, { ok: true, model: saved });
+  }
+
+  // 模型手动排序：按提交的 id 顺序重排
+  if (route === '/api/models/order' && req.method === 'POST') {
+    let payload = {};
+    try { payload = JSON.parse(await readBody(req)); } catch (_) {}
+    const ids = Array.isArray(payload.ids) ? payload.ids.map(String) : [];
+    if (!ids.length) return sendJson(res, 400, { ok: false, msg: '缺少排序数据' });
+    const reordered = [];
+    const seen = new Set();
+    for (const id of ids) {
+      const model = models.get(id);
+      if (model) {
+        models.delete(id);
+        models.set(id, model);
+        seen.add(id);
+      }
+    }
+    for (const [id, model] of [...models]) {
+      if (!seen.has(id)) {
+        models.delete(id);
+        models.set(id, model);
+      }
+    }
+    saveModels();
+    return sendJson(res, 200, { ok: true, order: [...models.keys()] });
+  }
+
+  // 模型连接测试：依次探测查询地址 / 提交地址，返回时延与状态
+  if (route === '/api/models/test' && req.method === 'POST') {
+    let payload = {};
+    try { payload = JSON.parse(await readBody(req)); } catch (_) {}
+    const model = payload.model && typeof payload.model === 'object' ? payload.model : models.get(String(payload.model_id || ''));
+    if (!model) return sendJson(res, 404, { ok: false, msg: '模型不存在' });
+    const token = tokenValueFor(model);
+    const started = Date.now();
+    const candidates = [];
+    if (model.kind === 'image') {
+      const modelsUrl = String(model.request_url || '').replace('/images/generations', '/models');
+      if (modelsUrl && modelsUrl !== model.request_url) candidates.push(modelsUrl);
+    } else if (model.query_url) {
+      candidates.push(String(model.query_url).replace('{task_id}', 'wenvedio-test'));
+    }
+    candidates.push(String(model.request_url || ''));
+    let lastError = '未配置地址';
+    for (const url of candidates) {
+      if (!url || !/^https?:\/\//i.test(url)) continue;
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10 * 1000);
+        let res;
+        try {
+          res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal });
+        } finally {
+          clearTimeout(timer);
+        }
+        const latency = Date.now() - started;
+        if (res.status === 401 || res.status === 403) {
+          return sendJson(res, 200, { ok: false, latency_ms: latency, status: res.status, msg: `服务可达，但令牌校验失败（HTTP ${res.status}）` });
+        }
+        return sendJson(res, 200, { ok: true, latency_ms: latency, status: res.status, msg: `连接正常（HTTP ${res.status}）` });
+      } catch (err) {
+        lastError = err.name === 'AbortError' ? '连接超时（10 秒）' : err.message;
+      }
+    }
+    return sendJson(res, 200, { ok: false, latency_ms: Date.now() - started, msg: `连接失败：${lastError}` });
   }
 
   const modelDelete = route.match(/^\/api\/models\/([^/]+)$/);
