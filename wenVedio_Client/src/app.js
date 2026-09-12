@@ -2907,6 +2907,7 @@ document.addEventListener('DOMContentLoaded', () => {
   showView('workspace');
 
   // 视频生成
+  $('#modelSelect').addEventListener('change', () => { applySelectedModel(); saveForm(); updateGenStatCards(); });
   $('#submitBatch').addEventListener('click', submitBatch);
   $('#scheduleSubmit').addEventListener('change', () => { saveForm(); syncVideoSubmitLabel(); });
   $('#videoSeed').addEventListener('input', () => { genValues.video.values.seed = $('#videoSeed').value; saveGenValues(); });
@@ -2954,6 +2955,25 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // 模型管理
+  // 模型列表工具栏：搜索 / 类型 / 供应商 / 状态 / 排序 / 每页条数和批量操作
+  $('#modelSearch').addEventListener('input', () => { modelUI.search = $('#modelSearch').value; modelUI.page = 1; renderModelTable(); });
+  $('#modelFilterKind').addEventListener('change', () => { modelUI.kind = $('#modelFilterKind').value; modelUI.page = 1; renderModelTable(); });
+  $('#modelFilterProvider').addEventListener('change', () => { modelUI.provider = $('#modelFilterProvider').value; modelUI.page = 1; renderModelTable(); });
+  $('#modelFilterStatus').addEventListener('change', () => { modelUI.status = $('#modelFilterStatus').value; modelUI.page = 1; renderModelTable(); });
+  $('#modelSort').addEventListener('change', () => { modelUI.sort = $('#modelSort').value; modelUI.page = 1; renderModelTable(); });
+  $('#modelPageSize').addEventListener('change', () => { modelUI.pageSize = Number($('#modelPageSize').value) || 10; modelUI.page = 1; renderModelTable(); });
+  $('#modelSelectAll').addEventListener('change', (event) => {
+    document.querySelectorAll('#modelTableBody [data-model-check]').forEach((input) => {
+      input.checked = event.target.checked;
+      if (input.checked) modelUI.selected.add(input.dataset.modelCheck);
+      else modelUI.selected.delete(input.dataset.modelCheck);
+      input.closest('tr').classList.toggle('selected', input.checked);
+    });
+    renderModelBatchBar();
+  });
+  $('#modelBatchEnable').addEventListener('click', () => batchUpdateEnabled(true));
+  $('#modelBatchDisable').addEventListener('click', () => batchUpdateEnabled(false));
+  $('#modelBatchDelete').addEventListener('click', batchDeleteSelected);
   $('#openSettings').addEventListener('click', openSettings);
   $('#addModel').addEventListener('click', () => openModelDrawer(null));
   $('#saveSettings').addEventListener('click', saveSettings);
