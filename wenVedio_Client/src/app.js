@@ -2262,6 +2262,13 @@ async function openTokens() {
 
 const tokenTestResults = {};
 function renderTokens() {
+  // 供应商候选 = 常用预设 + 已有令牌用过的供应商，输入框可自由填写
+  const providerDatalist = $('#providerOptions');
+  if (providerDatalist) {
+    const defaults = ['OpenAI', 'MiniMax', 'AutoDL', '自定义'];
+    const used = state.tokens.map((token) => token.provider).filter(Boolean);
+    providerDatalist.innerHTML = [...new Set([...defaults, ...used])].map((name) => `<option value="${escapeHtml(name)}"></option>`).join('');
+  }
   const tbody = $('#tokenTable');
   if (!tbody) return;
   tbody.innerHTML = '';

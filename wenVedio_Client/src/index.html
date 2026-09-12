@@ -393,7 +393,7 @@
             <b class="panel-title">添加令牌</b>
             <div class="token-add-grid">
               <label class="field"><span>令牌名称 <i class="req">*</i></span><input id="tokenName" type="text" placeholder="例：OpenAI" /></label>
-              <label class="field"><span>供应商</span><select id="tokenProvider"><option value="OpenAI">OpenAI</option><option value="MiniMax">MiniMax</option><option value="AutoDL">AutoDL</option><option value="自定义">自定义</option></select></label>
+              <label class="field"><span>供应商</span><input id="tokenProvider" type="text" list="providerOptions" placeholder="选择或输入供应商" maxlength="50" /></label>
               <label class="field"><span>API Key <i class="req">*</i></span><input id="tokenValue" type="password" placeholder="sk-..." /></label>
               <label class="field"><span>备注 <small>可选</small></span><input id="tokenRemark" type="text" placeholder="用途说明" /></label>
             </div>
@@ -414,7 +414,7 @@
               <div class="model-drawer-body">
                 <div class="drawer-group"><div class="drawer-grid">
                   <label class="field"><span>令牌名称 <i class="req">*</i></span><input id="tokenEditName" type="text" /></label>
-                  <label class="field"><span>供应商</span><select id="tokenEditProvider"><option value="OpenAI">OpenAI</option><option value="MiniMax">MiniMax</option><option value="AutoDL">AutoDL</option><option value="自定义">自定义</option></select></label>
+                  <label class="field"><span>供应商</span><input id="tokenEditProvider" type="text" list="providerOptions" placeholder="选择或输入供应商" maxlength="50" /></label>
                   <label class="field field-wide"><span>API Key <small>留空则不修改</small></span><input id="tokenEditValue" type="text" placeholder="••••••••" /></label>
                   <label class="field field-wide"><span>备注 <small>可选</small></span><input id="tokenEditRemark" type="text" placeholder="用途说明" maxlength="200" /></label>
                 </div></div>
@@ -462,6 +462,7 @@
         </div></footer>
       </aside>
     </div>
+    <datalist id="providerOptions"><option value="OpenAI"></option><option value="MiniMax"></option><option value="AutoDL"></option><option value="自定义"></option></datalist>
     <div id="toastWrap" aria-live="polite"></div>
     <script src="app.js"></script>
   </body>
