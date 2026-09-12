@@ -24,8 +24,8 @@ const state = {
   tokens: [],
   imageModelId: '',
   imageRefItems: [],
-  recordsKind: 'video',
-  tc: { filter: 'all', search: '', type: '', model: '', date: '' },
+  recordsKind: 'all',
+  tc: { filter: 'all', search: '', model: '', date: '' },
 };
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -1733,11 +1733,11 @@ function renderTasks() {
   syncVideoSubmitLabel();
 }
 function renderRecentTasks() {
-  // 「图片任务 / 视频任务」子菜单筛选时，同步隐藏另一侧的最近任务面板
+  // 图片/视频为独立页面时，只显示对应侧的最近任务面板
   const imgPanel = $('#recentImageTable')?.closest('.panel');
-  if (imgPanel) imgPanel.hidden = state.tc.type === 'video';
+  if (imgPanel) imgPanel.hidden = state.recordsKind === 'video';
   const vidPanel = $('#recentVideoTable')?.closest('.panel');
-  if (vidPanel) vidPanel.hidden = state.tc.type === 'image';
+  if (vidPanel) vidPanel.hidden = state.recordsKind === 'image';
   const imageTasks = state.tasks.filter((t) => t.kind === 'image').sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 4);
   const videoTasks = state.tasks.filter((t) => t.kind !== 'image').sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 4);
   const imgBody = $('#recentImageTable');
@@ -1794,7 +1794,6 @@ function tcMatches(task) {
   if (f.filter === 'scheduled' && status !== 'scheduled') return false;
   if (f.filter === 'completed' && status !== 'completed') return false;
   if (f.filter === 'failed' && !['failed', 'timeout'].includes(status)) return false;
-  if (f.type && task.kind !== f.type) return false;
   if (f.model && task.model_id !== f.model) return false;
   if (f.date && (beijingDayKey(task.created_at) || '') !== f.date) return false;
   if (f.search) {
@@ -1803,19 +1802,39 @@ function tcMatches(task) {
   }
   return true;
 }
+// 当前任务中心页面作用域：图片任务 / 视频任务 / 全部
+function taskCenterScoped() {
+  return state.recordsKind === 'image' || state.recordsKind === 'video'
+    ? state.tasks.filter((task) => task.kind === state.recordsKind)
+    : state.tasks;
+}
+
 function filterTaskCenter() {
-  return state.tasks.filter((task) => tcMatches(task)).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  return taskCenterScoped().filter((task) => tcMatches(task)).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 }
 function renderTaskCenter() {
   const wrap = $('#tcTable');
   if (!wrap) return;
+  // 图片任务 / 视频任务是独立页面，统计只针对当前页面
+  const scopeText = state.recordsKind === 'image' ? '图片' : state.recordsKind === 'video' ? '视频' : '';
+  const scoped = taskCenterScoped();
   const counts = {
-    all: state.tasks.length,
-    processing: state.tasks.filter((t) => ['submitting', 'queued', 'processing'].includes(taskStatus(t))).length,
-    scheduled: state.tasks.filter((t) => taskStatus(t) === 'scheduled').length,
-    completed: state.tasks.filter((t) => taskStatus(t) === 'completed').length,
-    failed: state.tasks.filter((t) => ['failed', 'timeout'].includes(taskStatus(t))).length,
+    all: scoped.length,
+    processing: scoped.filter((t) => ['submitting', 'queued', 'processing'].includes(taskStatus(t))).length,
+    scheduled: scoped.filter((t) => taskStatus(t) === 'scheduled').length,
+    completed: scoped.filter((t) => taskStatus(t) === 'completed').length,
+    failed: scoped.filter((t) => ['failed', 'timeout'].includes(taskStatus(t))).length,
   };
+  const title = $('#tcTitle');
+  if (title) title.textContent = scopeText ? `${scopeText}任务` : '任务中心';
+  const subtitle = $('#tcSubtitle');
+  if (subtitle) subtitle.textContent = scopeText
+    ? `仅显示并统计${scopeText}任务的进度与花费，可切换左侧子菜单查看另一类。`
+    : '查看和管理所有生成任务，包括进行中、已预约和已完成任务。';
+  const costLabel = $('#tcCostLabel');
+  if (costLabel) costLabel.textContent = scopeText ? `${scopeText}总花费` : '总花费';
+  const monthCostLabel = $('#tcMonthCostLabel');
+  if (monthCostLabel) monthCostLabel.textContent = scopeText ? `${scopeText}本月花费` : '本月花费';
   const set = (id, value) => { const el = $(id); if (el) el.textContent = String(value); };
   set('#tcAll', counts.all);
   set('#tcProcessing', counts.processing);
@@ -1831,7 +1850,13 @@ function renderTaskCenter() {
   wrap.innerHTML = '';
   tasks.forEach((task, index) => wrap.appendChild(taskCenterRow(task, index)));
   const empty = $('#tcEmpty');
-  if (empty) empty.hidden = tasks.length > 0;
+  if (empty) {
+    empty.hidden = tasks.length > 0;
+    const titleEl = empty.querySelector('b');
+    const descEl = empty.querySelector('p');
+    if (titleEl) titleEl.textContent = scopeText ? `还没有${scopeText}任务记录` : '还没有任务记录';
+    if (descEl) descEl.textContent = scopeText ? `提交${scopeText}任务后，记录会出现在这里` : '提交任务后，记录会出现在这里';
+  }
 }
 function taskCenterRow(task, index) {
   const tr = document.createElement('tr');
@@ -2859,8 +2884,9 @@ async function downloadImageTask(task) {
 function renderUsageStats() {
   const totalEl = $('#statTotalCost');
   if (!totalEl) return;
+  const scoped = taskCenterScoped();
   const monthKey = (beijingDayKey(new Date().toISOString()) || '').slice(0, 7);
-  const monthTasks = state.tasks.filter((task) => (beijingDayKey(task.created_at) || '').slice(0, 7) === monthKey);
+  const monthTasks = scoped.filter((task) => (beijingDayKey(task.created_at) || '').slice(0, 7) === monthKey);
   const sumCosts = (tasks) => {
     const sums = {};
     tasks.forEach((task) => {
@@ -2870,13 +2896,13 @@ function renderUsageStats() {
     });
     return Object.entries(sums).map(([cur, value]) => `${cur === 'USD' ? '$' : '¥'}${value.toFixed(2)}`).join(' + ') || null;
   };
-  totalEl.textContent = sumCosts(state.tasks) || '—';
+  totalEl.textContent = sumCosts(scoped) || '—';
   const monthEl = $('#statMonthCost');
   if (monthEl) monthEl.textContent = sumCosts(monthTasks) || '—';
   const table = $('#usageModelTable');
   if (!table) return;
   const byModel = new Map();
-  state.tasks.forEach((task) => {
+  scoped.forEach((task) => {
     if (typeof task.cost !== 'number') return;
     const key = task.model_id || task.model_name || '未知模型';
     const entry = byModel.get(key) || { name: task.model_name || key, count: 0, sums: {} };
@@ -2905,18 +2931,16 @@ function toggleTasksGroup() {
   applyTasksGroupCollapsed(collapsed);
 }
 
+// 图片任务 / 视频任务 / 全部：各自独立页面
 function setRecordsKind(kind) {
-  state.recordsKind = kind === 'image' ? 'image' : 'video';
-  state.tc.type = state.recordsKind;
-  const typeSelect = $('#tcType');
-  if (typeSelect) typeSelect.value = state.recordsKind;
+  state.recordsKind = kind === 'image' ? 'image' : kind === 'video' ? 'video' : 'all';
   syncRecordsKindHighlight();
   renderTasks();
   showView('tasks');
 }
-// 子菜单高亮跟随任务中心的类型筛选：仅图片/视频时点亮对应子项，全部类型时不点亮
+// 子菜单高亮：仅图片/视频页面点亮对应子项，全部页面不点亮
 function syncRecordsKindHighlight() {
-  const kind = state.tc.type === 'image' ? 'Image' : state.tc.type === 'video' ? 'Video' : '';
+  const kind = state.recordsKind === 'image' ? 'Image' : state.recordsKind === 'video' ? 'Video' : '';
   $$('.nav-sub-item').forEach((item) => item.classList.toggle('active', kind !== '' && item.id === `navTasks${kind}`));
 }
 
@@ -3082,7 +3106,6 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#downloadSelected').addEventListener('click', downloadSelected);
   $('#deleteSelected').addEventListener('click', () => deleteTasks([...state.selected]));
   $('#tcSearch').addEventListener('input', () => { state.tc.search = $('#tcSearch').value; renderTaskCenter(); });
-  $('#tcType').addEventListener('change', () => { state.tc.type = $('#tcType').value; syncRecordsKindHighlight(); renderTasks(); });
   $('#tcModel').addEventListener('change', () => { state.tc.model = $('#tcModel').value; renderTaskCenter(); });
   $('#tcDate').addEventListener('change', () => { state.tc.date = $('#tcDate').value; renderTaskCenter(); });
   $$('.tc-tabs [data-tc-filter]').forEach((button) => button.addEventListener('click', () => {
@@ -3193,7 +3216,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 导航
   $('#navImage').addEventListener('click', (event) => { event.preventDefault(); showView('image'); });
   $('#navWorkspace').addEventListener('click', (event) => { event.preventDefault(); showView('workspace'); });
-  $('#navTasks').addEventListener('click', (event) => { event.preventDefault(); toggleTasksGroup(); state.tc.type = ''; const typeSelect = $('#tcType'); if (typeSelect) typeSelect.value = ''; syncRecordsKindHighlight(); renderTasks(); showView('tasks'); });
+  $('#navTasks').addEventListener('click', (event) => { event.preventDefault(); toggleTasksGroup(); setRecordsKind('all'); });
   $('#navTasksImage').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('image'); });
   $('#navTasksVideo').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('video'); });
   $('#navQuery').addEventListener('click', (event) => { event.preventDefault(); showView('query'); });
