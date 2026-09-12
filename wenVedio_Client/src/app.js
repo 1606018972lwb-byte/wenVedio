@@ -22,6 +22,7 @@ const state = {
   selectedModelId: '',
   adminModelId: '',
   tokens: [],
+  tokensLoaded: false,
   imageModelId: '',
   imageRefItems: [],
   recordsKind: 'all',
@@ -482,7 +483,9 @@ function tokenNameFor(model) {
 
 function modelStatusOf(model) {
   if (model.enabled === false) return 'disabled';
-  if (!model.request_url || !tokenById(model.token_id)) return 'error';
+  if (!model.request_url) return 'error';
+  // 启动阶段令牌可能还没加载完，此时先不误报「配置异常」，加载完成后会重新渲染
+  if (!tokenById(model.token_id)) return state.tokensLoaded ? 'error' : 'enabled';
   return 'enabled';
 }
 
@@ -542,7 +545,7 @@ function renderModelStats() {
   const models = state.models.map(normalizeModel);
   $('#statAllModels').textContent = String(models.length);
   $('#statImageModels').textContent = String(models.filter((m) => m.kind === 'image').length);
-  $('#statVideoModels').textContent = String(models.filter((m) => m.kind !== 'image').length);
+  $('#statVideoModels').textContent = String(models.filter((m) => m.kind === 'video').length);
   $('#statDisabledModels').textContent = String(models.filter((m) => m.enabled === false).length);
 }
 
@@ -2378,6 +2381,18 @@ async function deleteTasks(ids) {
   }
 }
 
+// 启动时预取令牌：模型「状态 / 调用配置」列依赖它，避免加载完成前误报配置异常
+async function loadTokensCache() {
+  try {
+    const res = await fetch(`${settings.apiBase}/api/tokens`);
+    const data = await res.json();
+    if (data.ok) {
+      state.tokens = data.tokens || [];
+      state.tokensLoaded = true;
+    }
+  } catch (_) { /* 服务未就绪时忽略，打开令牌页会重试 */ }
+}
+
 async function openTokens() {
   showView('tokens');
   try {
@@ -2385,6 +2400,7 @@ async function openTokens() {
     const data = await res.json();
     if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
     state.tokens = data.tokens || [];
+    state.tokensLoaded = true;
     renderTokens();
   } catch (err) { $('#tokenStatus').textContent = `读取令牌失败：${err.message}`; }
 }
@@ -2580,6 +2596,11 @@ function renderImagePricePanel() {
     lines.innerHTML = rows.map((row) => `<div>${escapeHtml(row)}</div>`).join('');
   }
 }
+// 图片参数：旧的表单字段已由 genValues 驱动的参数字段替代
+function imageFormParams() {
+  return getImageParams(selectedImageModel() || {});
+}
+
 function imageFormParamsSnapshot() {
   return imageFormParams();
 }
@@ -2608,10 +2629,9 @@ function restoreImageForm() {
   }
   if (typeof saved.prompt === 'string') $('#imagePrompt').value = saved.prompt;
   if (saved.params && typeof saved.params === 'object') {
-    $$('[data-image-field]').forEach((input) => {
-      const value = saved.params[input.dataset.imageField];
-      if (value != null) input.value = String(value);
-    });
+    genValues.image.values = { ...genValues.image.values, ...saved.params };
+    saveGenValues();
+    renderGenFields('image', selectedImageModel() || {});
   }
   renderImagePricePanel();
 }
@@ -3244,6 +3264,36 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#sidebarToggle').addEventListener('click', toggleSidebar);
   setInterval(() => { renderCurrentPrice(); renderImagePricePanel(); }, 30 * 1000);
-  initializeModels().then(() => { initializeFormDraft(); initializeImageFormDraft(); });
   initializeDownloadDirectories();
+  bootApp();
 });
+
+// 启动流程：先加载配置（令牌 / 任务 / 模型），完成后再关闭启动动画
+async function bootApp() {
+  const bootEl = $('#appBoot');
+  const startedAt = Date.now();
+  document.body.classList.add('booting');
+  const setText = (text) => { const el = $('#appBootText'); if (el) el.textContent = text; };
+  try {
+    setText('正在加载令牌与任务…');
+    await Promise.all([loadTokensCache(), loadTasks()]);
+    setText('正在加载模型配置…');
+    await initializeModels();
+    setText('正在准备界面…');
+    initializeFormDraft();
+    initializeImageFormDraft();
+    renderTasks();
+  } catch (err) {
+    console.error('启动加载失败', err);
+    setText('配置加载失败，请检查本地服务是否正常');
+  } finally {
+    // 至少展示 0.7 秒，避免动画一闪而过
+    const wait = Math.max(0, 700 - (Date.now() - startedAt));
+    setTimeout(() => {
+      if (!bootEl) return;
+      bootEl.classList.add('done');
+      document.body.classList.remove('booting');
+      setTimeout(() => bootEl.remove(), 400);
+    }, wait);
+  }
+}

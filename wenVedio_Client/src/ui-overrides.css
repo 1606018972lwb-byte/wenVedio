@@ -103,7 +103,7 @@ body { background: var(--canvas); color: var(--ink); }
 .advanced-params summary span { margin-left: 6px; color: #9aa4af; font: 9px "DM Mono", monospace; }
 .advanced-params .field { padding: 4px 13px 14px; }
 .primary-button { background: var(--blue); border-color: var(--blue); }
-.primary-button:hover { background: #244bd1; }
+.primary-button:hover { background: #244bd1; }
 .api-card { margin: 18px 0; background: #f3f5f8; }
 .api-note { margin-top: 14px; }
 .tasks-panel { margin-top: 18px; }
@@ -706,3 +706,16 @@ span.task-thumb-icon { width: 64px; height: 40px; display: grid; place-items: ce
 .tc-actions-wrap .row-action-menu button.danger { color: #cf554c; }
 .tc-check-cell { display: flex; align-items: center; gap: 6px; }
 .tc-index { color: #9aa4b2; font-size: 11px; font-family: "DM Mono", monospace; }
+/* ===== 启动加载动画 ===== */
+.app-boot { position: fixed; inset: 0; z-index: 999; display: grid; place-items: center; background: #f6f7f9; transition: opacity .35s ease, visibility .35s ease; }
+.app-boot.done { opacity: 0; visibility: hidden; }
+.app-boot-card { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.app-boot-mark { width: 56px; height: 56px; display: grid; place-items: center; border-radius: 16px; background: #1e2935; color: #fff; font-size: 30px; font-weight: 800; animation: bootPop .6s ease; }
+.app-boot-title { font-size: 20px; font-weight: 800; letter-spacing: -.4px; color: #18202b; }
+.app-boot-title span { color: var(--blue); }
+.app-boot-bar { width: 180px; height: 4px; border-radius: 4px; background: #e5e8ee; overflow: hidden; }
+.app-boot-bar i { display: block; width: 40%; height: 100%; border-radius: 4px; background: var(--blue); animation: bootSlide 1.1s ease-in-out infinite; }
+.app-boot-text { margin: 0; font-size: 12px; color: #8a95a2; }
+@keyframes bootPop { from { transform: scale(.86); opacity: .4; } to { transform: none; opacity: 1; } }
+@keyframes bootSlide { 0% { transform: translateX(-110%); } 100% { transform: translateX(260%); } }
+body.booting { overflow: hidden; }
