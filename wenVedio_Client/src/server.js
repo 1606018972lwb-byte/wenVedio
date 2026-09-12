@@ -753,13 +753,15 @@ async function handleApi(req, res, url) {
     try { payload = JSON.parse(await readBody(req)); } catch (_) {}
     const name = String(payload.name || '').trim();
     const value = String(payload.value || '').trim();
-    if (!name || !value) return sendJson(res, 400, { ok: false, msg: '令牌名称和 API Key 不能为空' });
     const id = String(payload.id || crypto.randomUUID());
-    const token = { id, name, value, created_at: tokens.get(id)?.created_at || new Date().toISOString() };
+    const existing = tokens.get(id);
+    // 带已有 id 即为编辑：Key 留空表示保留原值；新增仍必须提供 Key。
+    if (!name || (!value && !existing)) return sendJson(res, 400, { ok: false, msg: '令牌名称和 API Key 不能为空' });
+    const token = { id, name, value: value || existing?.value || '', created_at: existing?.created_at || new Date().toISOString() };
     tokens.set(id, token);
     saveTokens();
     rebindModelTokens();
-    return sendJson(res, 200, { ok: true, token: { id, name, masked: `••••••••${value.slice(-4)}`, created_at: token.created_at } });
+    return sendJson(res, 200, { ok: true, token: { id, name, masked: `••••••••${token.value.slice(-4)}`, created_at: token.created_at } });
   }
 
   const tokenDelete = route.match(/^\/api\/tokens\/([^/]+)$/);

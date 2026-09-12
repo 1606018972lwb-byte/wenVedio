@@ -1441,8 +1441,45 @@ async function openTokens() {
 }
 
 function renderTokens() {
-  $('#tokenList').innerHTML = state.tokens.map((token) => `<div class="token-row"><div><b>${escapeHtml(token.name)}</b><small>${escapeHtml(token.masked)}</small></div><button type="button" data-delete-token="${escapeHtml(token.id)}">删除</button></div>`).join('');
+  $('#tokenList').innerHTML = state.tokens.map((token) => `<div class="token-row" data-token-row="${escapeHtml(token.id)}" title="双击编辑名称和 Key"><div><b>${escapeHtml(token.name)}</b><small>${escapeHtml(token.masked)}</small></div><button type="button" data-delete-token="${escapeHtml(token.id)}">删除</button></div>`).join('');
   $$('[data-delete-token]').forEach((button) => button.addEventListener('click', () => deleteToken(button.dataset.deleteToken)));
+  $$('[data-token-row]').forEach((row) => row.addEventListener('dblclick', () => editToken(row.dataset.tokenRow)));
+}
+
+// 双击令牌行进入编辑：名称必填，Key 留空表示保留原值。
+function editToken(id) {
+  const token = state.tokens.find((item) => item.id === id);
+  if (!token) return;
+  const row = $('[data-token-row="' + id + '"]');
+  if (!row || row.classList.contains('token-editing')) return;
+  row.classList.add('token-editing');
+  row.innerHTML = `<div class="token-edit-fields"><input data-edit-name type="text" value="${escapeHtml(token.name)}" placeholder="令牌名称" /><input data-edit-value type="text" placeholder="留空则不修改 Key" /></div><div class="token-edit-actions"><button class="primary-button" type="button" data-save-token="${escapeHtml(id)}">保存</button><button class="delete-selected-button" type="button" data-cancel-token="${escapeHtml(id)}">取消</button></div>`;
+  row.querySelector('[data-edit-name]').focus();
+  row.querySelector('[data-save-token]').addEventListener('click', () => saveTokenEdit(row));
+  row.querySelector('[data-edit-value]').addEventListener('keydown', (event) => { if (event.key === 'Enter') saveTokenEdit(row); });
+  row.querySelector('[data-cancel-token]').addEventListener('click', () => openTokens());
+}
+
+async function saveTokenEdit(row) {
+  const saveButton = row.querySelector('[data-save-token]');
+  const id = saveButton.dataset.saveToken;
+  const name = row.querySelector('[data-edit-name]').value.trim();
+  const value = row.querySelector('[data-edit-value]').value.trim();
+  if (!name) { alert('令牌名称不能为空'); return; }
+  try {
+    const res = await fetch(`${settings.apiBase}/api/tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, name, value }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+    await openTokens();
+    const status = $('#tokenStatus');
+    if (status) { status.textContent = '令牌已更新'; status.style.color = 'var(--green)'; }
+  } catch (err) {
+    alert(`令牌更新失败：${err.message}`);
+  }
 }
 
 async function saveToken() {

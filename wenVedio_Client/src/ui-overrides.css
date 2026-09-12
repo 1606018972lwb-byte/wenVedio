@@ -333,3 +333,12 @@ th, td { padding: 13px 12px; }
 .usage-empty { color: #9ba4af; }
 .cost-cell { font: 11px "DM Mono", monospace; color: #475161; white-space: nowrap; }
 @media (max-width: 680px) { .usage-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.token-row[data-token-row] { cursor: default; }
+.token-row.token-editing { display: flex; gap: 12px; }
+.token-edit-fields { display: grid; grid-template-columns: minmax(140px, 0.5fr) minmax(0, 1fr); gap: 8px; flex: 1 1 auto; min-width: 0; }
+.token-edit-fields input { min-width: 0; border: 1px solid #d7dfe8; border-radius: 6px; padding: 8px 10px; font-size: 11px; outline: none; }
+.token-edit-fields input:focus { border-color: var(--blue); }
+.token-edit-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.token-edit-actions .primary-button, .token-edit-actions .delete-selected-button { padding: 8px 12px; white-space: nowrap; }
+@media (max-width: 680px) { .token-row.token-editing { flex-direction: column; align-items: stretch; } }
