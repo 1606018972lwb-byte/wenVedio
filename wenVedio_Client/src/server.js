@@ -905,55 +905,6 @@ async function handleApi(req, res, url) {
   }
 
   // 模型连接测试：依次探测查询地址 / 提交地址，返回时延与状态
-  if (route === '/api/models/test' && req.method === 'POST') {
-    let payload = {};
-    try { payload = JSON.parse(await readBody(req)); } catch (_) {}
-    const model = payload.model && typeof payload.model === 'object' ? payload.model : models.get(String(payload.model_id || ''));
-    if (!model) return sendJson(res, 404, { ok: false, msg: '模型不存在' });
-    const token = tokenValueFor(model);
-    const started = Date.now();
-    const candidates = [];
-    if (model.kind === 'image') {
-      const modelsUrl = String(model.request_url || '').replace('/images/generations', '/models');
-      if (modelsUrl && modelsUrl !== model.request_url) candidates.push(modelsUrl);
-    } else if (model.query_url) {
-      candidates.push(String(model.query_url).replace('{task_id}', 'wenvedio-test'));
-    }
-    candidates.push(String(model.request_url || ''));
-    let lastError = '未配置地址';
-    for (const url of candidates) {
-      if (!url || !/^https?:\/\//i.test(url)) continue;
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10 * 1000);
-        let res;
-        try {
-          res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal });
-        } finally {
-          clearTimeout(timer);
-        }
-        const latency = Date.now() - started;
-        if (res.status === 401 || res.status === 403) {
-          return sendJson(res, 200, { ok: false, latency_ms: latency, status: res.status, msg: `服务可达，但令牌校验失败（HTTP ${res.status}）` });
-        }
-        return sendJson(res, 200, { ok: true, latency_ms: latency, status: res.status, msg: `连接正常（HTTP ${res.status}）` });
-      } catch (err) {
-        lastError = err.name === 'AbortError' ? '连接超时（10 秒）' : err.message;
-      }
-    }
-    return sendJson(res, 200, { ok: false, latency_ms: Date.now() - started, msg: `连接失败：${lastError}` });
-  }
-
-  const modelDelete = route.match(/^\/api\/models\/([^/]+)$/);
-  if (modelDelete && req.method === 'DELETE') {
-    const id = decodeURIComponent(modelDelete[1]);
-    if (!models.has(id)) return sendJson(res, 404, { ok: false, msg: '模型不存在' });
-    models.delete(id);
-    saveModels();
-    return sendJson(res, 200, { ok: true, deleted: id });
-  }
-
-  // API 管理配置：仅供本地工作台使用，配置保存在当前服务进程内。
   if (route === '/api/config' && req.method === 'GET') {
     return sendJson(res, 200, { ok: true, config: publicConfig() });
   }
@@ -1050,65 +1001,6 @@ async function handleApi(req, res, url) {
   }
 
   // 令牌连接测试：借用绑定了该令牌的模型地址探测
-  if (route === '/api/tokens/test' && req.method === 'POST') {
-    let payload = {};
-    try { payload = JSON.parse(await readBody(req)); } catch (_) {}
-    const id = String(payload.id || '');
-    const token = tokens.get(id);
-    if (!token) return sendJson(res, 404, { ok: false, msg: '令牌不存在' });
-    const bound = [...models.values()].filter((model) => model.token_id === id);
-    if (!bound.length) return sendJson(res, 200, { ok: false, latency_ms: 0, msg: '该令牌尚未绑定模型，无法测试' });
-    const model = bound[0];
-    const candidates = [];
-    if (model.kind === 'image') {
-      const modelsUrl = String(model.request_url || '').replace('/images/generations', '/models');
-      if (modelsUrl && modelsUrl !== model.request_url) candidates.push(modelsUrl);
-    } else if (model.query_url) {
-      candidates.push(String(model.query_url).replace('{task_id}', 'wenvedio-test'));
-    }
-    candidates.push(String(model.request_url || ''));
-    const started = Date.now();
-    let lastError = '未配置地址';
-    for (const url of candidates) {
-      if (!url || !/^https?:\/\//i.test(url)) continue;
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10 * 1000);
-        let res;
-        try {
-          res = await fetch(url, { headers: { Authorization: `Bearer ${token.value}` }, signal: controller.signal });
-        } finally {
-          clearTimeout(timer);
-        }
-        const latency = Date.now() - started;
-        if (res.status === 401 || res.status === 403) {
-          return sendJson(res, 200, { ok: false, latency_ms: latency, status: res.status, msg: `服务可达，但令牌校验失败（HTTP ${res.status}）` });
-        }
-        return sendJson(res, 200, { ok: true, latency_ms: latency, status: res.status, msg: `连接正常（HTTP ${res.status}）` });
-      } catch (err) {
-        lastError = err.name === 'AbortError' ? '连接超时（10 秒）' : err.message;
-      }
-    }
-    return sendJson(res, 200, { ok: false, latency_ms: Date.now() - started, msg: `连接失败：${lastError}` });
-  }
-
-  const scheduledAction = route.match(/^\/api\/scheduled\/([^/]+)\/(submit|cancel)$/);
-  if (scheduledAction && req.method === 'POST') {
-    const localId = decodeURIComponent(scheduledAction[1]);
-    const action = scheduledAction[2];
-    const rec = store.get(localId);
-    if (!rec) return sendJson(res, 404, { ok: false, msg: '预约任务不存在' });
-    if (rec.status !== 'scheduled') return sendJson(res, 409, { ok: false, msg: '该任务已不在预约队列中' });
-    if (action === 'cancel') {
-      store.delete(localId);
-      saveStore();
-      return sendJson(res, 200, { ok: true, cancelled: localId });
-    }
-    await performSubmission(rec);
-    return sendJson(res, 200, { ok: true, task: rec });
-  }
-
-  // 应用设置：预约提交间隔等
   if (route === '/api/settings' && req.method === 'GET') {
     return sendJson(res, 200, { ok: true, settings: { schedule_interval_seconds: scheduleIntervalMs / 1000 } });
   }

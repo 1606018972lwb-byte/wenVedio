@@ -400,7 +400,6 @@ const modelUI = {
   loadedFieldsSnapshot: '[]',
   savedAt: null,
 };
-const modelTestResults = {};
 const FIELD_TYPE_META = {
   text: { label: '单行文本', params: ['placeholder', 'default', 'maxLength'] },
   textarea: { label: '多行文本', params: ['placeholder', 'default', 'maxLength'] },
@@ -582,7 +581,6 @@ function renderModelTable() {
     const statusMeta = MODEL_STATUS_META[status];
     const tag = modelTypeTag(model);
     const provider = modelProvider(model);
-    const testResult = modelTestResults[model.id];
     const tr = document.createElement('tr');
     tr.dataset.modelId = model.id;
     tr.draggable = modelUI.sort === 'manual';
@@ -599,11 +597,9 @@ function renderModelTable() {
       <td class="col-token" title="${escapeHtml(tokenById(model.token_id)?.masked || '未绑定令牌')}">${escapeHtml(tokenNameFor(model))}</td>
       <td class="col-actions">
         <div class="model-row-actions">
-          <button type="button" class="model-action-button" data-model-test="${escapeHtml(model.id)}">测试</button>
           <button type="button" class="model-action-button primary" data-model-edit="${escapeHtml(model.id)}">编辑</button>
           <button type="button" class="model-action-button more" data-model-more="${escapeHtml(model.id)}" aria-label="更多操作">···</button>
         </div>
-        ${testResult ? `<div class="model-test-inline ${testResult.ok ? 'ok' : 'bad'}" title="${escapeHtml(testResult.message)}">${testResult.ok ? `连接正常 · ${testResult.latency}ms` : `连接失败 · ${escapeHtml(testResult.message)}`}</div>` : ''}
       </td>`;
     tbody.appendChild(tr);
   });
@@ -646,7 +642,6 @@ function bindModelRowEvents(tbody) {
     input.closest('tr').classList.toggle('selected', input.checked);
     renderModelBatchBar();
   }));
-  tbody.querySelectorAll('[data-model-test]').forEach((button) => button.addEventListener('click', () => runModelTest(button.dataset.modelTest, button)));
   tbody.querySelectorAll('[data-model-edit]').forEach((button) => button.addEventListener('click', () => openModelDrawer(button.dataset.modelEdit)));
   tbody.querySelectorAll('[data-model-more]').forEach((button) => button.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -703,23 +698,6 @@ async function saveModelOrder(tbody) {
     state.models = [...ordered, ...rest];
     renderModelTable();
   } catch (err) { console.warn('保存排序失败', err); }
-}
-
-async function runModelTest(id, button) {
-  const model = normalizeModel(state.models.find((m) => m.id === id) || {});
-  const original = button.textContent;
-  button.disabled = true;
-  button.textContent = '测试中…';
-  try {
-    const res = await fetch(`${settings.apiBase}/api/models/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
-    const data = await res.json();
-    modelTestResults[id] = { ok: Boolean(data.ok), latency: data.latency_ms, message: data.msg || (data.ok ? '连接正常' : '连接失败') };
-  } catch (err) {
-    modelTestResults[id] = { ok: false, latency: null, message: err.message };
-  }
-  button.disabled = false;
-  button.textContent = original;
-  renderModelTable();
 }
 
 async function duplicateModel(id) {
@@ -1234,29 +1212,6 @@ function showFieldsJsonError(message) {
   el.hidden = false;
   el.classList.add('json-error');
   el.textContent = message;
-}
-
-async function runDrawerModelTest() {
-  const result = $('#modelTestResult');
-  if (!result) return;
-  result.className = 'model-test-result';
-  result.textContent = '测试中…';
-  let model;
-  try {
-    model = collectDrawerModel();
-  } catch (_) {
-    model = { kind: $('#modelKind').value, request_url: $('#requestUrl').value.trim(), query_url: $('#queryUrl').value.trim(), token_id: $('#modelToken').value };
-  }
-  try {
-    const res = await fetch(`${settings.apiBase}/api/models/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
-    const data = await res.json();
-    result.className = `model-test-result ${data.ok ? 'ok' : 'bad'}`;
-    result.textContent = `${data.ok ? '连接正常' : '连接失败'} · ${data.latency_ms}ms`;
-    result.title = data.msg || '';
-  } catch (err) {
-    result.className = 'model-test-result bad';
-    result.textContent = `连接失败：${err.message}`;
-  }
 }
 
 function addPriceResRowFromButton() {
@@ -2277,7 +2232,6 @@ async function openTokens() {
   } catch (err) { $('#tokenStatus').textContent = `读取令牌失败：${err.message}`; }
 }
 
-const tokenTestResults = {};
 function renderTokens() {
   renderProviderOptions();
   const tbody = $('#tokenTable');
@@ -2285,8 +2239,6 @@ function renderTokens() {
   tbody.innerHTML = '';
   state.tokens.forEach((token) => {
     const bound = state.models.filter((model) => model.token_id === token.id).length;
-    const test = tokenTestResults[token.id];
-    const statusHtml = test ? (test.ok ? `<span class="model-status status-enabled"><i></i>正常 · ${test.latency}ms</span>` : `<span class="model-status status-error"><i></i>验证失败</span>`) : '<span class="model-status status-enabled"><i></i>正常</span>';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><b>${escapeHtml(token.name)}</b>${token.remark ? `<small class="token-remark">${escapeHtml(token.remark)}</small>` : ''}</td>
@@ -2294,9 +2246,7 @@ function renderTokens() {
       <td class="mono">${escapeHtml(token.masked)}</td>
       <td>${bound}</td>
       <td class="mono">${token.updated_at ? relativeTime(token.updated_at) : '—'}</td>
-      <td>${statusHtml}</td>
       <td class="col-actions"><div class="model-row-actions">
-        <button type="button" class="model-action-button" data-token-test="${escapeHtml(token.id)}">测试</button>
         <button type="button" class="model-action-button primary" data-token-edit="${escapeHtml(token.id)}">编辑</button>
         <button type="button" class="model-action-button" data-token-del="${escapeHtml(token.id)}">删除</button>
       </div></td>`;
@@ -2304,19 +2254,6 @@ function renderTokens() {
     tr.addEventListener('dblclick', () => editToken(token.id));
     tbody.appendChild(tr);
   });
-  tbody.querySelectorAll('[data-token-test]').forEach((button) => button.addEventListener('click', async () => {
-    button.disabled = true;
-    button.textContent = '测试中…';
-    try {
-      const res = await fetch(`${settings.apiBase}/api/tokens/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: button.dataset.tokenTest }) });
-      const data = await res.json();
-      tokenTestResults[button.dataset.tokenTest] = { ok: Boolean(data.ok), latency: data.latency_ms };
-    } catch (err) {
-      tokenTestResults[button.dataset.tokenTest] = { ok: false };
-    }
-    button.disabled = false;
-    renderTokens();
-  }));
   tbody.querySelectorAll('[data-token-edit]').forEach((button) => button.addEventListener('click', () => editToken(button.dataset.tokenEdit)));
   tbody.querySelectorAll('[data-token-del]').forEach((button) => button.addEventListener('click', () => deleteToken(button.dataset.tokenDel)));
 }
@@ -3052,7 +2989,6 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#priceTierEnabled').addEventListener('change', () => { markDrawerDirty(); syncPricingPaneVisibility(); renderPricingPreview(); });
   $('#priceResEnabled').addEventListener('change', () => { markDrawerDirty(); syncPricingPaneVisibility(); renderPricingPreview(); });
   $('#pricingUnit').addEventListener('change', () => { markDrawerDirty(); syncPricingPaneVisibility(); renderPricingPreview(); });
-  $('#testModelConnection').addEventListener('click', runDrawerModelTest);
   $('#disableModelBtn').addEventListener('click', () => { $('#advEnabled').checked = false; saveSettings(); });
 
   // 令牌管理

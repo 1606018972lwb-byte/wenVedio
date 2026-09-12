@@ -297,10 +297,6 @@
                       <label class="field"><span>轮询间隔（秒）</span><input id="modelPollInterval" type="number" min="1" step="1" /></label>
                       <label class="field"><span>最大并发</span><input id="modelConcurrency" type="number" min="1" step="1" /></label>
                     </div>
-                    <div class="model-test-row">
-                      <button class="outline-button" id="testModelConnection" type="button">🔗 测试连接</button>
-                      <span id="modelTestResult" class="model-test-result" role="status"></span>
-                    </div>
                   </div>
                 </div>
                 <div class="drawer-pane" data-model-pane="fields" hidden>
@@ -402,7 +398,7 @@
           </section>
           <section class="panel token-table-panel">
             <b class="panel-title">令牌列表<span class="panel-title-hint">双击令牌行可快速编辑</span></b>
-            <div class="table-wrap"><table class="token-table"><thead><tr><th>名称</th><th>供应商</th><th>API Key（掩码）</th><th>绑定模型数</th><th>最近更新</th><th>状态</th><th class="col-actions">操作</th></tr></thead><tbody id="tokenTable"></tbody></table></div>
+            <div class="table-wrap"><table class="token-table"><thead><tr><th>名称</th><th>供应商</th><th>API Key（掩码）</th><th>绑定模型数</th><th>最近更新</th><th class="col-actions">操作</th></tr></thead><tbody id="tokenTable"></tbody></table></div>
           </section>
 
           <div class="model-editor-backdrop" id="tokenDrawerBackdrop" hidden>
