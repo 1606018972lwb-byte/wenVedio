@@ -1695,6 +1695,11 @@ function renderTasks() {
   syncVideoSubmitLabel();
 }
 function renderRecentTasks() {
+  // 「图片任务 / 视频任务」子菜单筛选时，同步隐藏另一侧的最近任务面板
+  const imgPanel = $('#recentImageTable')?.closest('.panel');
+  if (imgPanel) imgPanel.hidden = state.tc.type === 'video';
+  const vidPanel = $('#recentVideoTable')?.closest('.panel');
+  if (vidPanel) vidPanel.hidden = state.tc.type === 'image';
   const imageTasks = state.tasks.filter((t) => t.kind === 'image').sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 4);
   const videoTasks = state.tasks.filter((t) => t.kind !== 'image').sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 4);
   const imgBody = $('#recentImageTable');
@@ -2808,9 +2813,17 @@ function toggleTasksGroup() {
 
 function setRecordsKind(kind) {
   state.recordsKind = kind === 'image' ? 'image' : 'video';
-  $$('.nav-sub-item').forEach((item) => item.classList.toggle('active', item.id === `navTasks${state.recordsKind === 'image' ? 'Image' : 'Video'}`));
+  state.tc.type = state.recordsKind;
+  const typeSelect = $('#tcType');
+  if (typeSelect) typeSelect.value = state.recordsKind;
+  syncRecordsKindHighlight();
   renderTasks();
   showView('tasks');
+}
+// 子菜单高亮跟随任务中心的类型筛选：仅图片/视频时点亮对应子项，全部类型时不点亮
+function syncRecordsKindHighlight() {
+  const kind = state.tc.type === 'image' ? 'Image' : state.tc.type === 'video' ? 'Video' : '';
+  $$('.nav-sub-item').forEach((item) => item.classList.toggle('active', kind !== '' && item.id === `navTasks${kind}`));
 }
 
 function showView(view) {
@@ -2839,8 +2852,7 @@ function showView(view) {
   $(`#${isImage ? 'navImage' : isQuery ? 'navQuery' : isRecords ? 'navTasks' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : 'navWorkspace'}`).classList.add('active');
   $$('.mobile-nav button').forEach((item) => item.classList.remove('active'));
   $(`#${isImage ? 'mobileImage' : isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace'}`).classList.add('active');
-  $$('.nav-sub-item').forEach((item) => item.classList.remove('active'));
-  if (isRecords) $(`#navTasks${state.recordsKind === 'image' ? 'Image' : 'Video'}`).classList.add('active');
+  syncRecordsKindHighlight();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -2964,7 +2976,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#downloadSelected').addEventListener('click', downloadSelected);
   $('#deleteSelected').addEventListener('click', () => deleteTasks([...state.selected]));
   $('#tcSearch').addEventListener('input', () => { state.tc.search = $('#tcSearch').value; renderTaskCenter(); });
-  $('#tcType').addEventListener('change', () => { state.tc.type = $('#tcType').value; renderTaskCenter(); });
+  $('#tcType').addEventListener('change', () => { state.tc.type = $('#tcType').value; syncRecordsKindHighlight(); renderTasks(); });
   $('#tcModel').addEventListener('change', () => { state.tc.model = $('#tcModel').value; renderTaskCenter(); });
   $('#tcDate').addEventListener('change', () => { state.tc.date = $('#tcDate').value; renderTaskCenter(); });
   $$('.tc-tabs [data-tc-filter]').forEach((button) => button.addEventListener('click', () => {
@@ -3054,7 +3066,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 导航
   $('#navImage').addEventListener('click', (event) => { event.preventDefault(); showView('image'); });
   $('#navWorkspace').addEventListener('click', (event) => { event.preventDefault(); showView('workspace'); });
-  $('#navTasks').addEventListener('click', (event) => { event.preventDefault(); toggleTasksGroup(); showView('tasks'); });
+  $('#navTasks').addEventListener('click', (event) => { event.preventDefault(); toggleTasksGroup(); state.tc.type = ''; const typeSelect = $('#tcType'); if (typeSelect) typeSelect.value = ''; syncRecordsKindHighlight(); renderTasks(); showView('tasks'); });
   $('#navTasksImage').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('image'); });
   $('#navTasksVideo').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('video'); });
   $('#navQuery').addEventListener('click', (event) => { event.preventDefault(); showView('query'); });
