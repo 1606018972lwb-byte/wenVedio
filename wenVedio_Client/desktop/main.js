@@ -248,16 +248,28 @@ function destroyTray() {
 }
 
 function registerIpc() {
-  ipcMain.handle('wenvedio:default-download-directory', () => {
-    const dir = app.getPath('downloads');
-    return { path: dir, name: path.basename(dir) || '下载' };
-  });
+  // 默认下载目录：图片 ./images、视频 ./videos（落在应用数据目录下，稳定可写）
+  const defaultDownloadDir = (kind) => {
+    const folder = kind === 'image' ? 'images' : 'videos';
+    const dir = path.join(app.getPath('userData'), folder);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      return { path: dir, name: folder };
+    } catch (_) {
+      const downloads = app.getPath('downloads');
+      return { path: downloads, name: path.basename(downloads) || '下载' };
+    }
+  };
 
-  ipcMain.handle('wenvedio:choose-directory', async () => {
+  ipcMain.handle('wenvedio:default-download-directory', (_event, kind) => defaultDownloadDir(kind === 'image' ? 'image' : 'video'));
+
+  ipcMain.handle('wenvedio:choose-directory', async (_event, payload) => {
+    const kind = payload?.kind === 'image' ? 'image' : 'video';
+    const label = kind === 'image' ? '图片' : '视频';
     const options = {
-      title: '选择视频下载文件夹',
+      title: `选择${label}下载文件夹`,
       properties: ['openDirectory', 'createDirectory'],
-      defaultPath: app.getPath('downloads'),
+      defaultPath: String(payload?.current || '') || defaultDownloadDir(kind).path,
     };
     const result = mainWindow
       ? await dialog.showOpenDialog(mainWindow, options)
@@ -265,6 +277,25 @@ function registerIpc() {
     if (result.canceled || !result.filePaths?.length) return null;
     const dir = result.filePaths[0];
     return { path: dir, name: path.basename(dir) || dir };
+  });
+
+  // 打开文件所在位置：有本地文件则定位文件，否则打开（并确保存在）对应目录
+  ipcMain.handle('wenvedio:reveal', async (_event, payload) => {
+    const target = String(payload?.path || '');
+    const directory = String(payload?.directory || '');
+    try {
+      if (target && fs.existsSync(target)) {
+        shell.showItemInFolder(target);
+        return { ok: true, mode: 'file' };
+      }
+      const dir = directory || (target ? path.dirname(target) : '');
+      if (!dir) return { ok: false, msg: '该任务还没有下载记录，先在设置里配置下载路径' };
+      fs.mkdirSync(dir, { recursive: true });
+      const err = await shell.openPath(dir);
+      return err ? { ok: false, msg: err } : { ok: true, mode: 'dir' };
+    } catch (err) {
+      return { ok: false, msg: err.message };
+    }
   });
 
   ipcMain.handle('wenvedio:save-file', async (_event, payload) => {

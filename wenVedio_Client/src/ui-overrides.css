@@ -694,3 +694,16 @@ span.task-thumb-icon { width: 64px; height: 40px; display: grid; place-items: ce
 .panel-title-hint { margin-left: 10px; font-weight: 400; font-size: 11px; color: #9aa4b2; }
 .tag-text { background: #fff3e2; color: #d07a1f; }
 .tag-other { background: #f1f4f8; color: #6a7686; }
+/* ===== 下载路径设置与任务中心操作下拉 ===== */
+.download-dir-control { display: flex; align-items: center; gap: 8px; justify-content: flex-end; flex-wrap: wrap; max-width: 64%; }
+.download-dir-path { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #475161; font-size: 11px; }
+.download-dir-path.is-default { color: #9aa4b2; }
+.download-dir-control .outline-button { width: auto; padding: 6px 12px; font-size: 11px; }
+.download-dir-control .text-button { font-size: 11px; }
+.tc-actions-wrap { position: relative; display: inline-block; }
+.tc-action-btn { border: 1px solid #dfe5ee; background: #fff; border-radius: 8px; padding: 6px 10px; font-size: 11px; font-weight: 700; color: #44505d; white-space: nowrap; }
+.tc-action-btn:hover { border-color: var(--blue); color: var(--blue); }
+.tc-actions-wrap .row-action-menu { top: calc(100% + 6px); right: 0; }
+.tc-actions-wrap .row-action-menu button.danger { color: #cf554c; }
+.tc-check-cell { display: flex; align-items: center; gap: 6px; }
+.tc-index { color: #9aa4b2; font-size: 11px; font-family: "DM Mono", monospace; }

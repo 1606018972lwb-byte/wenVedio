@@ -172,7 +172,6 @@
               </div>
             </div>
             <div class="cost-strip"><span>总花费 <b id="statTotalCost">—</b></span><span>本月花费 <b id="statMonthCost">—</b></span><details class="cost-details"><summary>按模型花费</summary><div class="usage-models"><table><thead><tr><th>模型</th><th>任务数</th><th>花费</th></tr></thead><tbody id="usageModelTable"></tbody></table></div></details></div>
-            <div class="download-location"><span class="download-location-label"><i class="dl-icon">📁</i> 下载路径</span><span class="download-location-value" id="downloadLocation">未选择</span><button id="chooseDownloadDirectory" type="button">选择路径</button><span class="download-hint"><i class="usage-help" title="生成的视频/图片文件将保存至此目录">?</i> 生成的文件将保存至此目录</span></div>
             <div class="table-wrap"><table class="tc-table"><thead><tr><th class="check-col"><input id="selectAll" type="checkbox" aria-label="全选" /></th><th>预览</th><th>任务名称 / 提示词</th><th>类型</th><th>模型</th><th>状态</th><th>进度</th><th>创建时间</th><th class="col-actions">操作</th></tr></thead><tbody id="tcTable"></tbody></table></div>
             <div id="tcEmpty" class="empty-state" hidden><span>📭</span><b>还没有任务记录</b><p>提交任务后，记录会出现在这里</p></div>
           </section>
@@ -443,6 +442,8 @@
           <div class="app-setting-row"><div><b>任务完成桌面通知</b><small>生成完成或失败时弹出系统通知</small></div><label class="switch"><input id="settingNotify" type="checkbox" /><span></span></label></div>
           <div class="app-setting-row"><div><b>任务进度刷新间隔</b><small>轮询任务状态的频率，修改后对后续轮询生效</small></div><select id="settingPollInterval" class="app-setting-select"><option value="10">10 秒</option><option value="30">30 秒</option><option value="60">60 秒</option><option value="120">2 分钟</option><option value="300">5 分钟</option></select></div>
           <div class="app-setting-row"><div><b>预约提交间隔</b><small>北京时间 00:00 起，两条预约任务之间的最小间隔（1-600 秒）</small></div><input id="settingScheduleInterval" class="app-setting-input" type="number" min="1" max="600" step="1" /></div>
+          <div class="app-setting-row"><div><b>视频下载路径</b><small>生成的视频保存到该文件夹，未设置时保存到默认目录 ./videos</small></div><div class="download-dir-control"><span class="download-dir-path mono" id="settingVideoDownloadDir">—</span><button class="outline-button" id="chooseVideoDownloadDir" type="button">选择路径</button><button class="text-button" id="resetVideoDownloadDir" type="button">恢复默认</button></div></div>
+          <div class="app-setting-row"><div><b>图片下载路径</b><small>生成的图片保存到该文件夹，未设置时保存到默认目录 ./images</small></div><div class="download-dir-control"><span class="download-dir-path mono" id="settingImageDownloadDir">—</span><button class="outline-button" id="chooseImageDownloadDir" type="button">选择路径</button><button class="text-button" id="resetImageDownloadDir" type="button">恢复默认</button></div></div>
         </div>
         <p class="test-result" id="appSettingsStatus" role="status"></p>
       </section>

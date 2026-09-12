@@ -17,7 +17,7 @@ const state = {
   imageItems: [{ id: 'link-0', kind: 'link', value: '' }],
   pollTimers: [],
   pollingTasks: new Set(),
-  downloadDirectory: null,
+  downloadDirs: { video: null, image: null },
   models: [],
   selectedModelId: '',
   adminModelId: '',
@@ -1459,40 +1459,70 @@ function updateCharCount(id) {
   const counter = $(`#${id}Count`);
   if (el && counter) counter.textContent = String(el.value.length);
 }
-async function initializeDownloadDirectory() {
-  if (desktopBridge) {
-    let saved = null;
-    try { saved = JSON.parse(localStorage.getItem('wenvedio-download-dir') || 'null'); } catch (_) { saved = null; }
-    try { state.downloadDirectory = saved?.path ? saved : await desktopBridge.defaultDownloadDirectory(); }
-    catch (_) { state.downloadDirectory = null; }
-    renderDownloadLocation();
-    return;
+const DOWNLOAD_DIR_KEYS = { video: 'wenvedio-download-dir-video', image: 'wenvedio-download-dir-image' };
+const DOWNLOAD_DIR_LABELS = { video: '视频', image: '图片' };
+
+function readSavedDownloadDir(kind) {
+  try { return JSON.parse(localStorage.getItem(DOWNLOAD_DIR_KEYS[kind]) || 'null'); } catch (_) { return null; }
+}
+
+function writeSavedDownloadDir(kind, value) {
+  try {
+    if (value) localStorage.setItem(DOWNLOAD_DIR_KEYS[kind], JSON.stringify(value));
+    else localStorage.removeItem(DOWNLOAD_DIR_KEYS[kind]);
+  } catch (_) { /* 存储失败不影响下载 */ }
+}
+
+async function defaultDownloadDir(kind) {
+  if (desktopBridge?.defaultDownloadDirectory) {
+    try { return await desktopBridge.defaultDownloadDirectory(kind); } catch (_) { return null; }
   }
-  try { state.downloadDirectory = await readBrowserValue('download-directory'); }
-  catch (_) { state.downloadDirectory = null; }
-  renderDownloadLocation();
+  return null;
 }
 
-function renderDownloadLocation() {
-  const label = $('#downloadLocation');
-  if (!label) return;
-  if (desktopBridge) label.textContent = state.downloadDirectory?.path || '未选择';
-  else if (!window.showDirectoryPicker) label.textContent = '当前浏览器不支持自定义路径';
-  else label.textContent = state.downloadDirectory?.name || '未选择';
-  label.title = state.downloadDirectory?.path || label.textContent;
+// 已设置则用设置值；未设置则回退到默认目录（默认值不写入存储，保持“未设置”状态）
+async function resolveDownloadDir(kind) {
+  const saved = state.downloadDirs[kind] || readSavedDownloadDir(kind);
+  if (saved?.path) return { path: saved.path, name: saved.name, isDefault: false };
+  const fallback = await defaultDownloadDir(kind);
+  return fallback ? { ...fallback, isDefault: true } : null;
 }
 
-async function chooseDownloadDirectory() {
+async function initializeDownloadDirectories() {
+  state.downloadDirs.video = readSavedDownloadDir('video');
+  state.downloadDirs.image = readSavedDownloadDir('image');
+  if (!desktopBridge) {
+    try { state.downloadDirs.video = state.downloadDirs.video || await readBrowserValue('download-directory-video'); } catch (_) { /* 忽略 */ }
+    try { state.downloadDirs.image = state.downloadDirs.image || await readBrowserValue('download-directory-image'); } catch (_) { /* 忽略 */ }
+  }
+  await renderDownloadDirs();
+}
+
+async function renderDownloadDirs() {
+  for (const kind of ['video', 'image']) {
+    const el = $(kind === 'video' ? '#settingVideoDownloadDir' : '#settingImageDownloadDir');
+    if (!el) continue;
+    const dir = await resolveDownloadDir(kind);
+    if (!dir) { el.textContent = '未设置（当前环境不支持）'; el.title = ''; el.classList.remove('is-default'); continue; }
+    el.textContent = dir.isDefault ? `${dir.path}（默认）` : dir.path;
+    el.title = dir.path;
+    el.classList.toggle('is-default', dir.isDefault);
+  }
+}
+
+async function chooseDownloadDirectory(kind) {
+  const target = kind === 'image' ? 'image' : 'video';
   if (desktopBridge) {
     try {
-      const directory = await desktopBridge.chooseDirectory();
+      const current = (await resolveDownloadDir(target))?.path || '';
+      const directory = await desktopBridge.chooseDirectory({ kind: target, current });
       if (!directory?.path) return null;
-      state.downloadDirectory = directory;
-      renderDownloadLocation();
-      try { localStorage.setItem('wenvedio-download-dir', JSON.stringify(directory)); } catch (_) { /* 存储失败不影响下载 */ }
+      state.downloadDirs[target] = directory;
+      writeSavedDownloadDir(target, directory);
+      await renderDownloadDirs();
       return directory;
     } catch (err) {
-      alert(`选择下载路径失败：${err.message}`);
+      alert(`选择${DOWNLOAD_DIR_LABELS[target]}下载路径失败：${err.message}`);
       return null;
     }
   }
@@ -1502,19 +1532,34 @@ async function chooseDownloadDirectory() {
   }
   try {
     const directory = await window.showDirectoryPicker({
-      id: 'wenvedio-download-directory',
+      id: `wenvedio-download-directory-${target}`,
       mode: 'readwrite',
-      startIn: state.downloadDirectory || 'downloads',
+      startIn: state.downloadDirs[target] || 'downloads',
     });
-    state.downloadDirectory = directory;
-    renderDownloadLocation();
-    try { await writeBrowserValue('download-directory', directory); }
+    state.downloadDirs[target] = directory;
+    try { await writeBrowserValue(`download-directory-${target}`, directory); }
     catch (err) { console.warn('下载路径记忆失败，本次仍可正常下载', err); }
+    await renderDownloadDirs();
     return directory;
   } catch (err) {
     if (err.name !== 'AbortError') alert(`选择下载路径失败：${err.message}`);
     return null;
   }
+}
+
+async function resetDownloadDirectory(kind) {
+  const target = kind === 'image' ? 'image' : 'video';
+  state.downloadDirs[target] = null;
+  writeSavedDownloadDir(target, null);
+  await renderDownloadDirs();
+  showToast(`${DOWNLOAD_DIR_LABELS[target]}下载路径已恢复默认`, 'ok');
+}
+
+// 记录任务已下载到本地的文件，供「文件位置」定位
+function rememberTaskFile(task, filePath) {
+  if (!task || !filePath) return;
+  if (!Array.isArray(task.localPaths)) task.localPaths = [];
+  if (!task.localPaths.includes(filePath)) task.localPaths.push(filePath);
 }
 
 function imageSourceCount() {
@@ -1795,15 +1840,18 @@ function taskCenterRow(task, index) {
   const progress = status === 'processing' ? Math.max(5, Math.min(100, Number(task.progress) || 8)) : null;
   const progressHtml = progress != null ? `<div class="tc-progress"><div class="tc-progress-bar" style="width:${progress}%"></div></div><small>${progress}%</small>` : '<span class="mono">—</span>';
   const actions = [];
-  if (status === 'completed') actions.push(`<button type="button" class="text-button" data-tc-download="${escapeHtml(task.id)}">⇩ 下载</button>`);
-  if (status === 'scheduled') {
-    actions.push(`<button type="button" class="text-button" data-tc-run="${escapeHtml(task.id)}">立即执行</button>`);
-    actions.push(`<button type="button" class="text-button danger" data-tc-cancel="${escapeHtml(task.id)}">取消预约</button>`);
+  if (status === 'completed' && (task.kind === 'image' ? (task.image_files || []).length : task.video_url)) {
+    actions.push(`<button type="button" data-tc-download="${escapeHtml(task.id)}">⇩ 下载</button>`);
   }
-  if (['failed', 'timeout'].includes(status)) actions.push(`<button type="button" class="text-button" data-tc-retry="${escapeHtml(task.id)}">↻ 重新提交</button>`);
-  actions.push(`<button type="button" class="text-button" data-tc-view="${escapeHtml(task.id)}">查看</button>`);
+  if (status === 'scheduled') {
+    actions.push(`<button type="button" data-tc-run="${escapeHtml(task.id)}">立即执行</button>`);
+    actions.push(`<button type="button" class="danger" data-tc-cancel="${escapeHtml(task.id)}">取消预约</button>`);
+  }
+  if (['failed', 'timeout'].includes(status)) actions.push(`<button type="button" data-tc-retry="${escapeHtml(task.id)}">↻ 重新提交</button>`);
+  actions.push(`<button type="button" data-tc-locate="${escapeHtml(task.id)}">📁 文件位置</button>`);
+  actions.push(`<button type="button" data-tc-view="${escapeHtml(task.id)}">查看</button>`);
   tr.innerHTML = `
-    <td class="mono">${index + 1}</td>
+    <td class="check-col"><div class="tc-check-cell"><input type="checkbox" data-tc-check="${escapeHtml(task.id)}" ${state.selected.has(task.id) ? 'checked' : ''} aria-label="选择任务" /><span class="tc-index">${index + 1}</span></div></td>
     <td>${taskPreviewHtml(task)}</td>
     <td class="task-name-cell"><b>${escapeHtml(task.name)}</b><small>${escapeHtml(String(task.prompt || '').slice(0, 50))}</small>${typeof task.cost === 'number' ? `<small class="tc-cost">费用 ${formatTaskCost(task)}</small>` : ''}</td>
     <td>${typeBadgeHtml(task)}</td>
@@ -1811,7 +1859,25 @@ function taskCenterRow(task, index) {
     <td>${statusBadgeHtml(task)}</td>
     <td>${progressHtml}</td>
     <td class="mono">${escapeHtml(task.time || taskTime(task.created_at))}</td>
-    <td class="col-actions"><div class="tc-actions">${actions.join('')}</div></td>`;
+    <td class="col-actions"><div class="tc-actions-wrap"><button type="button" class="tc-action-btn" data-tc-menu="${escapeHtml(task.id)}">操作 ▾</button><div class="row-action-menu" hidden>${actions.join('')}</div></div></td>`;
+  const menuButton = tr.querySelector('[data-tc-menu]');
+  const menu = tr.querySelector('.row-action-menu');
+  if (menuButton && menu) {
+    menuButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const willShow = menu.hidden;
+      $$('.row-action-menu').forEach((item) => { item.hidden = true; });
+      menu.hidden = !willShow;
+    });
+    menu.querySelectorAll('button').forEach((button) => button.addEventListener('click', () => { menu.hidden = true; }));
+  }
+  tr.querySelectorAll('[data-tc-check]').forEach((input) => input.addEventListener('change', () => {
+    if (input.checked) state.selected.add(task.id);
+    else state.selected.delete(task.id);
+    tr.classList.toggle('selected', input.checked);
+    updateSelection();
+  }));
+  tr.querySelectorAll('[data-tc-locate]').forEach((button) => button.addEventListener('click', () => showTaskFileLocation(task)));
   tr.querySelectorAll('[data-tc-view]').forEach((button) => button.addEventListener('click', () => openTaskDetailDrawer(task.id)));
   tr.querySelectorAll('[data-tc-download]').forEach((button) => button.addEventListener('click', () => task.kind === 'image' ? downloadImageTask(task) : downloadTasks([task])));
   tr.querySelectorAll('[data-tc-run]').forEach((button) => button.addEventListener('click', () => runScheduledAction(task.id, 'submit')));
@@ -2108,14 +2174,58 @@ async function availableDownloadName(directory, desiredName) {
 }
 
 async function downloadSelected() {
-  const tasks = [...state.selected]
+  const selected = [...state.selected]
     .map((id) => state.tasks.find((task) => task.id === id))
-    .filter((task) => task && (task.video_url || settings.mock));
-  if (!tasks.length) {
-    alert('选中的任务还没有可下载的视频。');
+    .filter(Boolean);
+  const videos = selected.filter((task) => task.kind !== 'image' && (task.video_url || settings.mock));
+  const images = selected.filter((task) => task.kind === 'image' && (task.image_files || []).length > 0);
+  if (!videos.length && !images.length) {
+    alert('选中的任务还没有可下载的文件。');
     return;
   }
-  return downloadTasks(tasks);
+  if (videos.length) await downloadTasks(videos);
+  if (images.length) await downloadImageTasks(images);
+}
+
+// 图片批量下载：每个任务的多张图逐张保存到图片下载路径
+async function downloadImageTasks(tasks) {
+  if (!desktopBridge) {
+    for (const task of tasks) await downloadImageTask(task);
+    return;
+  }
+  const directory = (await resolveDownloadDir('image')) || (await chooseDownloadDirectory('image'));
+  if (!directory?.path) { alert('未配置图片下载路径，下载已取消。'); return; }
+  const button = $('#downloadSelected');
+  const original = button.innerHTML;
+  let completed = 0;
+  let failed = 0;
+  try {
+    const total = tasks.reduce((sum, task) => sum + (task.image_files || []).length, 0);
+    let index = 0;
+    for (const task of tasks) {
+      const files = task.image_files || [];
+      const safeName = String(task.name || task.id).replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 80);
+      for (let i = 0; i < files.length; i += 1) {
+        index += 1;
+        button.textContent = `下载中 ${index} / ${total}`;
+        const ext = String(files[i]).split('.').pop() || 'png';
+        try {
+          const res = await fetch(`${settings.apiBase}/api/tasks/${encodeURIComponent(task.id)}/image/${i}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const blob = await res.blob();
+          const saved = await desktopBridge.saveFile({ directory: directory.path, name: `${safeName}_${i + 1}.${ext}`, data: await blob.arrayBuffer() });
+          rememberTaskFile(task, saved?.path);
+          completed += 1;
+        } catch (_) {
+          failed += 1;
+        }
+      }
+    }
+    alert(failed ? `已下载 ${completed} 张图片，${failed} 张失败。` : `已下载 ${completed} 张图片到 ${directory.name || directory.path}。`);
+  } finally {
+    button.innerHTML = original;
+    updateSelection();
+  }
 }
 
 async function downloadTasks(tasks) {
@@ -2133,10 +2243,10 @@ async function downloadTasks(tasks) {
     return;
   }
 
-  let directory = state.downloadDirectory;
+  let directory = state.downloadDirs.video;
   let justChosen = false;
   if (!directory) {
-    directory = await chooseDownloadDirectory();
+    directory = await chooseDownloadDirectory('video');
     if (!directory) return;
     justChosen = true;
   }
@@ -2183,9 +2293,9 @@ async function downloadTasks(tasks) {
 
 // 桌面客户端下载：目录由主进程原生对话框选择，文件经 IPC 直接写入磁盘。
 async function downloadTasksDesktop(tasks) {
-  let directory = state.downloadDirectory;
+  let directory = await resolveDownloadDir('video');
   if (!directory?.path) {
-    directory = await chooseDownloadDirectory();
+    directory = await chooseDownloadDirectory('video');
     if (!directory?.path) return;
   }
   const button = $('#downloadSelected');
@@ -2206,7 +2316,8 @@ Prompt: ${task.prompt}`], { type: 'video/mp4' })
             }
             return res.blob();
           });
-      await desktopBridge.saveFile({ directory: directory.path, name: safeDownloadName(task, i), data: await blob.arrayBuffer() });
+      const saved = await desktopBridge.saveFile({ directory: directory.path, name: safeDownloadName(task, i), data: await blob.arrayBuffer() });
+      rememberTaskFile(task, saved?.path);
       completed += 1;
     }
     alert(`已下载 ${completed} 个视频到 ${directory.name || directory.path}。`);
@@ -2362,6 +2473,7 @@ async function openAppSettingsPanel() {
     const data = await res.json();
     if (data.ok) $('#settingScheduleInterval').value = String(data.settings.schedule_interval_seconds);
   } catch (_) { /* 读取失败时保留空值 */ }
+  await renderDownloadDirs();
   $('#appSettingsModal').hidden = false;
   document.body.classList.add('modal-open');
 }
@@ -2719,12 +2831,13 @@ async function downloadImageTask(task) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       if (desktopBridge?.saveFile) {
-        let directory = state.downloadDirectory;
+        let directory = await resolveDownloadDir('image');
         if (!directory?.path) {
-          directory = await chooseDownloadDirectory();
+          directory = await chooseDownloadDirectory('image');
           if (!directory?.path) return;
         }
-        await desktopBridge.saveFile({ directory: directory.path, name: `${safeName}_${i + 1}.${ext}`, data: await blob.arrayBuffer() });
+        const saved = await desktopBridge.saveFile({ directory: directory.path, name: `${safeName}_${i + 1}.${ext}`, data: await blob.arrayBuffer() });
+        rememberTaskFile(task, saved?.path);
       } else {
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
@@ -2849,6 +2962,17 @@ function toggleSidebar() {
   localStorage.setItem('wenvedio-sidebar-collapsed', String(collapsed));
   $('#sidebarToggle').title = collapsed ? '展开侧边栏' : '收起侧边栏';
   $('#sidebarToggle').setAttribute('aria-label', $('#sidebarToggle').title);
+}
+
+// 打开任务文件的所在位置：已下载则定位到文件，否则打开该类型下载目录
+async function showTaskFileLocation(task) {
+  if (!task) return;
+  if (!desktopBridge?.reveal) { alert('仅桌面客户端支持打开文件位置。'); return; }
+  const kind = task.kind === 'image' ? 'image' : 'video';
+  const directory = await resolveDownloadDir(kind);
+  const localPath = (task.localPaths || [])[0] || '';
+  const result = await desktopBridge.reveal({ path: localPath, directory: directory?.path || '' });
+  if (!result?.ok) alert(result?.msg || '打开文件位置失败');
 }
 
 let taskDrawerCurrentId = null;
@@ -3054,7 +3178,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#settingPollInterval').addEventListener('change', (event) => saveAppSettings({ pollIntervalSeconds: Number(event.target.value) || 60 }));
   $('#settingScheduleInterval').addEventListener('change', (event) => saveScheduleIntervalSeconds(event.target.value));
-  $('#chooseDownloadDirectory').addEventListener('click', chooseDownloadDirectory);
+  $('#chooseVideoDownloadDir').addEventListener('click', () => chooseDownloadDirectory('video'));
+  $('#chooseImageDownloadDir').addEventListener('click', () => chooseDownloadDirectory('image'));
+  $('#resetVideoDownloadDir').addEventListener('click', () => resetDownloadDirectory('video'));
+  $('#resetImageDownloadDir').addEventListener('click', () => resetDownloadDirectory('image'));
 
   // 任务详情抽屉
   $('#closeTaskDetail').addEventListener('click', closeTaskDetail);
@@ -3095,5 +3222,5 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#sidebarToggle').addEventListener('click', toggleSidebar);
   setInterval(() => { renderCurrentPrice(); renderImagePricePanel(); }, 30 * 1000);
   initializeModels().then(() => { initializeFormDraft(); initializeImageFormDraft(); });
-  initializeDownloadDirectory();
+  initializeDownloadDirectories();
 });
