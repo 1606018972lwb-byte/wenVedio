@@ -550,7 +550,7 @@ function modelListFiltered() {
   return list;
 }
 
-// 供应商候选只展示系统中已有的：模型抽屉用模型数据、令牌表单用令牌数据，没出现过的预设不再显示
+// 供应商候选纯动态且相互独立：模型候选取模型的供应商，令牌候选取令牌的供应商（官方/中转站）
 function renderProviderOptions() {
   const modelDatalist = $('#providerList');
   if (modelDatalist) {
