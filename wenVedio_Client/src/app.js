@@ -448,28 +448,24 @@ const MODEL_TYPE_OPTIONS = [
   { value: 'other', label: '其他', cls: 'tag-other' },
 ];
 
+// 类型可自由填写：命中预设则用预设样式，自定义文本按原样展示，留空为未知类型
 function modelTypeTag(model) {
-  const stored = MODEL_TYPE_OPTIONS.find((option) => option.value === model.type);
-  if (stored) return stored;
-  // 兼容未保存类型的旧模型：按模型类型与名称/工作流推断
-  if (model.kind === 'image') return MODEL_TYPE_OPTIONS[0];
-  if (model.kind === 'text') return MODEL_TYPE_OPTIONS[5];
-  const text = `${model.name || ''}${model.workflow || ''}`;
-  if (/首尾帧/.test(text)) return MODEL_TYPE_OPTIONS[4];
-  if (/多图/.test(text)) return MODEL_TYPE_OPTIONS[3];
-  if (/音频|对口型/.test(text)) return MODEL_TYPE_OPTIONS[2];
-  return MODEL_TYPE_OPTIONS[1];
+  const stored = String(model.type || '').trim();
+  if (!stored) return { value: 'unknown', label: UNKNOWN_TYPE, cls: 'tag-unknown' };
+  const preset = MODEL_TYPE_OPTIONS.find((option) => option.value === stored || option.label === stored);
+  return preset || { value: stored, label: stored, cls: 'tag-other' };
 }
 
+const UNKNOWN_PROVIDER = '未知供应商';
+const UNKNOWN_TYPE = '未知类型';
+
+// 供应商只取保存值，不再按名称/地址猜测（避免列表与编辑界面不一致）
 function modelProvider(model) {
-  if (model.provider) return model.provider;
-  const text = `${model.id || ''} ${model.workflow || ''} ${model.name || ''} ${model.request_url || ''}`;
-  if (/minimax/i.test(text)) return 'MiniMax';
-  if (/gpt-image|openai|dall|uuapi/i.test(text)) return 'OpenAI';
-  if (/flux/i.test(text)) return 'Black Forest Labs';
-  if (/stable|\/sd|sd-|sdxl/i.test(text)) return 'Stability AI';
-  if (/autodl/i.test(text)) return 'AutoDL';
-  return '自定义';
+  return String(model.provider || '').trim();
+}
+
+function modelProviderLabel(model) {
+  return modelProvider(model) || UNKNOWN_PROVIDER;
 }
 
 function tokenById(id) {
@@ -538,6 +534,7 @@ function openSettings() {
 function renderModelPage() {
   renderModelStats();
   renderModelProviderOptions();
+  renderModelTypeOptions();
   renderModelTable();
 }
 
@@ -553,17 +550,35 @@ function renderModelProviderOptions() {
   const select = $('#modelFilterProvider');
   if (!select) return;
   const current = select.value;
-  const providers = [...new Set(state.models.map((model) => modelProvider(model)))].sort();
+  const providers = [...new Set(state.models.map((model) => modelProviderLabel(model)))].sort((a, b) => a.localeCompare(b, 'zh'));
   select.innerHTML = '<option value="">全部供应商</option>' + providers.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
   if (providers.includes(current)) select.value = current;
+}
+
+// 类型筛选与类型候选（候选取已用类型 + 预设标签，输入框可自由填写）
+function renderModelTypeOptions() {
+  const select = $('#modelFilterKind');
+  if (select) {
+    const current = select.value;
+    const labels = [...new Set(state.models.map((model) => modelTypeTag(model).label))].sort((a, b) => a.localeCompare(b, 'zh'));
+    select.innerHTML = '<option value="">全部类型</option>' + labels.map((label) => `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`).join('');
+    if (labels.includes(current)) select.value = current;
+  }
+  const datalist = $('#modelTypeList');
+  if (datalist) {
+    const used = state.models.map((model) => String(model.type || '').trim()).filter(Boolean)
+      .map((value) => (MODEL_TYPE_OPTIONS.find((option) => option.value === value || option.label === value) || {}).label || value);
+    const names = [...new Set([...used, ...MODEL_TYPE_OPTIONS.map((option) => option.label)])];
+    datalist.innerHTML = names.map((name) => `<option value="${escapeHtml(name)}"></option>`).join('');
+  }
 }
 
 function modelListFiltered() {
   const keyword = modelUI.search.trim().toLowerCase();
   let list = state.models.map(normalizeModel);
-  if (keyword) list = list.filter((m) => [m.name, m.id, m.workflow, modelProvider(m)].join(' ').toLowerCase().includes(keyword));
-  if (modelUI.kind) list = list.filter((m) => modelTypeTag(m).value === modelUI.kind);
-  if (modelUI.provider) list = list.filter((m) => modelProvider(m) === modelUI.provider);
+  if (keyword) list = list.filter((m) => [m.name, m.id, m.workflow, modelProviderLabel(m)].join(' ').toLowerCase().includes(keyword));
+  if (modelUI.kind) list = list.filter((m) => modelTypeTag(m).label === modelUI.kind);
+  if (modelUI.provider) list = list.filter((m) => modelProviderLabel(m) === modelUI.provider);
   if (modelUI.status) list = list.filter((m) => modelStatusOf(m) === modelUI.status);
   if (modelUI.sort === 'name') list.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
   else if (modelUI.sort === 'created') list.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
@@ -604,6 +619,7 @@ function renderModelTable() {
     const statusMeta = MODEL_STATUS_META[status];
     const tag = modelTypeTag(model);
     const provider = modelProvider(model);
+    const providerLabel = modelProviderLabel(model);
     const tr = document.createElement('tr');
     tr.dataset.modelId = model.id;
     tr.draggable = modelUI.sort === 'manual';
@@ -612,10 +628,10 @@ function renderModelTable() {
       <td class="drag-col"><span class="drag-handle" title="拖拽排序" aria-hidden="true">⋮⋮</span></td>
       <td class="check-col"><input type="checkbox" data-model-check="${escapeHtml(model.id)}" ${modelUI.selected.has(model.id) ? 'checked' : ''} aria-label="选择模型" /></td>
       <td class="model-info-cell">
-        <div class="model-info"><span class="model-avatar" data-provider="${escapeHtml(provider)}">${escapeHtml(provider.charAt(0).toUpperCase())}</span><div class="model-info-copy"><b title="${escapeHtml(model.name)}">${escapeHtml(model.name)}</b><small title="${escapeHtml(model.id)}">${escapeHtml(model.id.length > 34 ? model.id.slice(0, 34) + '…' : model.id)}</small></div></div>
+        <div class="model-info"><span class="model-avatar" data-provider="${escapeHtml(provider)}">${escapeHtml(provider ? provider.charAt(0).toUpperCase() : '?')}</span><div class="model-info-copy"><b title="${escapeHtml(model.name)}">${escapeHtml(model.name)}</b><small title="${escapeHtml(model.id)}">${escapeHtml(model.id.length > 34 ? model.id.slice(0, 34) + '…' : model.id)}</small></div></div>
       </td>
       <td><span class="model-tag ${tag.cls}">${escapeHtml(tag.label)}</span></td>
-      <td class="col-provider">${escapeHtml(provider)}</td>
+      <td class="col-provider">${escapeHtml(providerLabel)}</td>
       <td><span class="model-status ${statusMeta.cls}"><i></i>${statusMeta.label}</span></td>
       <td class="col-token" title="${escapeHtml(tokenById(model.token_id)?.masked || '未绑定令牌')}">${escapeHtml(tokenNameFor(model))}</td>
       <td class="col-actions">
@@ -840,9 +856,9 @@ function populateDrawer(model) {
   $('#modelId').readOnly = Boolean(model.id);
   $('#modelWorkflow').value = model.workflow;
   $('#modelKind').value = model.kind;
-  $('#modelProvider').value = model.provider || '';
-  const typeSelect = $('#modelType');
-  if (typeSelect) typeSelect.value = model.type || modelTypeTag(model).value;
+  $('#modelProvider').value = String(model.provider || '').trim();
+  const typeInput = $('#modelType');
+  if (typeInput) typeInput.value = String(model.type || '').trim();
   $('#modelDescription').value = model.description || '';
   $('#modelVisible').checked = model.visible !== false;
   $('#requestUrl').value = model.request_url;
