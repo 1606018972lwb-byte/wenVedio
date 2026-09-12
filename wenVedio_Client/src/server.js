@@ -410,6 +410,12 @@ async function performSubmission(record) {
   }
   if (record.status === 'failed') writeLog('error', `任务 ${record.local_id} 提交失败: ${record.error}`);
   else writeLog('info', `任务 ${record.local_id} 提交成功，状态 ${record.status}`);
+  const costModel = models.get(record.model_id);
+  const rate = modelRateFor(costModel?.pricing, record.resolution, record.submitted_at);
+  if (rate != null && Number(record.duration) > 0) {
+    record.cost = Math.round(rate * Number(record.duration) * 1000) / 1000;
+    record.cost_currency = costModel?.pricing?.currency === 'USD' ? 'USD' : 'CNY';
+  }
   delete record.scheduled_at;
   saveStore();
   return record;
@@ -600,6 +606,11 @@ async function runImageGeneration(record) {
       record.image_count = files.length;
       record.status = 'completed';
       record.completed_at = new Date().toISOString();
+      const imageRate = modelRateFor(model.pricing, String(record.params?.size || ''), new Date());
+      if (imageRate != null) {
+        record.cost = Math.round(imageRate * files.length * 1000) / 1000;
+        record.cost_currency = model.pricing?.currency === 'USD' ? 'USD' : 'CNY';
+      }
       writeLog('info', `图片任务 ${record.local_id} 生成完成（${files.length} 张）`);
     }
   } catch (err) {
@@ -642,6 +653,29 @@ function serveStatic(res, filePath, contentType) {
   });
 }
 
+// 费率计算：分辨率设置了专属价格（数字或 {峰,谷}）优先，否则按时段取峰价/谷价。
+function rateByTimeSlot(prices, atDate) {
+  const parts = chinaTimeParts(atDate || new Date());
+  const start = Number(String(prices.valley_start || '00:00').slice(0, 2));
+  const end = Number(String(prices.valley_end || '08:00').slice(0, 2));
+  const inValley = start <= end ? parts.hour >= start && parts.hour < end : parts.hour >= start || parts.hour < end;
+  if (inValley) return prices.valley != null ? prices.valley : prices.peak;
+  return prices.peak != null ? prices.peak : prices.valley;
+}
+
+function modelRateFor(pricing, resolution, atDate) {
+  if (!pricing) return null;
+  if (resolution && pricing.by_resolution) {
+    const entry = pricing.by_resolution[resolution];
+    if (entry != null) {
+      if (typeof entry === 'object') return rateByTimeSlot(entry, atDate);
+      return entry;
+    }
+  }
+  if (pricing.peak == null && pricing.valley == null) return null;
+  return rateByTimeSlot(pricing, atDate);
+}
+
 // 模型可选价格：峰谷价格（元/秒）、谷值时段、按分辨率单价。
 function sanitizePricing(pricing) {
   if (!pricing || typeof pricing !== 'object' || Array.isArray(pricing)) return undefined;
@@ -664,8 +698,19 @@ function sanitizePricing(pricing) {
   if (pricing.by_resolution && typeof pricing.by_resolution === 'object' && !Array.isArray(pricing.by_resolution)) {
     const byResolution = {};
     for (const [resolution, value] of Object.entries(pricing.by_resolution)) {
-      const price = toPrice(value);
-      if (price != null && resolution.trim()) byResolution[resolution.trim()] = price;
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const peak = toPrice(value.peak);
+        const valley = toPrice(value.valley);
+        if (peak != null || valley != null) {
+          byResolution[resolution.trim()] = {
+            ...(peak != null ? { peak } : {}),
+            ...(valley != null ? { valley } : {}),
+          };
+        }
+      } else {
+        const price = toPrice(value);
+        if (price != null && resolution.trim()) byResolution[resolution.trim()] = price;
+      }
     }
     if (Object.keys(byResolution).length) out.by_resolution = byResolution;
   }
@@ -810,6 +855,8 @@ async function handleApi(req, res, url) {
 
     if (!tasks.length) return sendJson(res, 400, { ok: false, msg: '没有可提交的任务' });
     if (!config.mock && !tokenValueFor(selectedModel)) return sendJson(res, 400, { ok: false, msg: '所选模型未配置有效令牌' });
+    const refField = Array.isArray(selectedModel.fields) ? selectedModel.fields.find((field) => field && field.key === 'reference_images') : null;
+    const refsRequired = !refField || refField.required !== false;
 
     const created = [];
     for (const t of tasks) {
@@ -819,7 +866,7 @@ async function handleApi(req, res, url) {
         ? t.reference_images.slice(0, 10).map((url) => typeof url === 'string' ? url.trim() : '')
         : [];
       if (!prompt || prompt.length > 500000) return sendJson(res, 400, { ok: false, msg: 'prompt 长度必须是 1-500000' });
-      if (!isImageModel) {
+      if (!isImageModel && refsRequired) {
         if (!Array.isArray(t.reference_images) || t.reference_images.length > 10) return sendJson(res, 400, { ok: false, msg: '图片参数最多支持 ref_image_0 到 ref_image_9' });
         if (!refs[0]) return sendJson(res, 400, { ok: false, msg: '请填写 ref_image_0' });
       }

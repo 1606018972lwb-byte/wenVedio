@@ -105,10 +105,19 @@
 
         <section class="records-view" id="recordsView" hidden>
           <div class="records-intro"><span class="section-kicker">02 / HISTORY</span><h2>任务记录</h2><p>查看全部任务，并批量下载已完成的视频。</p></div>
+          <section class="usage-panel">
+            <div class="usage-cards">
+              <div class="usage-card"><span>总花费</span><b id="statTotalCost">—</b></div>
+              <div class="usage-card"><span>本月花费</span><b id="statMonthCost">—</b></div>
+              <div class="usage-card"><span>本月任务</span><b id="statMonthTasks">—</b></div>
+              <div class="usage-card"><span>本月成功率</span><b id="statMonthRate">—</b></div>
+            </div>
+            <div class="usage-models"><b>按模型花费（全部）</b><table><thead><tr><th>模型</th><th>任务数</th><th>花费</th></tr></thead><tbody id="usageModelTable"></tbody></table></div>
+          </section>
           <section class="panel tasks-panel records-panel">
             <div class="panel-heading tasks-heading"><div><h3>全部任务 <span class="task-total" id="recordTaskTotal">0</span></h3></div><div class="task-actions"><div class="segmented"><button class="selected" data-record-filter="all">全部 <b id="recordAllCount">0</b></button><button data-record-filter="processing">进行中 <b id="recordProcessingCount">0</b></button><button data-record-filter="completed">已完成 <b id="recordCompletedCount">0</b></button><button data-record-filter="failed">失败 <b id="recordFailedCount">0</b></button></div><button class="delete-selected-button" id="deleteSelected" disabled>删除选中</button><button class="download-button" id="downloadSelected" disabled>⇩ 下载选中 <span id="selectedCount">0</span></button></div></div>
             <div class="download-location"><span class="download-location-label">下载路径</span><span class="download-location-value" id="downloadLocation">未选择</span><button id="chooseDownloadDirectory" type="button">选择路径</button></div>
-            <div class="table-wrap"><table><thead><tr><th class="check-col"><input id="selectAll" type="checkbox" /></th><th>任务 / 提示词</th><th>图片</th><th>参数</th><th>状态</th><th>创建时间</th><th></th></tr></thead><tbody id="recordTaskTable"></tbody></table><div id="recordEmptyState" class="empty-state" hidden><span>◫</span><b>还没有任务记录</b><p>提交任务后，记录会出现在这里</p></div></div>
+            <div class="table-wrap"><table><thead><tr><th class="check-col"><input id="selectAll" type="checkbox" /></th><th>任务 / 提示词</th><th>图片</th><th>参数</th><th>状态</th><th>费用</th><th>创建时间</th><th></th></tr></thead><tbody id="recordTaskTable"></tbody></table><div id="recordEmptyState" class="empty-state" hidden><span>◫</span><b>还没有任务记录</b><p>提交任务后，记录会出现在这里</p></div></div>
           </section>
         </section>
 

@@ -236,18 +236,38 @@ function priceSymbol(pricing) {
   return pricing && pricing.currency === 'USD' ? '$' : '¥';
 }
 
+function rateByTimeSlot(prices, atValue) {
+  const hour = beijingHour(atValue || new Date().toISOString());
+  const start = Number(String(prices.valley_start || '00:00').slice(0, 2));
+  const end = Number(String(prices.valley_end || '08:00').slice(0, 2));
+  if (hour == null || !Number.isFinite(start) || !Number.isFinite(end)) return prices.peak != null ? prices.peak : prices.valley;
+  const inValley = start <= end ? hour >= start && hour < end : hour >= start || hour < end;
+  if (inValley) return prices.valley != null ? prices.valley : prices.peak;
+  return prices.peak != null ? prices.peak : prices.valley;
+}
+
 function modelRateFor(pricing, resolution, atValue) {
   if (!pricing) return null;
-  if (resolution && pricing.by_resolution && pricing.by_resolution[resolution] != null) return pricing.by_resolution[resolution];
-  if (pricing.peak == null) return null;
-  if (pricing.valley == null || !pricing.valley_start || !pricing.valley_end) return pricing.peak;
-  const hour = beijingHour(atValue || new Date().toISOString());
-  if (hour == null) return pricing.peak;
-  const start = Number(String(pricing.valley_start).slice(0, 2));
-  const end = Number(String(pricing.valley_end).slice(0, 2));
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return pricing.peak;
-  const inValley = start <= end ? hour >= start && hour < end : hour >= start || hour < end;
-  return inValley ? pricing.valley : pricing.peak;
+  if (resolution && pricing.by_resolution) {
+    const entry = pricing.by_resolution[resolution];
+    if (entry != null) {
+      if (typeof entry === 'object') return rateByTimeSlot(entry, atValue);
+      return entry;
+    }
+  }
+  if (pricing.peak == null && pricing.valley == null) return null;
+  return rateByTimeSlot(pricing, atValue);
+}
+
+function beijingDayKey(value) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
+  } catch (_) { return ''; }
+}
+
+function formatTaskCost(task) {
+  if (typeof task.cost !== 'number') return '—';
+  return `${task.cost_currency === 'USD' ? '$' : '¥'}${task.cost.toFixed(2)}`;
 }
 
 // 按当前时间判断峰谷，在提交行显示当前适用的价格；每 30 秒自动刷新。
@@ -259,7 +279,10 @@ function pricingBreakdown(pricing) {
   if (pricing.peak != null) parts.push(`峰值 ${symbol}${pricing.peak}${unitText}`);
   if (pricing.valley != null) parts.push(`谷值 ${symbol}${pricing.valley}${unitText}（${pricing.valley_start || '00:00'}-${pricing.valley_end || '08:00'}）`);
   if (pricing.by_resolution) {
-    for (const [resolution, price] of Object.entries(pricing.by_resolution)) parts.push(`${resolution} ${symbol}${price}${unitText}`);
+    for (const [resolution, value] of Object.entries(pricing.by_resolution)) {
+      if (value && typeof value === 'object') parts.push(`${resolution} 峰${symbol}${value.peak != null ? value.peak : '—'}${unitText} / 谷${symbol}${value.valley != null ? value.valley : '—'}${unitText}`);
+      else parts.push(`${resolution} ${symbol}${value}${unitText}`);
+    }
   }
   return parts.join(' · ') || '未配置价格';
 }
@@ -298,8 +321,18 @@ function renderPriceByResolutionRows(initial) {
     options = resField ? resField.options.filter((option) => typeof option === 'string' && option.trim()) : [];
   } catch (_) { options = []; }
   const existing = {};
-  $$('#priceByResolution input[data-res-price]').forEach((input) => { existing[input.dataset.resPrice] = input.value; });
-  const values = initial || existing;
+  $$('#priceByResolution .price-res-row').forEach((row) => {
+    const name = row.querySelector('span').textContent;
+    const peakInput = row.querySelector('[data-res-peak]');
+    const valleyInput = row.querySelector('[data-res-valley]');
+    const value = initial ? initial[name] : (peakInput ? peakInput.value : '');
+    if (value && typeof value === 'object') {
+      existing[name] = { peak: value.peak != null ? String(value.peak) : '', valley: value.valley != null ? String(value.valley) : '' };
+    } else if (value != null && value !== '') {
+      existing[name] = { peak: String(value), valley: '' };
+    }
+  });
+  const values = initial ? null : existing;
   wrap.innerHTML = '';
   if (!options.length) {
     const hint = document.createElement('small');
@@ -309,18 +342,28 @@ function renderPriceByResolutionRows(initial) {
     return;
   }
   options.forEach((option) => {
-    const row = document.createElement('label');
+    const row = document.createElement('div');
     row.className = 'price-res-row';
     const name = document.createElement('span');
     name.textContent = option;
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.min = '0';
-    input.step = '0.001';
-    input.placeholder = '元/秒';
-    input.dataset.resPrice = option;
-    if (values[option] != null) input.value = String(values[option]);
-    row.append(name, input);
+    const peakInput = document.createElement('input');
+    peakInput.type = 'number';
+    peakInput.min = '0';
+    peakInput.step = '0.001';
+    peakInput.placeholder = '峰价';
+    peakInput.title = '峰价（白天时段）';
+    peakInput.dataset.resPeak = option;
+    const valleyInput = document.createElement('input');
+    valleyInput.type = 'number';
+    valleyInput.min = '0';
+    valleyInput.step = '0.001';
+    valleyInput.placeholder = '谷价';
+    valleyInput.title = '谷价（夜间时段）';
+    valleyInput.dataset.resValley = option;
+    const saved = initial ? (initial[option] || {}) : (existing[option] || {});
+    if (saved.peak != null && saved.peak !== '') peakInput.value = String(saved.peak);
+    if (saved.valley != null && saved.valley !== '') valleyInput.value = String(saved.valley);
+    row.append(name, peakInput, valleyInput);
     wrap.appendChild(row);
   });
 }
@@ -337,12 +380,15 @@ function collectPricingFromEditor() {
   const valleyText = $('#priceValley').value.trim();
   const rangeText = $('#priceValleyWindow').value.trim();
   const byResolution = {};
-  $$('#priceByResolution input[data-res-price]').forEach((input) => {
-    const text = input.value.trim();
-    if (text === '') return;
-    const num = Number(text);
-    if (!Number.isFinite(num) || num < 0) throw new Error(`分辨率 ${input.dataset.resPrice} 的价格必须是 ≥ 0 的数字`);
-    byResolution[input.dataset.resPrice] = Math.round(num * 1000) / 1000;
+  $$('#priceByResolution .price-res-row').forEach((row) => {
+    const name = row.querySelector('span').textContent;
+    const peakText = row.querySelector('[data-res-peak]').value.trim();
+    const valleyText = row.querySelector('[data-res-valley]').value.trim();
+    if (peakText === '' && valleyText === '') return;
+    const peak = toPrice(peakText);
+    const valley = toPrice(valleyText);
+    if (peak == null || valley == null) throw new Error(`分辨率 ${name} 的峰价/谷价必须是 ≥ 0 的数字`);
+    byResolution[name] = valley === peak ? peak : { peak, valley };
   });
   if (peakText === '' && valleyText === '' && !Object.keys(byResolution).length) return undefined;
   const toPrice = (text) => {
@@ -718,7 +764,7 @@ function renderTaskRows(tbody, tasks, selectable = false) {
     const tr = document.createElement('tr');
     tr.dataset.id = t.id;
     const parameters = [t.resolution, Number.isInteger(t.seed) ? `seed ${t.seed}` : ''].filter(Boolean).join(' · ') || '-';
-    tr.innerHTML = `${selectable ? `<td class="check-col"><input type="checkbox" ${state.selected.has(t.id) ? 'checked' : ''} /></td>` : ''}<td class="task-summary-cell"><button class="task-copy-button" type="button" title="复制提示词" aria-label="复制提示词">复制</button><div class="task-name">${escapeHtml(t.name)}</div><div class="task-id">${escapeHtml(t.id)} · ${escapeHtml(t.prompt)}</div><button class="task-expand-button" type="button" title="放大查看" aria-label="放大查看">⤢ 放大</button></td><td>${t.image_count || 0} 张</td><td>${escapeHtml(parameters)}</td><td class="progress-cell">${statusMarkup(t)}</td><td>${t.time}</td><td class="row-menu"><button class="row-menu-button" type="button" aria-label="任务操作" title="任务操作">•••</button><div class="row-action-menu" hidden><button class="row-download-action" type="button" ${t.video_url || settings.mock ? '' : 'disabled'}>下载</button><button class="row-delete-action" type="button">删除记录</button></div></td>`;
+    tr.innerHTML = `${selectable ? `<td class="check-col"><input type="checkbox" ${state.selected.has(t.id) ? 'checked' : ''} /></td>` : ''}<td class="task-summary-cell"><button class="task-copy-button" type="button" title="复制提示词" aria-label="复制提示词">复制</button><div class="task-name">${escapeHtml(t.name)}</div><div class="task-id">${escapeHtml(t.id)} · ${escapeHtml(t.prompt)}</div><button class="task-expand-button" type="button" title="放大查看" aria-label="放大查看">⤢ 放大</button></td><td>${t.image_count || 0} 张</td><td>${escapeHtml(parameters)}</td><td class="progress-cell">${statusMarkup(t)}</td>${selectable ? `<td class="cost-cell">${formatTaskCost(t)}</td>` : ''}<td>${t.time}</td><td class="row-menu"><button class="row-menu-button" type="button" aria-label="任务操作" title="任务操作">•••</button><div class="row-action-menu" hidden><button class="row-download-action" type="button" ${t.video_url || settings.mock ? '' : 'disabled'}>下载</button><button class="row-delete-action" type="button">删除记录</button></div></td>`;
     tr.querySelector('.task-copy-button').addEventListener('click', () => copyPrompt(t.prompt, tr.querySelector('.task-copy-button')));
     tr.querySelector('.task-expand-button').addEventListener('click', () => openTaskDetail(t));
     const menu = tr.querySelector('.row-action-menu');
@@ -763,8 +809,10 @@ async function copyPrompt(prompt, button) {
 
 function openTaskDetail(task) {
   $('#taskDetailTitle').textContent = task.name || '任务详情';
-  const rate = modelRateFor((state.models.find((model) => model.id === task.model_id) || {}).pricing, task.resolution, task.submitted_at || task.created_at);
-  const costText = rate != null && Number(task.duration) > 0 ? ` · 预估 ${priceSymbol((state.models.find((model) => model.id === task.model_id) || {}).pricing)}${(rate * Number(task.duration)).toFixed(3)}` : '';
+  const pricingRef = (state.models.find((model) => model.id === task.model_id) || {}).pricing;
+  const storedCost = typeof task.cost === 'number' ? ` · 预估 ${formatTaskCost(task)}` : '';
+  const rate = storedCost ? null : modelRateFor(pricingRef, task.resolution, task.submitted_at || task.created_at);
+  const costText = storedCost || (rate != null && Number(task.duration) > 0 ? ` · 预估 ${priceSymbol(pricingRef)}${(rate * Number(task.duration)).toFixed(3)}` : '');
   $('#taskDetailMeta').textContent = `${task.id} · ${task.time || '-'} · ${task.resolution || '未设置分辨率'}${costText}`;
   $('#taskDetailPrompt').textContent = task.prompt || '';
   $('#copyTaskDetail').dataset.taskId = task.id;
@@ -786,6 +834,7 @@ function renderTasks() {
   renderTaskRows($('#recordTaskTable'), recordFiltered, true);
   renderScheduledTasks(scheduled);
   renderImageTasks();
+  renderUsageStats();
   $('#taskTotal').textContent = unfinished.length;
   const navTaskCount = $('#navTaskCount');
   if (navTaskCount) navTaskCount.textContent = String(state.tasks.filter((t) => t.kind !== 'image').length);
@@ -895,6 +944,8 @@ async function loadTasks() {
       scheduled_at: task.scheduled_at,
       kind: task.kind || 'video',
       image_files: task.image_files || null,
+      cost: typeof task.cost === 'number' ? task.cost : null,
+      cost_currency: task.cost_currency || 'CNY',
       time: taskTime(task.created_at),
     })).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     renderTasks();
@@ -968,7 +1019,9 @@ async function submitBatch() {
   const prompt = $('#prompt').value.trim();
   if (!prompt) { $('#prompt').focus(); return; }
   const images = state.imageItems.filter((item) => item.value.trim()).map((item) => item.value.trim());
-  if (!images[0]) {
+  const refField = (model.fields || []).find((field) => field && field.key === 'reference_images');
+  const refsRequired = !refField || refField.required !== false;
+  if (refsRequired && !images[0]) {
     alert('请添加至少一张图片或填写图片链接');
     $('#imageLinks input')?.focus?.();
     return;
@@ -1098,6 +1151,7 @@ function pollTask(localId) {
       t.submitted_at = remote.submitted_at || t.submitted_at;
       if (remote.video_url) { t.video_url = remote.video_url; }
       if (remote.image_files) t.image_files = remote.image_files;
+      if (remote.cost != null) { t.cost = remote.cost; t.cost_currency = remote.cost_currency || 'CNY'; }
       const status = taskStatus(t);
       if (status === 'completed') { t.progress = 100; state.pollingTasks.delete(localId); notifyTaskFinished(t, true); }
       else if (['failed', 'timeout'].includes(status)) { state.pollingTasks.delete(localId); notifyTaskFinished(t, false); }
@@ -1668,6 +1722,42 @@ async function downloadImageTask(task) {
   alert(`已下载 ${files.length} 张图片。`);
 }
 
+// 用量统计：总花费 / 本月花费 / 本月任务与成功率 / 按模型花费
+function renderUsageStats() {
+  const totalEl = $('#statTotalCost');
+  if (!totalEl) return;
+  const monthKey = (beijingDayKey(new Date().toISOString()) || '').slice(0, 7);
+  const monthTasks = state.tasks.filter((task) => (beijingDayKey(task.created_at) || '').slice(0, 7) === monthKey);
+  const sumCosts = (tasks) => {
+    const sums = {};
+    tasks.forEach((task) => {
+      if (typeof task.cost !== 'number') return;
+      const cur = task.cost_currency === 'USD' ? 'USD' : 'CNY';
+      sums[cur] = Math.round(((sums[cur] || 0) + task.cost) * 100) / 100;
+    });
+    const text = Object.entries(sums).map(([cur, value]) => `${cur === 'USD' ? '$' : '¥'}${value.toFixed(2)}`).join(' + ');
+    return text || null;
+  };
+  totalEl.textContent = sumCosts(state.tasks) || '—';
+  $('#statMonthCost').textContent = sumCosts(monthTasks) || '—';
+  $('#statMonthTasks').textContent = String(monthTasks.length);
+  const settled = monthTasks.filter((task) => ['completed', 'failed', 'timeout'].includes(taskStatus(task)));
+  const okCount = settled.filter((task) => taskStatus(task) === 'completed').length;
+  $('#statMonthRate').textContent = settled.length ? `${Math.round((okCount / settled.length) * 100)}%` : '—';
+  const byModel = new Map();
+  state.tasks.forEach((task) => {
+    if (typeof task.cost !== 'number') return;
+    const key = task.model_id || task.model_name || '未知模型';
+    const entry = byModel.get(key) || { name: task.model_name || key, count: 0, sums: {} };
+    entry.count += 1;
+    const cur = task.cost_currency === 'USD' ? 'USD' : 'CNY';
+    entry.sums[cur] = Math.round(((entry.sums[cur] || 0) + task.cost) * 100) / 100;
+    byModel.set(key, entry);
+  });
+  const rows = [...byModel.values()].map((entry) => `<tr><td>${escapeHtml(entry.name)}</td><td>${entry.count}</td><td>${Object.entries(entry.sums).map(([cur, value]) => `${cur === 'USD' ? '$' : '¥'}${value.toFixed(2)}`).join(' + ')}</td></tr>`).join('');
+  $('#usageModelTable').innerHTML = rows || '<tr><td colspan="3" class="usage-empty">暂无花费数据，新提交的任务完成后会计入</td></tr>';
+}
+
 function renderImageTasks() {
   const tbody = $('#imageTaskTable');
   if (!tbody) return;
@@ -1680,7 +1770,7 @@ function renderImageTasks() {
     const thumbsHtml = thumbs.length
       ? thumbs.map((_, index) => `<img src="${settings.apiBase}/api/tasks/${encodeURIComponent(task.id)}/image/${index}" alt="生成图片" loading="lazy" />`).join('')
       : (taskStatus(task) === 'failed' ? '<span class="image-thumb-empty">无图片</span>' : '<span class="image-thumb-empty">生成中…</span>');
-    tr.innerHTML = `<td class="task-summary-cell"><div class="task-name">${escapeHtml(task.name)}</div><div class="task-id">${escapeHtml(task.id)} · ${escapeHtml(task.prompt)}</div></td><td class="progress-cell">${statusMarkup(task)}</td><td><div class="image-thumbs">${thumbsHtml}</div></td><td>${task.time}</td><td class="row-menu"><button class="row-menu-button" type="button" aria-label="任务操作">•••</button><div class="row-action-menu" hidden><button class="row-image-download" type="button" ${thumbs.length ? '' : 'disabled'}>下载图片</button><button class="row-delete-action" type="button">删除记录</button></div></td>`;
+    tr.innerHTML = `<td class="task-summary-cell"><div class="task-name">${escapeHtml(task.name)}</div><div class="task-id">${escapeHtml(task.id)} · ${escapeHtml(task.prompt)}${typeof task.cost === 'number' ? ` · ${formatTaskCost(task)}` : ''}</div></td><td class="progress-cell">${statusMarkup(task)}</td><td><div class="image-thumbs">${thumbsHtml}</div></td><td>${task.time}</td><td class="row-menu"><button class="row-menu-button" type="button" aria-label="任务操作">•••</button><div class="row-action-menu" hidden><button class="row-image-download" type="button" ${thumbs.length ? '' : 'disabled'}>下载图片</button><button class="row-delete-action" type="button">删除记录</button></div></td>`;
     const menu = tr.querySelector('.row-action-menu');
     tr.querySelector('.row-menu-button').addEventListener('click', (event) => {
       event.stopPropagation();
