@@ -25,12 +25,16 @@
         <nav class="main-nav" aria-label="主导航">
           <a class="nav-item active" id="navImage" href="#image"><span class="nav-icon">▣</span><span class="nav-label">图片生成</span></a><a class="nav-item" id="navWorkspace" href="#workspace"><span class="nav-icon">✦</span><span class="nav-label">视频生成</span></a>
           <a class="nav-item nav-group" id="navTasks" href="#tasks"><span class="nav-icon">◫</span><span class="nav-label">任务记录</span><span class="nav-chevron">⌃</span></a>
-          <div class="nav-sub">
+          <div class="nav-sub" id="tasksGroup">
+            <a class="nav-sub-item" id="navTasksAll" href="#tasks-summary"><span class="nav-icon">▤</span><span class="nav-label">汇总任务</span></a>
             <a class="nav-sub-item" id="navTasksImage" href="#tasks-image"><span class="nav-icon">▣</span><span class="nav-label">图片任务</span></a>
             <a class="nav-sub-item" id="navTasksVideo" href="#tasks-video"><span class="nav-icon">▶</span><span class="nav-label">视频任务</span></a>
           </div>
-          <button class="nav-item nav-action" id="openSettings" type="button"><span class="nav-icon">⚙</span><span class="nav-label">模型管理</span></button>
-          <button class="nav-item nav-action" id="openTokens" type="button"><span class="nav-icon">◈</span><span class="nav-label">令牌管理</span></button>
+          <a class="nav-item nav-group" id="navAdmin" href="#admin"><span class="nav-icon">⚙</span><span class="nav-label">后台管理</span><span class="nav-chevron">⌃</span></a>
+          <div class="nav-sub" id="adminGroup">
+            <button class="nav-sub-item" id="openSettings" type="button"><span class="nav-icon">⚙</span><span class="nav-label">模型管理</span></button>
+            <button class="nav-sub-item" id="openTokens" type="button"><span class="nav-icon">◈</span><span class="nav-label">令牌管理</span></button>
+          </div>
           <a class="nav-item" id="navQuery" href="#query"><span class="nav-icon">↗</span><span class="nav-label">查询入口</span></a>
         </nav>
 

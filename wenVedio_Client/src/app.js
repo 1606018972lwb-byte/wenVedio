@@ -3023,22 +3023,29 @@ function renderUsageStats() {
   });
   table.innerHTML = [...byModel.values()].map((entry) => `<tr><td>${escapeHtml(entry.name)}</td><td>${entry.count}</td><td>${Object.entries(entry.sums).map(([cur, value]) => `${cur === 'USD' ? '$' : '¥'}${value.toFixed(2)}`).join(' + ')}</td></tr>`).join('') || '<tr><td colspan="3" class="usage-empty">暂无花费数据，新提交的任务完成后会计入</td></tr>';
 }
-const TASKS_GROUP_KEY = 'wenvedio-tasks-group-collapsed';
+const GROUP_KEYS = { tasks: 'wenvedio-tasks-group-collapsed', admin: 'wenvedio-admin-group-collapsed' };
 
-function isTasksGroupCollapsed() {
-  try { return localStorage.getItem(TASKS_GROUP_KEY) === 'true'; } catch (_) { return false; }
+function isGroupCollapsed(name) {
+  try { return localStorage.getItem(GROUP_KEYS[name]) === 'true'; } catch (_) { return false; }
 }
 
-function applyTasksGroupCollapsed(collapsed) {
-  $('#sidebar').classList.toggle('tasks-collapsed', collapsed);
-  const chevron = $('#navTasks .nav-chevron');
+function applyGroupCollapsed(name, collapsed) {
+  $('#sidebar').classList.toggle(`${name}-collapsed`, collapsed);
+  const chevron = $(name === 'tasks' ? '#navTasks .nav-chevron' : '#navAdmin .nav-chevron');
   if (chevron) chevron.textContent = collapsed ? '⌄' : '⌃';
 }
 
-function toggleTasksGroup() {
-  const collapsed = !isTasksGroupCollapsed();
-  try { localStorage.setItem(TASKS_GROUP_KEY, String(collapsed)); } catch (_) { /* 忽略 */ }
-  applyTasksGroupCollapsed(collapsed);
+function toggleGroupCollapse(name) {
+  const collapsed = !isGroupCollapsed(name);
+  try { localStorage.setItem(GROUP_KEYS[name], String(collapsed)); } catch (_) { /* 忽略 */ }
+  applyGroupCollapsed(name, collapsed);
+}
+
+// 跳转到某个分组内的页面时自动展开该分组
+function expandGroup(name) {
+  if (!isGroupCollapsed(name)) return;
+  try { localStorage.setItem(GROUP_KEYS[name], 'false'); } catch (_) { /* 忽略 */ }
+  applyGroupCollapsed(name, false);
 }
 
 // 图片任务 / 视频任务 / 全部：各自独立页面
@@ -3048,10 +3055,11 @@ function setRecordsKind(kind) {
   renderTasks();
   showView('tasks');
 }
-// 子菜单高亮：仅图片/视频页面点亮对应子项，全部页面不点亮
+// 子菜单高亮：汇总任务 / 图片任务 / 视频任务 三选一
 function syncRecordsKindHighlight() {
-  const kind = state.recordsKind === 'image' ? 'Image' : state.recordsKind === 'video' ? 'Video' : '';
-  $$('.nav-sub-item').forEach((item) => item.classList.toggle('active', kind !== '' && item.id === `navTasks${kind}`));
+  const map = { all: 'navTasksAll', image: 'navTasksImage', video: 'navTasksVideo' };
+  const activeId = map[state.recordsKind] || 'navTasksAll';
+  $$('.nav-sub-item').forEach((item) => item.classList.toggle('active', item.id === activeId));
 }
 
 function showView(view) {
@@ -3076,11 +3084,14 @@ function showView(view) {
   tokensView.hidden = !isTokens;
   pageTitle.textContent = isImage ? '图片生成' : isQuery ? '访问查询' : isRecords ? '任务记录' : isSettings ? '模型管理' : isTokens ? '令牌管理' : '视频生成工作台';
   pageEyebrow.textContent = isImage ? 'WORKSPACE / IMAGE LAB' : isQuery ? 'AUTODL / COMFYUI' : isRecords ? 'WORKSPACE / HISTORY' : isSettings ? 'WORKSPACE / MODELS' : isTokens ? 'WORKSPACE / TOKENS' : 'WORKSPACE / VIDEO LAB';
-  $$('.main-nav .nav-item').forEach((item) => item.classList.remove('active'));
-  $(`#${isImage ? 'navImage' : isQuery ? 'navQuery' : isRecords ? 'navTasks' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : 'navWorkspace'}`).classList.add('active');
+  $$('.main-nav .nav-item, .main-nav .nav-sub-item').forEach((item) => item.classList.remove('active'));
+  const activeId = isImage ? 'navImage' : isQuery ? 'navQuery' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : isRecords ? '' : 'navWorkspace';
+  const activeEl = activeId ? $(`#${activeId}`) : null;
+  if (activeEl) activeEl.classList.add('active');
+  if (isRecords) { expandGroup('tasks'); syncRecordsKindHighlight(); }
+  if (isSettings || isTokens) expandGroup('admin');
   $$('.mobile-nav button').forEach((item) => item.classList.remove('active'));
   $(`#${isImage ? 'mobileImage' : isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace'}`).classList.add('active');
-  syncRecordsKindHighlight();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -3182,7 +3193,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadGenValues();
   loadTasks();
   initializeSidebar();
-  applyTasksGroupCollapsed(isTasksGroupCollapsed());
+  applyGroupCollapsed('tasks', isGroupCollapsed('tasks'));
+  applyGroupCollapsed('admin', isGroupCollapsed('admin'));
   showView('workspace');
 
   // 视频生成
@@ -3345,7 +3357,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // 导航
   $('#navImage').addEventListener('click', (event) => { event.preventDefault(); showView('image'); });
   $('#navWorkspace').addEventListener('click', (event) => { event.preventDefault(); showView('workspace'); });
-  $('#navTasks').addEventListener('click', (event) => { event.preventDefault(); toggleTasksGroup(); setRecordsKind('all'); });
+  $('#navTasks').addEventListener('click', (event) => { event.preventDefault(); toggleGroupCollapse('tasks'); });
+  $('#navAdmin').addEventListener('click', (event) => { event.preventDefault(); toggleGroupCollapse('admin'); });
+  $('#navTasksAll').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('all'); });
   $('#navTasksImage').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('image'); });
   $('#navTasksVideo').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('video'); });
   $('#navQuery').addEventListener('click', (event) => { event.preventDefault(); showView('query'); });
@@ -3353,7 +3367,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#gotoVideoRecords').addEventListener('click', () => { setRecordsKind('video'); showView('tasks'); });
   $('#mobileImage').addEventListener('click', () => showView('image'));
   $('#mobileWorkspace').addEventListener('click', () => showView('workspace'));
-  $('#mobileTasks').addEventListener('click', () => showView('tasks'));
+  $('#mobileTasks').addEventListener('click', () => setRecordsKind('all'));
   $('#mobileQuery').addEventListener('click', () => showView('query'));
   $('#mobileApi').addEventListener('click', openSettings);
 

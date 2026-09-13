@@ -365,7 +365,10 @@ th, td { padding: 13px 12px; }
 .dl-icon { font-style: normal; margin-right: 4px; }
 .empty-state .primary-button { margin-top: 14px; }
 
-#sidebar.tasks-collapsed .nav-sub { display: none; }
+button.nav-sub-item { border: 0; background: none; width: 100%; text-align: left; font: inherit; cursor: pointer; }
+#sidebar.tasks-collapsed #tasksGroup { display: none; }
+#sidebar.admin-collapsed #adminGroup { display: none; }
+#sidebar.tasks-collapsed #navTasks .nav-chevron, #sidebar.admin-collapsed #navAdmin .nav-chevron { transform: rotate(180deg); }
 #sidebar.tasks-collapsed .nav-chevron { transform: rotate(180deg); }
 .nav-chevron { transition: transform .15s ease; }
 
