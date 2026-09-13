@@ -20,10 +20,13 @@ const PUBLIC_FILES = new Map([
 ]);
 
 // ---------------- 配置读取 ----------------
+// 桌面客户端会把 .env 指向用户数据目录；web 端仍是项目根目录下的 .env。
+const ENV_FILE = process.env.WENVEDIO_ENV_FILE || path.join(PROJECT_ROOT, '.env');
+
 function loadEnv() {
   const env = {};
   try {
-    const text = fs.readFileSync(path.join(PROJECT_ROOT, '.env'), 'utf8');
+    const text = fs.readFileSync(ENV_FILE, 'utf8');
     for (const raw of text.split('\n')) {
       const line = raw.trim();
       if (!line || line.startsWith('#')) continue;
@@ -37,7 +40,9 @@ function loadEnv() {
 
 const env = loadEnv();
 const config = {
-  port: Number(env.PORT || 8787),
+  port: Number(process.env.PORT || env.PORT || 8787),
+  // 监听地址：桌面客户端注入 HOST=127.0.0.1；独立服务端由 .env 的 HOST 决定（不写则保持原有行为）。
+  host: process.env.HOST || env.HOST || '',
   // 第三方提交接口前缀：实际提交 POST {endpoint}/{workflow}
   endpoint: env.AUTODL_ENDPOINT || 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow',
   workflow: env.AUTODL_WORKFLOW || 'minimax_h3_lightx2v_v5_15s',
@@ -51,17 +56,23 @@ const config = {
 config.requestUrl = env.AUTODL_REQUEST_URL || `${config.endpoint.replace(/\/$/, '')}/${config.workflow}`;
 
 // 任务记录：内存用于当前请求，JSON 文件用于跨重启恢复。
-const DATA_DIR = path.join(PROJECT_ROOT, 'data');
-const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
-const MODELS_FILE = path.join(DATA_DIR, 'models.json');
-const TOKENS_FILE = path.join(DATA_DIR, 'tokens.json');
+const DATA_DIR = process.env.WENVEDIO_DATA_DIR
+  ? path.resolve(process.env.WENVEDIO_DATA_DIR)
+  : path.join(PROJECT_ROOT, 'data');
+// 所有配置收敛到 data/config/，日志按天写入 data/log/，过期日志自动清理。
+const CONFIG_DIR = path.join(DATA_DIR, 'config');
+const LOG_DIR = path.join(DATA_DIR, 'log');
+const TASKS_FILE = path.join(CONFIG_DIR, 'tasks.json');
+const SETTINGS_FILE = path.join(CONFIG_DIR, 'settings.json');
+const MODELS_FILE = path.join(CONFIG_DIR, 'models.json');
+const TOKENS_FILE = path.join(CONFIG_DIR, 'tokens.json');
+const IMAGES_DIR = path.join(DATA_DIR, 'images');
 const store = new Map();
 const models = new Map();
 const tokens = new Map();
 let seq = 0;
 const MAX_SEED = 999999999999999;
 const TASK_TIMEOUT_MS = 20 * 60 * 1000;
-const SCHEDULE_INTERVAL_MS = 5 * 1000;
 let scheduledBusy = false;
 let lastScheduledSubmissionAt = 0;
 
@@ -71,11 +82,12 @@ const DEFAULT_MODELS = [
     request_url: 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow/minimax_h3_lightx2v_v5_15s',
     query_url: 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow/result/{task_id}',
     token_id: 'default', request_params: {},
+    pricing: { peak: 0.02, valley: 0.01, valley_start: '00:00', valley_end: '08:00' },
     fields: [
       { key: 'prompt', label: 'prompt', type: 'textarea', required: true, max: 500000 },
-      { key: 'duration', label: 'duration', type: 'number', min: 1, max: 15, step: 1, default: 5 },
-      { key: 'resolution', label: 'resolution', type: 'select', options: ['480p竖', '768p竖', '480p横', '768p横', '480p(1:1)', '768p(1:1)'] },
-      { key: 'seed', label: 'seed', type: 'number', min: 1, max: MAX_SEED, step: 1 },
+      { key: 'duration', label: '时长', type: 'number', min: 1, max: 15, step: 1, default: 5 },
+      { key: 'resolution', label: '分辨率', type: 'select', options: ['480p竖', '768p竖', '480p横', '768p横', '480p(1:1)', '768p(1:1)'] },
+      { key: 'seed', label: '随机种子', type: 'number', min: 1, max: MAX_SEED, step: 1 },
       { key: 'reference_images', label: '参考图片', type: 'images', required: true, min: 1, max: 10 },
     ],
   },
@@ -84,11 +96,12 @@ const DEFAULT_MODELS = [
     request_url: 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow/minimax_h3_lightx2v_v5',
     query_url: 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow/result/{task_id}',
     token_id: 'default', request_params: {},
+    pricing: { peak: 0.02, valley: 0.01, valley_start: '00:00', valley_end: '08:00' },
     fields: [
       { key: 'prompt', label: 'prompt', type: 'textarea', required: true, max: 500000 },
-      { key: 'duration', label: 'duration', type: 'number', min: 1, max: 15, step: 1, default: 5 },
-      { key: 'resolution', label: 'resolution', type: 'select', options: ['480p竖', '768p竖', '1080p竖', '480p横', '768p横', '1080p横', '480p(1:1)', '768p(1:1)', '1080p(1:1)'] },
-      { key: 'seed', label: 'seed', type: 'number', min: 1, max: MAX_SEED, step: 1 },
+      { key: 'duration', label: '时长', type: 'number', min: 1, max: 15, step: 1, default: 5 },
+      { key: 'resolution', label: '分辨率', type: 'select', options: ['480p竖', '768p竖', '1080p竖', '480p横', '768p横', '1080p横', '480p(1:1)', '768p(1:1)', '1080p(1:1)'] },
+      { key: 'seed', label: '随机种子', type: 'number', min: 1, max: MAX_SEED, step: 1 },
       { key: 'reference_images', label: '参考图片', type: 'images', required: true, min: 1, max: 10 },
     ],
   },
@@ -123,13 +136,117 @@ function saveTokens() {
   fs.renameSync(temporary, TOKENS_FILE);
 }
 
+// 兜底：模型引用的令牌不存在时（例如全新安装后先添加令牌），自动改绑到第一个可用令牌。
+function rebindModelTokens() {
+  const first = [...tokens.values()][0];
+  if (!first) return false;
+  let changed = false;
+  for (const model of models.values()) {
+    if (!tokens.has(model.token_id)) {
+      model.token_id = first.id;
+      changed = true;
+    }
+  }
+  if (changed) saveModels();
+  return changed;
+}
+
+// 模型令牌缺失时回退到第一个可用令牌，避免“添加了令牌却用不了”。
+function tokenValueFor(model) {
+  return tokens.get(model?.token_id)?.value || [...tokens.values()][0]?.value || config.apiKey || '';
+}
+
+// 应用级设置（预约提交间隔等），持久化到数据目录 settings.json。
+const DEFAULT_SCHEDULE_INTERVAL_MS = 5 * 1000;
+let scheduleIntervalMs = DEFAULT_SCHEDULE_INTERVAL_MS;
+
+function loadAppSettings() {
+  try {
+    const stored = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) || {};
+    const seconds = Math.round(Number(stored.schedule_interval_seconds));
+    if (Number.isFinite(seconds) && seconds >= 1 && seconds <= 600) scheduleIntervalMs = seconds * 1000;
+  } catch (err) {
+    if (err.code !== 'ENOENT') writeLog('error', `读取应用设置失败: ${err.message}`);
+  }
+}
+
+function saveAppSettings() {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const temporary = `${SETTINGS_FILE}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify({ schedule_interval_seconds: scheduleIntervalMs / 1000 }, null, 2));
+  fs.renameSync(temporary, SETTINGS_FILE);
+}
+
+// ---- 数据目录布局与日志 ----
+// 日志按天写入 data/log/YYYY-MM-DD.log，保留 30 天，过期自动删除。
+const LOG_RETENTION_DAYS = 30;
+
+function beijingParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+function writeLog(level, message) {
+  const p = beijingParts();
+  const line = `[${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}] [${level}] ${message}`;
+  if (level === 'error') console.error(line);
+  else console.log(line);
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    fs.appendFileSync(path.join(LOG_DIR, `${p.year}-${p.month}-${p.day}.log`), `${line}\n`);
+  } catch (_) { /* 写日志失败不影响业务 */ }
+}
+
+// 旧版本把配置直接放在 data/ 根目录，启动时迁移到 data/config/。
+function migrateDataLayout() {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  for (const [name, target] of [
+    ['tasks.json', TASKS_FILE],
+    ['models.json', MODELS_FILE],
+    ['tokens.json', TOKENS_FILE],
+    ['settings.json', SETTINGS_FILE],
+  ]) {
+    const legacy = path.join(DATA_DIR, name);
+    try {
+      if (fs.existsSync(legacy) && !fs.existsSync(target)) {
+        fs.renameSync(legacy, target);
+        console.log(`[wenVedio] 已迁移 ${name} 到 config/`);
+      }
+    } catch (err) {
+      console.error(`[wenVedio] 迁移 ${name} 失败: ${err.message}`);
+    }
+  }
+}
+
+function cleanExpiredLogs() {
+  try {
+    if (!fs.existsSync(LOG_DIR)) return;
+    const cutoff = Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (const name of fs.readdirSync(LOG_DIR)) {
+      const match = name.match(/^(\d{4}-\d{2}-\d{2})\.log$/);
+      const file = path.join(LOG_DIR, name);
+      let time = match ? new Date(`${match[1]}T00:00:00+08:00`).getTime() : NaN;
+      if (!Number.isFinite(time)) time = fs.statSync(file).mtimeMs;
+      if (Number.isFinite(time) && time < cutoff) {
+        fs.unlinkSync(file);
+        console.log(`[wenVedio] 已删除过期日志 ${name}`);
+      }
+    }
+  } catch (err) {
+    console.error(`[wenVedio] 清理过期日志失败: ${err.message}`);
+  }
+}
+
 function loadTokens() {
   let records = null;
   try {
     const parsed = JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf8'));
     records = Array.isArray(parsed) ? parsed : parsed.tokens;
   } catch (err) {
-    if (err.code !== 'ENOENT') console.error(`[wenVedio] 读取令牌配置失败: ${err.message}`);
+    if (err.code !== 'ENOENT') writeLog('error', `读取令牌配置失败: ${err.message}`);
   }
   if (Array.isArray(records)) records.forEach((token) => { if (token?.id && token?.value) tokens.set(token.id, token); });
   if (!tokens.size && config.apiKey) tokens.set('default', { id: 'default', name: '默认 ComfyUI 令牌', value: config.apiKey, created_at: new Date().toISOString() });
@@ -142,10 +259,21 @@ function loadModels() {
     const parsed = JSON.parse(fs.readFileSync(MODELS_FILE, 'utf8'));
     records = Array.isArray(parsed) ? parsed : parsed.models;
   } catch (err) {
-    if (err.code !== 'ENOENT') console.error(`[wenVedio] 读取模型配置失败: ${err.message}`);
+    if (err.code !== 'ENOENT') writeLog('error', `读取模型配置失败: ${err.message}`);
   }
   const source = Array.isArray(records) && records.length ? records : DEFAULT_MODELS;
   source.forEach((model) => models.set(model.id, { ...model, token_id: model.token_id || 'default' }));
+  // 旧版本保存的模型没有价格字段，内置模型补上默认价格，避免一直显示未配置。
+  let pricingBackfilled = false;
+  for (const model of models.values()) {
+    if (!model.pricing) {
+      const defaults = DEFAULT_MODELS.find((item) => item.id === model.id);
+      if (defaults && defaults.pricing) {
+        model.pricing = defaults.pricing;
+        pricingBackfilled = true;
+      }
+    }
+  }
   saveModels();
 }
 
@@ -166,13 +294,17 @@ function loadStore() {
       if (match) seq = Math.max(seq, Number(match[1]) || 0);
     }
   } catch (err) {
-    if (err.code !== 'ENOENT') console.error(`[wenVedio] 读取任务记录失败: ${err.message}`);
+    if (err.code !== 'ENOENT') writeLog('error', `读取任务记录失败: ${err.message}`);
   }
 }
 
+migrateDataLayout();
 loadTokens();
 loadModels();
+rebindModelTokens();
 loadStore();
+loadAppSettings();
+cleanExpiredLogs();
 
 function randomSeed() {
   while (true) {
@@ -216,14 +348,14 @@ function nextScheduledTime() {
   const last = [...store.values()]
     .filter((task) => task.status === 'scheduled' && task.scheduled_at)
     .reduce((latest, task) => Math.max(latest, new Date(task.scheduled_at).getTime()), 0);
-  return new Date(Math.max(midnight.getTime(), last ? last + SCHEDULE_INTERVAL_MS : 0));
+  return new Date(Math.max(midnight.getTime(), last ? last + scheduleIntervalMs : 0));
 }
 
 // ---------------- 第三方 API 封装 ----------------
 // 提交单个任务
 async function submitTask(task) {
   const model = models.get(task.model_id) || models.get(config.workflow) || DEFAULT_MODELS[0];
-  const token = tokens.get(model.token_id)?.value || config.apiKey;
+  const token = tokenValueFor(model);
   const body = { ...(model.request_params || {}), ...config.requestParams, ...(task.params || {}), prompt: task.prompt };
   const duration = Number(task.duration);
   if (Number.isInteger(duration) && duration >= 1 && duration <= 15) body.duration = duration;
@@ -276,13 +408,21 @@ async function performSubmission(record) {
     record.status = 'failed';
     record.error = err.message;
   }
+  if (record.status === 'failed') writeLog('error', `任务 ${record.local_id} 提交失败: ${record.error}`);
+  else writeLog('info', `任务 ${record.local_id} 提交成功，状态 ${record.status}`);
+  const costModel = models.get(record.model_id);
+  const rate = modelRateFor(costModel?.pricing, record.resolution, record.submitted_at);
+  if (rate != null && Number(record.duration) > 0) {
+    record.cost = Math.round(rate * Number(record.duration) * 1000) / 1000;
+    record.cost_currency = costModel?.pricing?.currency === 'USD' ? 'USD' : 'CNY';
+  }
   delete record.scheduled_at;
   saveStore();
   return record;
 }
 
 async function processScheduledTasks() {
-  if (scheduledBusy || Date.now() - lastScheduledSubmissionAt < SCHEDULE_INTERVAL_MS) return;
+  if (scheduledBusy || Date.now() - lastScheduledSubmissionAt < scheduleIntervalMs) return;
   const due = [...store.values()]
     .filter((task) => task.status === 'scheduled' && new Date(task.scheduled_at).getTime() <= Date.now())
     .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at))[0];
@@ -296,7 +436,7 @@ async function processScheduledTasks() {
 // 查询单个任务（需要平台登录 token；工作流 key 无法查询）
 async function queryTask(taskId, modelId) {
   const model = models.get(modelId);
-  const queryToken = tokens.get(model?.token_id)?.value || config.tasksToken || config.apiKey;
+  const queryToken = tokens.get(model?.token_id)?.value || [...tokens.values()][0]?.value || config.tasksToken || config.apiKey;
   if (!queryToken) {
     return { task_id: taskId, status: 'queued', query_status: 'unavailable',
       note: '未配置 AUTODL_TASKS_TOKEN，无法从平台查询任务结果，请在平台控制台查看。' };
@@ -364,6 +504,182 @@ function publicConfig() {
   };
 }
 
+// ---- 图片生成（OpenAI 兼容 images 接口，后台异步执行）----
+function createMockImage(index) {
+  const width = 512;
+  const height = 512;
+  const palette = [[63, 104, 240], [232, 121, 69], [26, 167, 120], [138, 98, 211]];
+  const [r, g, b] = palette[index % palette.length];
+  const rowSize = width * 3 + ((4 - ((width * 3) % 4)) % 4);
+  const pixels = Buffer.alloc(rowSize * height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = y * rowSize + x * 3;
+      pixels[offset] = b;
+      pixels[offset + 1] = g;
+      pixels[offset + 2] = r;
+    }
+  }
+  const header = Buffer.alloc(54);
+  header.write('BM', 0, 'ascii');
+  header.writeUInt32LE(54 + pixels.length, 2);
+  header.writeUInt32LE(54, 10);
+  header.writeUInt32LE(40, 14);
+  header.writeInt32LE(width, 18);
+  header.writeInt32LE(height, 22);
+  header.writeUInt16LE(1, 26);
+  header.writeUInt16LE(24, 28);
+  header.writeUInt32LE(pixels.length, 34);
+  return Buffer.concat([header, pixels]);
+}
+
+// 参考图解析：data URL 直接解码，http(s) 链接下载。
+async function resolveRefBuffer(ref) {
+  const value = String(ref || '').trim();
+  if (!value) throw new Error('参考图为空');
+  const dataMatch = value.match(/^data:([^;]+);base64,(.+)$/s);
+  if (dataMatch) return { type: dataMatch[1], data: Buffer.from(dataMatch[2], 'base64') };
+  if (/^https?:\/\//i.test(value)) {
+    const res = await fetch(value, { signal: AbortSignal.timeout(60 * 1000) });
+    if (!res.ok) throw new Error(`下载参考图失败 HTTP ${res.status}`);
+    return { type: res.headers.get('content-type') || 'image/png', data: Buffer.from(await res.arrayBuffer()) };
+  }
+  throw new Error('参考图仅支持图片链接或 base64 图片');
+}
+
+// 零依赖 multipart/form-data 构建
+function buildMultipartBody(fields, files) {
+  const boundary = '----wenVedioForm' + crypto.randomBytes(10).toString('hex');
+  const chunks = [];
+  for (const [name, value] of Object.entries(fields)) {
+    if (value === '' || value == null) continue;
+    chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+  }
+  files.forEach((file) => {
+    const fieldName = files.length > 1 ? 'image[]' : 'image';
+    chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${file.filename}"\r\nContent-Type: ${file.type}\r\n\r\n`));
+    chunks.push(file.data);
+    chunks.push(Buffer.from('\r\n'));
+  });
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  return { contentType: `multipart/form-data; boundary=${boundary}`, body: Buffer.concat(chunks) };
+}
+
+async function runImageGeneration(record) {
+  const model = models.get(record.model_id);
+  try {
+    if (!model) throw new Error('模型配置不存在');
+    fs.mkdirSync(IMAGES_DIR, { recursive: true });
+    if (config.mock) {
+      const count = Math.min(10, Math.max(1, Math.round(Number(record.params?.n) || 1)));
+      const files = [];
+      for (let i = 0; i < count; i += 1) {
+        const name = `${record.local_id}-${i + 1}.bmp`;
+        fs.writeFileSync(path.join(IMAGES_DIR, name), createMockImage(i));
+        files.push(name);
+      }
+      record.image_files = files;
+      record.image_count = files.length;
+      record.status = 'completed';
+      record.completed_at = new Date().toISOString();
+      writeLog('info', `图片任务 ${record.local_id} 演示生成完成（${files.length} 张）`);
+    } else {
+      const token = tokenValueFor(model);
+      if (!token) throw new Error('模型未配置有效令牌');
+      const body = { model: model.workflow, prompt: record.prompt };
+      for (const [key, value] of Object.entries(record.params || {})) {
+        if (value === '' || value == null) continue;
+        body[key] = value;
+      }
+      if (body.n != null) body.n = Math.min(10, Math.max(1, Math.round(Number(body.n) || 1)));
+      const refs = Array.isArray(record.reference_images) ? record.reference_images.filter((ref) => ref && String(ref).trim()) : [];
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 900 * 1000);
+      let res;
+      try {
+        if (refs.length) {
+          // 图生图：multipart 提交到 edits 接口
+          const editUrl = model.edit_url || String(model.request_url || '').replace('generations', 'edits');
+          if (!editUrl || editUrl === model.request_url) throw new Error('该模型未配置图生图地址，无法使用参考图');
+          const refBuffers = [];
+          for (let i = 0; i < refs.length; i += 1) {
+            const ref = await resolveRefBuffer(refs[i]);
+            refBuffers.push({ filename: `ref-${i + 1}.png`, type: ref.type, data: ref.data });
+          }
+          const form = buildMultipartBody(body, refBuffers);
+          res = await fetch(editUrl, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': form.contentType },
+            body: form.body,
+            signal: controller.signal,
+          });
+        } else {
+          res = await fetch(model.request_url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error?.message || data?.msg || `HTTP ${res.status}`);
+      const items = Array.isArray(data.data) ? data.data : [];
+      if (!items.length) throw new Error('接口未返回图片数据');
+      const files = [];
+      for (let i = 0; i < items.length; i += 1) {
+        const item = items[i];
+        let buffer;
+        let ext = 'png';
+        if (item.b64_json) {
+          buffer = Buffer.from(item.b64_json, 'base64');
+          if (typeof item.mime_type === 'string') {
+            if (item.mime_type.includes('jpeg')) ext = 'jpg';
+            else if (item.mime_type.includes('webp')) ext = 'webp';
+          }
+        } else if (item.url) {
+          const imageRes = await fetch(item.url);
+          if (!imageRes.ok) throw new Error(`下载生成图片失败 HTTP ${imageRes.status}`);
+          const type = imageRes.headers.get('content-type') || '';
+          if (type.includes('jpeg')) ext = 'jpg';
+          else if (type.includes('webp')) ext = 'webp';
+          buffer = Buffer.from(await imageRes.arrayBuffer());
+        } else {
+          throw new Error('返回的图片缺少数据');
+        }
+        const name = `${record.local_id}-${i + 1}.${ext}`;
+        fs.writeFileSync(path.join(IMAGES_DIR, name), buffer);
+        files.push(name);
+      }
+      record.image_files = files;
+      record.image_count = files.length;
+      record.status = 'completed';
+      record.completed_at = new Date().toISOString();
+      const imageRate = modelRateFor(model.pricing, String(record.params?.size || ''), new Date());
+      if (imageRate != null) {
+        record.cost = Math.round(imageRate * files.length * 1000) / 1000;
+        record.cost_currency = model.pricing?.currency === 'USD' ? 'USD' : 'CNY';
+      }
+      writeLog('info', `图片任务 ${record.local_id} 生成完成（${files.length} 张）`);
+    }
+  } catch (err) {
+    record.status = 'failed';
+    record.error = err.message;
+    writeLog('error', `图片任务 ${record.local_id} 失败: ${err.message}`);
+  }
+  saveStore();
+}
+
+// 删除图片任务时同时清理落盘的图片文件。
+function deleteTaskFiles(record) {
+  if (!record || record.kind !== 'image' || !Array.isArray(record.image_files)) return;
+  for (const name of record.image_files) {
+    try { fs.unlinkSync(path.join(IMAGES_DIR, path.basename(name))); } catch (_) { /* 文件可能已不存在 */ }
+  }
+}
+
 // ---------------- JSON / 静态资源 工具 ----------------
 function sendJson(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -388,6 +704,70 @@ function serveStatic(res, filePath, contentType) {
   });
 }
 
+// 费率计算：分辨率设置了专属价格（数字或 {峰,谷}）优先，否则按时段取峰价/谷价。
+function rateByTimeSlot(prices, atDate) {
+  const parts = chinaTimeParts(atDate || new Date());
+  const start = Number(String(prices.valley_start || '00:00').slice(0, 2));
+  const end = Number(String(prices.valley_end || '08:00').slice(0, 2));
+  const inValley = start <= end ? parts.hour >= start && parts.hour < end : parts.hour >= start || parts.hour < end;
+  if (inValley) return prices.valley != null ? prices.valley : prices.peak;
+  return prices.peak != null ? prices.peak : prices.valley;
+}
+
+function modelRateFor(pricing, resolution, atDate) {
+  if (!pricing) return null;
+  if (resolution && pricing.by_resolution) {
+    const entry = pricing.by_resolution[resolution];
+    if (entry != null) {
+      if (typeof entry === 'object') return rateByTimeSlot(entry, atDate);
+      return entry;
+    }
+  }
+  if (pricing.peak == null && pricing.valley == null) return null;
+  return rateByTimeSlot(pricing, atDate);
+}
+
+// 模型可选价格：峰谷价格（元/秒）、谷值时段、按分辨率单价。
+function sanitizePricing(pricing) {
+  if (!pricing || typeof pricing !== 'object' || Array.isArray(pricing)) return undefined;
+  const toPrice = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) && num >= 0 ? Math.round(num * 1000) / 1000 : null;
+  };
+  const out = {};
+  if (['per_image', 'per_second', 'per_call', 'per_token', 'fixed'].includes(pricing.unit)) out.unit = pricing.unit;
+  if (pricing.currency === 'USD') out.currency = 'USD';
+  const peak = toPrice(pricing.peak);
+  if (peak != null) out.peak = peak;
+  const valley = toPrice(pricing.valley);
+  if (valley != null) out.valley = valley;
+  const time = (value) => (typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : null);
+  const valleyStart = time(pricing.valley_start);
+  if (valleyStart) out.valley_start = valleyStart;
+  const valleyEnd = time(pricing.valley_end);
+  if (valleyEnd) out.valley_end = valleyEnd;
+  if (pricing.by_resolution && typeof pricing.by_resolution === 'object' && !Array.isArray(pricing.by_resolution)) {
+    const byResolution = {};
+    for (const [resolution, value] of Object.entries(pricing.by_resolution)) {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const peak = toPrice(value.peak);
+        const valley = toPrice(value.valley);
+        if (peak != null || valley != null) {
+          byResolution[resolution.trim()] = {
+            ...(peak != null ? { peak } : {}),
+            ...(valley != null ? { valley } : {}),
+          };
+        }
+      } else {
+        const price = toPrice(value);
+        if (price != null && resolution.trim()) byResolution[resolution.trim()] = price;
+      }
+    }
+    if (Object.keys(byResolution).length) out.by_resolution = byResolution;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // ---------------- 路由 ----------------
 async function handleApi(req, res, url) {
   const route = url.pathname;
@@ -400,7 +780,7 @@ async function handleApi(req, res, url) {
       workflow: config.workflow,
       mock: config.mock,
       has_key: Boolean(config.apiKey),
-      can_query: Boolean(config.tasksToken || config.apiKey),
+      can_query: Boolean(config.tasksToken || config.apiKey || tokens.size > 0),
       request_url: getRequestUrl(),
       query_url: config.queryUrl,
     });
@@ -424,12 +804,23 @@ async function handleApi(req, res, url) {
     try { payload = JSON.parse(await readBody(req)); } catch (_) {}
     const name = String(payload.name || '').trim();
     const value = String(payload.value || '').trim();
-    if (!name || !value) return sendJson(res, 400, { ok: false, msg: '令牌名称和 API Key 不能为空' });
     const id = String(payload.id || crypto.randomUUID());
-    const token = { id, name, value, created_at: tokens.get(id)?.created_at || new Date().toISOString() };
+    const existing = tokens.get(id);
+    // 带已有 id 即为编辑：Key 留空表示保留原值；新增仍必须提供 Key。
+    if (!name || (!value && !existing)) return sendJson(res, 400, { ok: false, msg: '令牌名称和 API Key 不能为空' });
+    const token = {
+      id,
+      name,
+      value: value || existing?.value || '',
+      provider: String(payload.provider || existing?.provider || '').trim(),
+      remark: payload.remark != null ? String(payload.remark).slice(0, 200) : String(existing?.remark || ''),
+      created_at: existing?.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
     tokens.set(id, token);
     saveTokens();
-    return sendJson(res, 200, { ok: true, token: { id, name, masked: `••••••••${value.slice(-4)}`, created_at: token.created_at } });
+    rebindModelTokens();
+    return sendJson(res, 200, { ok: true, token: { id, name, masked: `••••••••${token.value.slice(-4)}`, created_at: token.created_at } });
   }
 
   const tokenDelete = route.match(/^\/api\/tokens\/([^/]+)$/);
@@ -450,17 +841,38 @@ async function handleApi(req, res, url) {
     const workflow = String(model.workflow || id).trim();
     const requestUrl = String(model.request_url || '').trim();
     const queryUrl = String(model.query_url || '').trim();
-    if (!id || !name || !workflow || !requestUrl || !queryUrl) {
-      return sendJson(res, 400, { ok: false, msg: '模型 ID、名称、工作流 ID、提交地址和查询地址均为必填' });
+    const kind = model.kind === 'image' ? 'image' : model.kind === 'text' ? 'text' : 'video';
+    if (!id || !name || !workflow || !requestUrl || (kind === 'video' && !queryUrl)) {
+      return sendJson(res, 400, { ok: false, msg: kind === 'video' ? '模型 ID、名称、工作流 ID、提交地址和查询地址均为必填' : '模型 ID、名称、工作流 ID 和提交地址为必填' });
     }
     if (!Array.isArray(model.fields) || !model.fields.length) {
       return sendJson(res, 400, { ok: false, msg: '参数字段定义必须是非空数组' });
     }
+    const pricing = sanitizePricing(model.pricing);
     const saved = {
-      id, name, workflow, request_url: requestUrl, query_url: queryUrl,
+      id, name, workflow, kind, request_url: requestUrl,
+      ...(kind === 'video' ? { query_url: queryUrl } : {}),
+      ...(kind === 'image' && model.edit_url && String(model.edit_url).trim() ? { edit_url: String(model.edit_url).trim() } : {}),
       token_id: String(model.token_id || '').trim(),
       request_params: model.request_params && typeof model.request_params === 'object' && !Array.isArray(model.request_params) ? model.request_params : {},
       fields: model.fields,
+      ...(pricing ? { pricing } : {}),
+      enabled: model.enabled !== false,
+      visible: model.visible !== false,
+      provider: String(model.provider || '').trim(),
+      type: String(model.type || '').trim().slice(0, 32),
+      tags: Array.isArray(model.tags)
+        ? model.tags.map((tag) => String(tag || '').trim().slice(0, 24)).filter(Boolean).slice(0, 8)
+        : [],
+      description: String(model.description || '').slice(0, 500),
+      sort: Number.isFinite(Number(model.sort)) ? Number(model.sort) : 0,
+      timeout_seconds: Number.isFinite(Number(model.timeout_seconds)) && Number(model.timeout_seconds) >= 5 ? Number(model.timeout_seconds) : 300,
+      poll_interval: Number.isFinite(Number(model.poll_interval)) && Number(model.poll_interval) >= 1 ? Number(model.poll_interval) : 3,
+      max_concurrency: Number.isFinite(Number(model.max_concurrency)) && Number(model.max_concurrency) >= 1 ? Number(model.max_concurrency) : 5,
+      max_retry: Number.isFinite(Number(model.max_retry)) && Number(model.max_retry) >= 0 ? Number(model.max_retry) : 0,
+      debug: model.debug === true,
+      created_at: models.get(id)?.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
     if (!saved.token_id || !tokens.has(saved.token_id)) return sendJson(res, 400, { ok: false, msg: '请为模型选择已保存的令牌' });
     models.set(id, saved);
@@ -470,16 +882,33 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true, model: saved });
   }
 
-  const modelDelete = route.match(/^\/api\/models\/([^/]+)$/);
-  if (modelDelete && req.method === 'DELETE') {
-    const id = decodeURIComponent(modelDelete[1]);
-    if (!models.has(id)) return sendJson(res, 404, { ok: false, msg: '模型不存在' });
-    models.delete(id);
+  // 模型手动排序：按提交的 id 顺序重排
+  if (route === '/api/models/order' && req.method === 'POST') {
+    let payload = {};
+    try { payload = JSON.parse(await readBody(req)); } catch (_) {}
+    const ids = Array.isArray(payload.ids) ? payload.ids.map(String) : [];
+    if (!ids.length) return sendJson(res, 400, { ok: false, msg: '缺少排序数据' });
+    const reordered = [];
+    const seen = new Set();
+    for (const id of ids) {
+      const model = models.get(id);
+      if (model) {
+        models.delete(id);
+        models.set(id, model);
+        seen.add(id);
+      }
+    }
+    for (const [id, model] of [...models]) {
+      if (!seen.has(id)) {
+        models.delete(id);
+        models.set(id, model);
+      }
+    }
     saveModels();
-    return sendJson(res, 200, { ok: true, deleted: id });
+    return sendJson(res, 200, { ok: true, order: [...models.keys()] });
   }
 
-  // API 管理配置：仅供本地工作台使用，配置保存在当前服务进程内。
+  // 模型连接测试：依次探测查询地址 / 提交地址，返回时延与状态
   if (route === '/api/config' && req.method === 'GET') {
     return sendJson(res, 200, { ok: true, config: publicConfig() });
   }
@@ -514,12 +943,15 @@ async function handleApi(req, res, url) {
     const modelId = String(payload.model_id || config.workflow);
     const selectedModel = models.get(modelId);
     if (!selectedModel) return sendJson(res, 400, { ok: false, msg: '所选模型不存在' });
+    const isImageModel = selectedModel.kind === 'image';
     const wantsSchedule = payload.scheduled === true;
-    const shouldSchedule = wantsSchedule && !isNightDiscountTime();
+    const shouldSchedule = wantsSchedule && !isNightDiscountTime() && !isImageModel;
     const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
 
     if (!tasks.length) return sendJson(res, 400, { ok: false, msg: '没有可提交的任务' });
-    if (!config.mock && !tokens.get(selectedModel.token_id)?.value) return sendJson(res, 400, { ok: false, msg: '所选模型未配置有效令牌' });
+    if (!config.mock && !tokenValueFor(selectedModel)) return sendJson(res, 400, { ok: false, msg: '所选模型未配置有效令牌' });
+    const refField = Array.isArray(selectedModel.fields) ? selectedModel.fields.find((field) => field && field.key === 'reference_images') : null;
+    const refsRequired = !refField || refField.required !== false;
 
     const created = [];
     for (const t of tasks) {
@@ -529,17 +961,16 @@ async function handleApi(req, res, url) {
         ? t.reference_images.slice(0, 10).map((url) => typeof url === 'string' ? url.trim() : '')
         : [];
       if (!prompt || prompt.length > 500000) return sendJson(res, 400, { ok: false, msg: 'prompt 长度必须是 1-500000' });
-      if (!Array.isArray(t.reference_images) || t.reference_images.length > 10) return sendJson(res, 400, { ok: false, msg: '图片参数最多支持 ref_image_0 到 ref_image_9' });
-      if (!refs[0]) return sendJson(res, 400, { ok: false, msg: '请填写 ref_image_0' });
+      if (!isImageModel && refsRequired) {
+        if (!Array.isArray(t.reference_images) || t.reference_images.length > 10) return sendJson(res, 400, { ok: false, msg: '图片参数最多支持 ref_image_0 到 ref_image_9' });
+        if (!refs[0]) return sendJson(res, 400, { ok: false, msg: '请填写 ref_image_0' });
+      }
       const record = {
         local_id: localId,
         name,
         model_id: selectedModel.id,
         model_name: selectedModel.name,
         prompt,
-        duration: Number.isInteger(Number(t.duration)) ? Math.min(15, Math.max(1, Number(t.duration))) : 5,
-        resolution: typeof t.resolution === 'string' ? t.resolution.trim() : '',
-        seed: normalizeSeed(t.seed),
         params: t.params && typeof t.params === 'object' && !Array.isArray(t.params) ? t.params : {},
         reference_images: refs,
         image_count: refs.filter(Boolean).length,
@@ -548,30 +979,46 @@ async function handleApi(req, res, url) {
         error: null,
         created_at: new Date().toISOString(),
       };
+      if (isImageModel) {
+        record.kind = 'image';
+        record.image_count = 0;
+        record.status = 'processing';
+      } else {
+        record.duration = Number.isInteger(Number(t.duration)) ? Math.min(15, Math.max(1, Number(t.duration))) : 5;
+        record.resolution = typeof t.resolution === 'string' ? t.resolution.trim() : '';
+        record.seed = normalizeSeed(t.seed);
+      }
       if (shouldSchedule) record.scheduled_at = nextScheduledTime().toISOString();
       store.set(localId, record);
 
-      if (shouldSchedule) saveStore();
-      else await performSubmission(record);
+      if (isImageModel && !shouldSchedule) {
+        saveStore();
+        runImageGeneration(record);
+      } else if (shouldSchedule) {
+        saveStore();
+      } else {
+        await performSubmission(record);
+      }
       created.push(record);
     }
     return sendJson(res, 200, { ok: true, name, tasks: created });
   }
 
-  const scheduledAction = route.match(/^\/api\/scheduled\/([^/]+)\/(submit|cancel)$/);
-  if (scheduledAction && req.method === 'POST') {
-    const localId = decodeURIComponent(scheduledAction[1]);
-    const action = scheduledAction[2];
-    const rec = store.get(localId);
-    if (!rec) return sendJson(res, 404, { ok: false, msg: '预约任务不存在' });
-    if (rec.status !== 'scheduled') return sendJson(res, 409, { ok: false, msg: '该任务已不在预约队列中' });
-    if (action === 'cancel') {
-      store.delete(localId);
-      saveStore();
-      return sendJson(res, 200, { ok: true, cancelled: localId });
+  // 令牌连接测试：借用绑定了该令牌的模型地址探测
+  if (route === '/api/settings' && req.method === 'GET') {
+    return sendJson(res, 200, { ok: true, settings: { schedule_interval_seconds: scheduleIntervalMs / 1000 } });
+  }
+
+  if (route === '/api/settings' && req.method === 'POST') {
+    let payload = {};
+    try { payload = JSON.parse(await readBody(req)); } catch (_) {}
+    const seconds = Math.round(Number(payload?.schedule_interval_seconds));
+    if (!Number.isFinite(seconds) || seconds < 1 || seconds > 600) {
+      return sendJson(res, 400, { ok: false, msg: '预约提交间隔必须是 1-600 的整数秒' });
     }
-    await performSubmission(rec);
-    return sendJson(res, 200, { ok: true, task: rec });
+    scheduleIntervalMs = seconds * 1000;
+    saveAppSettings();
+    return sendJson(res, 200, { ok: true, settings: { schedule_interval_seconds: scheduleIntervalMs / 1000 } });
   }
 
   // 下载已生成视频：由本地服务转发，避免浏览器跨域限制。
@@ -580,6 +1027,19 @@ async function handleApi(req, res, url) {
     const localId = decodeURIComponent(downloadMatch[1]);
     const rec = store.get(localId);
     if (!rec) return sendJson(res, 404, { ok: false, msg: '任务不存在' });
+    if (rec.kind === 'image') {
+      const name = Array.isArray(rec.image_files) ? rec.image_files[0] : null;
+      const file = name ? path.join(IMAGES_DIR, path.basename(name)) : null;
+      if (!file || !fs.existsSync(file)) return sendJson(res, 409, { ok: false, msg: '任务尚无可下载的图片' });
+      const ext = path.extname(file).toLowerCase();
+      res.writeHead(200, {
+        'Content-Type': ext === '.jpg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : ext === '.bmp' ? 'image/bmp' : 'image/png',
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(fs.readFileSync(file));
+      return;
+    }
     if (!rec.video_url) return sendJson(res, 409, { ok: false, msg: '任务尚无可下载的视频' });
     try {
       const remote = await fetch(rec.video_url);
@@ -587,6 +1047,8 @@ async function handleApi(req, res, url) {
       const headers = {
         'Content-Type': remote.headers.get('content-type') || 'video/mp4',
         'Cache-Control': 'no-store',
+        // 桌面客户端远程模式下是跨域下载，必须带 CORS 头。
+        'Access-Control-Allow-Origin': '*',
       };
       const length = remote.headers.get('content-length');
       if (length) headers['Content-Length'] = length;
@@ -602,7 +1064,10 @@ async function handleApi(req, res, url) {
   const deleteMatch = route.match(/^\/api\/tasks\/([^/]+)$/);
   if (deleteMatch && req.method === 'DELETE') {
     const localId = decodeURIComponent(deleteMatch[1]);
-    if (!store.delete(localId)) return sendJson(res, 404, { ok: false, msg: '任务不存在' });
+    const rec = store.get(localId);
+    if (!rec) return sendJson(res, 404, { ok: false, msg: '任务不存在' });
+    deleteTaskFiles(rec);
+    store.delete(localId);
     saveStore();
     return sendJson(res, 200, { ok: true, deleted: [localId] });
   }
@@ -612,9 +1077,34 @@ async function handleApi(req, res, url) {
     let payload = {};
     try { payload = JSON.parse(await readBody(req)); } catch (_) {}
     const ids = Array.isArray(payload.ids) ? [...new Set(payload.ids.map(String))] : [];
-    const deleted = ids.filter((id) => store.delete(id));
+    const deleted = [];
+    for (const id of ids) {
+      const rec = store.get(id);
+      if (!rec) continue;
+      deleteTaskFiles(rec);
+      store.delete(id);
+      deleted.push(id);
+    }
     if (deleted.length) saveStore();
     return sendJson(res, 200, { ok: true, deleted });
+  }
+
+  // 图片任务预览：GET /api/tasks/{id}/image/{序号}
+  const imageMatch = route.match(/^\/api\/tasks\/([^/]+)\/image\/(\d+)$/);
+  if (imageMatch && req.method === 'GET') {
+    const rec = store.get(decodeURIComponent(imageMatch[1]));
+    const index = Number(imageMatch[2]);
+    const name = rec && rec.kind === 'image' && Array.isArray(rec.image_files) ? rec.image_files[index] : null;
+    const file = name ? path.join(IMAGES_DIR, path.basename(name)) : null;
+    if (!file || !fs.existsSync(file)) return sendJson(res, 404, { ok: false, msg: '图片不存在' });
+    const ext = path.extname(file).toLowerCase();
+    res.writeHead(200, {
+      'Content-Type': ext === '.jpg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : ext === '.bmp' ? 'image/bmp' : 'image/png',
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(fs.readFileSync(file));
+    return;
   }
 
   // 查询单个任务：GET /api/tasks/{localId}
@@ -702,15 +1192,21 @@ const server = http.createServer(async (req, res) => {
 });
 
 const scheduledTimer = setInterval(() => {
-  processScheduledTasks().catch((err) => console.error(`[wenVedio] 预约任务调度失败: ${err.message}`));
+  processScheduledTasks().catch((err) => writeLog('error', `预约任务调度失败: ${err.message}`));
 }, 1000);
 scheduledTimer.unref();
 
-server.listen(config.port, () => {
-  console.log(`[wenVedio] 视频生成工作台服务已启动`);
-  console.log(`[wenVedio] 本地地址  http://127.0.0.1:${config.port}`);
-  console.log(`[wenVedio] 工作流     ${config.workflow}`);
-  console.log(`[wenVedio] 模式       ${config.mock ? '演示 (mock)' : '真实 API'}${config.apiKey ? '' : '（未配置 API Key）'}`);
-  console.log(`[wenVedio] 查询能力   ${config.tasksToken || config.apiKey ? '已配置，可查结果' : '未配置，仅可提交任务'}`);
-  console.log(`[wenVedio] 任务记录   已恢复 ${store.size} 条`);
-});
+const logCleanupTimer = setInterval(cleanExpiredLogs, 24 * 60 * 60 * 1000);
+logCleanupTimer.unref();
+
+function onListening() {
+  writeLog('info', `服务已启动，本地地址 http://${config.host || '127.0.0.1'}:${config.port}`);
+  writeLog('info', `工作流 ${config.workflow}`);
+  writeLog('info', `模式 ${config.mock ? '演示 (mock)' : '真实 API'}${config.apiKey ? '' : '（未配置 API Key）'}`);
+  writeLog('info', `查询能力 ${config.tasksToken || config.apiKey || tokens.size > 0 ? '已配置' : '未配置'}`);
+  writeLog('info', `任务记录已恢复 ${store.size} 条`);
+  writeLog('info', `数据目录 ${DATA_DIR}`);
+}
+
+if (config.host) server.listen(config.port, config.host, onListening);
+else server.listen(config.port, onListening);
