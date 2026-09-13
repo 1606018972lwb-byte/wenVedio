@@ -388,6 +388,7 @@ const modelUI = {
   search: '',
   kind: '',
   provider: '',
+  token: '',
   status: '',
   sort: 'name',
   page: 1,
@@ -546,6 +547,7 @@ function renderModelPage() {
   renderModelStats();
   renderModelProviderOptions();
   renderModelTypeOptions();
+  renderModelTokenOptions();
   renderModelTable();
 }
 
@@ -592,6 +594,21 @@ function renderModelTypeOptions() {
   }
 }
 
+function renderModelTokenOptions() {
+  const select = $('#modelFilterToken');
+  if (!select) return;
+  const current = select.value;
+  const usedIds = [...new Set(state.models.map((model) => model.token_id).filter(Boolean))];
+  const options = usedIds
+    .map((id) => ({ value: id, label: tokenById(id)?.name || '未绑定' }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh'));
+  const hasUnbound = state.models.some((model) => !tokenById(model.token_id));
+  select.innerHTML = '<option value="">全部调用配置</option>'
+    + options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join('')
+    + (hasUnbound ? '<option value="none">未绑定</option>' : '');
+  if (current === 'none' || options.some((option) => option.value === current)) select.value = current;
+}
+
 function modelListFiltered() {
   const keyword = modelUI.search.trim().toLowerCase();
   let list = state.models.map(normalizeModel);
@@ -602,6 +619,8 @@ function modelListFiltered() {
     else list = list.filter((m) => tagsOf(m).includes(modelUI.kind));
   }
   if (modelUI.provider) list = list.filter((m) => modelProviderLabel(m) === modelUI.provider);
+  if (modelUI.token === 'none') list = list.filter((m) => !tokenById(m.token_id));
+  else if (modelUI.token) list = list.filter((m) => m.token_id === modelUI.token);
   if (modelUI.status) list = list.filter((m) => modelStatusOf(m) === modelUI.status);
   if (modelUI.sort === 'name') list.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
   else if (modelUI.sort === 'created') list.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
@@ -3219,6 +3238,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#modelFilterKind').addEventListener('change', () => { modelUI.kind = $('#modelFilterKind').value; modelUI.page = 1; renderModelTable(); });
   $('#modelFilterProvider').addEventListener('change', () => { modelUI.provider = $('#modelFilterProvider').value; modelUI.page = 1; renderModelTable(); });
   $('#modelFilterStatus').addEventListener('change', () => { modelUI.status = $('#modelFilterStatus').value; modelUI.page = 1; renderModelTable(); });
+  $('#modelFilterToken').addEventListener('change', () => { modelUI.token = $('#modelFilterToken').value; modelUI.page = 1; renderModelTable(); });
   $('#modelSort').addEventListener('change', () => { modelUI.sort = $('#modelSort').value; modelUI.page = 1; renderModelTable(); });
   $('#modelPageSize').addEventListener('change', () => { modelUI.pageSize = Number($('#modelPageSize').value) || 10; modelUI.page = 1; renderModelTable(); });
   $('#modelSelectAll').addEventListener('change', (event) => {
