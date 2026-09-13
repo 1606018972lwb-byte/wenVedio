@@ -66,10 +66,12 @@ const TASKS_FILE = path.join(CONFIG_DIR, 'tasks.json');
 const SETTINGS_FILE = path.join(CONFIG_DIR, 'settings.json');
 const MODELS_FILE = path.join(CONFIG_DIR, 'models.json');
 const TOKENS_FILE = path.join(CONFIG_DIR, 'tokens.json');
+const PROMPTS_FILE = path.join(CONFIG_DIR, 'prompts.json');
 const IMAGES_DIR = path.join(DATA_DIR, 'images');
 const store = new Map();
 const models = new Map();
 const tokens = new Map();
+const prompts = new Map();
 let seq = 0;
 const MAX_SEED = 999999999999999;
 const TASK_TIMEOUT_MS = 20 * 60 * 1000;
@@ -207,6 +209,7 @@ function migrateDataLayout() {
     ['tasks.json', TASKS_FILE],
     ['models.json', MODELS_FILE],
     ['tokens.json', TOKENS_FILE],
+    ['prompts.json', PROMPTS_FILE],
     ['settings.json', SETTINGS_FILE],
   ]) {
     const legacy = path.join(DATA_DIR, name);
@@ -251,6 +254,43 @@ function loadTokens() {
   if (Array.isArray(records)) records.forEach((token) => { if (token?.id && token?.value) tokens.set(token.id, token); });
   if (!tokens.size && config.apiKey) tokens.set('default', { id: 'default', name: '默认 ComfyUI 令牌', value: config.apiKey, created_at: new Date().toISOString() });
   saveTokens();
+}
+
+// 提示词记录：一条记录包含多条提示词，每条含文本与时长（秒）
+function savePrompts() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const temporary = `${PROMPTS_FILE}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify({ version: 1, prompts: [...prompts.values()] }, null, 2));
+  fs.renameSync(temporary, PROMPTS_FILE);
+}
+
+function loadPrompts() {
+  let records = null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(PROMPTS_FILE, 'utf8'));
+    records = Array.isArray(parsed) ? parsed : parsed.prompts;
+  } catch (err) {
+    if (err.code !== 'ENOENT') writeLog('error', `读取提示词记录失败: ${err.message}`);
+  }
+  if (Array.isArray(records)) {
+    records.forEach((record) => {
+      if (!record || !record.id) return;
+      prompts.set(String(record.id), {
+        id: String(record.id),
+        name: String(record.name || '未命名记录').slice(0, 60),
+        items: (Array.isArray(record.items) ? record.items : [])
+          .map((item, index) => ({
+            id: String(item?.id || `item-${index}`),
+            text: String(item?.text || ''),
+            duration: Number(item?.duration) > 0 ? Math.round(Number(item.duration)) : null,
+          }))
+          .filter((item) => item.text),
+        created_at: record.created_at || new Date().toISOString(),
+        updated_at: record.updated_at || record.created_at || new Date().toISOString(),
+      });
+    });
+  }
+  savePrompts();
 }
 
 function loadModels() {
@@ -316,6 +356,7 @@ function loadStore() {
 
 migrateDataLayout();
 loadTokens();
+loadPrompts();
 loadModels();
 rebindModelTokens();
 loadStore();
@@ -849,6 +890,46 @@ async function handleApi(req, res, url) {
     saveTokens();
     rebindModelTokens();
     return sendJson(res, 200, { ok: true, token: { id, name, masked: `••••••••${token.value.slice(-4)}`, created_at: token.created_at } });
+  }
+
+  // 提示词管理：一条记录包含多条提示词，每条含文本与时长（秒）
+  if (route === '/api/prompts' && req.method === 'GET') {
+    const list = [...prompts.values()].sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+    return sendJson(res, 200, { ok: true, prompts: list });
+  }
+
+  if (route === '/api/prompts' && req.method === 'POST') {
+    let payload = {};
+    try { payload = JSON.parse(await readBody(req)); } catch (_) {}
+    const name = String(payload.name || '').trim().slice(0, 60);
+    if (!name) return sendJson(res, 400, { ok: false, msg: '记录名称不能为空' });
+    const items = (Array.isArray(payload.items) ? payload.items : [])
+      .map((item, index) => ({
+        id: String(item?.id || `item-${Date.now().toString(36)}-${index}`),
+        text: String(item?.text || '').trim(),
+        duration: Number(item?.duration) > 0 ? Math.min(600, Math.round(Number(item.duration))) : null,
+      }))
+      .filter((item) => item.text)
+      .slice(0, 50);
+    if (!items.length) return sendJson(res, 400, { ok: false, msg: '至少需要一条提示词' });
+    const id = String(payload.id || '').trim() || crypto.randomUUID();
+    const existing = prompts.get(id);
+    const record = {
+      id, name, items,
+      created_at: existing?.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    prompts.set(id, record);
+    savePrompts();
+    return sendJson(res, 200, { ok: true, prompt: record });
+  }
+
+  const promptDelete = route.match(/^\/api\/prompts\/([^/]+)$/);
+  if (promptDelete && req.method === 'DELETE') {
+    const id = decodeURIComponent(promptDelete[1]);
+    if (!prompts.delete(id)) return sendJson(res, 404, { ok: false, msg: '记录不存在' });
+    savePrompts();
+    return sendJson(res, 200, { ok: true, deleted: id });
   }
 
   const tokenDelete = route.match(/^\/api\/tokens\/([^/]+)$/);

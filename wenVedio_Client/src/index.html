@@ -33,6 +33,7 @@
           <a class="nav-item nav-group" id="navAdmin" href="#admin"><span class="nav-icon">⚙</span><span class="nav-label">后台管理</span><span class="nav-chevron">⌃</span></a>
           <div class="nav-sub" id="adminGroup">
             <button class="nav-sub-item" id="openSettings" type="button"><span class="nav-icon">⚙</span><span class="nav-label">模型管理</span></button>
+            <button class="nav-sub-item" id="openPrompts" type="button"><span class="nav-icon">📝</span><span class="nav-label">提示词管理</span></button>
             <button class="nav-sub-item" id="openTokens" type="button"><span class="nav-icon">◈</span><span class="nav-label">令牌管理</span></button>
           </div>
           <a class="nav-item" id="navQuery" href="#query"><span class="nav-icon">↗</span><span class="nav-label">查询入口</span></a>
@@ -433,6 +434,14 @@
           </div>
         </section>
 
+        <section class="prompts-view" id="promptsView" hidden>
+          <div class="gen-head">
+            <div><span class="section-kicker">WORKSPACE / PROMPTS</span><h2>提示词管理</h2><p>像笔记一样保存提示词：一条记录可包含多条提示词，每条记录提示词文本与时长。</p></div>
+            <button class="primary-button" id="addPromptRecord" type="button"><span>＋</span> 新增记录</button>
+          </div>
+          <div class="prompt-records" id="promptRecords"></div>
+          <div id="promptsEmpty" class="empty-state" hidden><span>📝</span><b>还没有提示词记录</b><p>点击右上角「新增记录」，把常用提示词保存下来</p></div>
+        </section>
       </main>
     </div>
     <div class="app-settings-backdrop" id="appSettingsModal" hidden>
@@ -473,6 +482,27 @@
       </aside>
     </div>
     <datalist id="providerOptions"><option value="OpenAI"></option><option value="MiniMax"></option><option value="AutoDL"></option><option value="自定义"></option></datalist>
+    <div class="model-editor-backdrop" id="promptDrawerBackdrop" hidden>
+      <aside class="model-drawer prompt-drawer" role="dialog" aria-modal="true">
+        <header class="model-drawer-header">
+          <div class="model-drawer-title"><span class="section-kicker">PROMPT</span><h3 id="promptDrawerTitle">新增记录</h3><p id="promptDrawerMeta" class="mono">—</p></div>
+          <button class="model-drawer-close" id="closePromptDrawer" type="button" aria-label="关闭">×</button>
+        </header>
+        <div class="model-drawer-body">
+          <div class="drawer-group"><b class="drawer-group-title">记录名称</b>
+            <input id="promptRecordName" type="text" placeholder="例如：跳舞系列 / 胖肚子剧情" maxlength="60" />
+          </div>
+          <div class="drawer-group"><b class="drawer-group-title">提示词 <small id="promptItemCount"></small></b>
+            <div id="promptItems"></div>
+            <button class="outline-button" id="addPromptItem" type="button">＋ 添加一条提示词</button>
+          </div>
+        </div>
+        <footer class="model-drawer-footer"><span id="promptDrawerFootNote"></span><div class="model-drawer-footer-actions">
+          <button class="outline-button" id="cancelPromptDrawer" type="button">取消</button>
+          <button class="primary-button" id="savePromptRecord" type="button">保存</button>
+        </div></footer>
+      </aside>
+    </div>
     <div id="toastWrap" aria-live="polite"></div>
     <script src="app.js"></script>
   </body>

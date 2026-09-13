@@ -23,6 +23,7 @@ const state = {
   adminModelId: '',
   tokens: [],
   tokensLoaded: false,
+  prompts: [],
   imageModelId: '',
   imageRefItems: [],
   recordsKind: 'all',
@@ -2486,6 +2487,227 @@ async function loadTokensCache() {
   } catch (_) { /* 服务未就绪时忽略，打开令牌页会重试 */ }
 }
 
+// ---------------- 提示词管理 ----------------
+const promptUI = { editingId: null, items: [] };
+const PROMPT_MAX_ITEMS = 50;
+
+async function loadPromptsCache() {
+  try {
+    const res = await fetch(`${settings.apiBase}/api/prompts`);
+    const data = await res.json();
+    if (data.ok) state.prompts = data.prompts || [];
+  } catch (_) { /* 服务未就绪时忽略，进入页面会重试 */ }
+}
+
+async function openPrompts() {
+  showView('prompts');
+  try {
+    const res = await fetch(`${settings.apiBase}/api/prompts`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+    state.prompts = data.prompts || [];
+    renderPrompts();
+  } catch (err) {
+    alert(`读取提示词失败：${err.message}`);
+  }
+}
+
+function renderPrompts() {
+  const wrap = $('#promptRecords');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  state.prompts.forEach((record) => wrap.appendChild(promptRecordCard(record)));
+  const empty = $('#promptsEmpty');
+  if (empty) empty.hidden = state.prompts.length > 0;
+}
+
+function promptRecordCard(record) {
+  const card = document.createElement('section');
+  card.className = 'panel prompt-card';
+  card.dataset.promptId = record.id;
+  const items = Array.isArray(record.items) ? record.items : [];
+  card.innerHTML = `
+    <header class="prompt-card-head">
+      <div class="prompt-card-title"><b>${escapeHtml(record.name || '未命名记录')}</b><small>${items.length} 条提示词 · 更新于 ${escapeHtml(relativeTime(record.updated_at || record.created_at) || '—')}</small></div>
+      <div class="prompt-card-actions">
+        <button type="button" class="model-action-button primary" data-prompt-edit="${escapeHtml(record.id)}">编辑</button>
+        <button type="button" class="model-action-button" data-prompt-del="${escapeHtml(record.id)}">删除</button>
+      </div>
+    </header>
+    <div class="prompt-items">${items.map((item, index) => `
+      <div class="prompt-card-item">
+        <button type="button" class="prompt-copy-btn" data-prompt-copy="${escapeHtml(record.id)}:${index}" title="复制提示词" aria-label="复制提示词">⧉</button>
+        <p class="prompt-text">${escapeHtml(item.text || '')}</p>
+        <div class="prompt-meta">
+          <span class="prompt-duration">${Number(item.duration) > 0 ? `${escapeHtml(String(item.duration))} 秒` : '时长未设置'}</span>
+          <button type="button" class="text-button" data-prompt-use="${escapeHtml(record.id)}:${index}">填入生成页</button>
+        </div>
+      </div>`).join('') || '<div class="prompt-empty-hint">该记录还没有提示词</div>'}</div>`;
+  return card;
+}
+
+function promptItemAt(token) {
+  const [recordId, index] = String(token || '').split(':');
+  const record = state.prompts.find((item) => item.id === recordId);
+  const prompt = (record?.items || [])[Number(index)];
+  return prompt || null;
+}
+
+async function copyPromptText(text) {
+  const value = String(text || '');
+  if (!value.trim()) { showToast('该提示词为空', 'error'); return; }
+  try {
+    await navigator.clipboard.writeText(value);
+    showToast('提示词已复制', 'ok');
+  } catch (_) {
+    const area = document.createElement('textarea');
+    area.value = value;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    try { document.execCommand('copy'); showToast('提示词已复制', 'ok'); }
+    catch (err) { alert('复制失败，请手动选择文本复制'); }
+    area.remove();
+  }
+}
+
+// 把提示词与时长带到视频生成页
+function applyPromptToVideo(prompt) {
+  showView('workspace');
+  const promptEl = $('#prompt');
+  if (promptEl) { promptEl.value = String(prompt.text || ''); updateCharCount('prompt'); }
+  const duration = Number(prompt.duration);
+  if (Number.isFinite(duration) && duration > 0) {
+    genValues.video.values.duration = duration;
+    saveGenValues();
+    const stepper = document.querySelector('#videoExtraFields .stepper input');
+    if (stepper) stepper.value = String(duration);
+  }
+  renderCurrentPrice();
+  saveForm();
+  showToast('已填入视频生成页', 'ok');
+}
+
+function bindPromptRecords() {
+  const wrap = $('#promptRecords');
+  if (!wrap) return;
+  wrap.addEventListener('click', async (event) => {
+    const copyBtn = event.target.closest('[data-prompt-copy]');
+    if (copyBtn) {
+      const prompt = promptItemAt(copyBtn.dataset.promptCopy);
+      if (prompt) await copyPromptText(prompt.text);
+      return;
+    }
+    const useBtn = event.target.closest('[data-prompt-use]');
+    if (useBtn) {
+      const prompt = promptItemAt(useBtn.dataset.promptUse);
+      if (prompt) applyPromptToVideo(prompt);
+      return;
+    }
+    const editBtn = event.target.closest('[data-prompt-edit]');
+    if (editBtn) { openPromptDrawer(editBtn.dataset.promptEdit); return; }
+    const delBtn = event.target.closest('[data-prompt-del]');
+    if (delBtn) deletePromptRecord(delBtn.dataset.promptDel);
+  });
+}
+
+function openPromptDrawer(id) {
+  const record = id ? state.prompts.find((item) => item.id === id) : null;
+  promptUI.editingId = record ? record.id : null;
+  promptUI.items = (record?.items || []).map((item) => ({
+    text: String(item.text || ''),
+    duration: Number(item.duration) > 0 ? String(item.duration) : '',
+  }));
+  if (!promptUI.items.length) promptUI.items.push({ text: '', duration: '5' });
+  $('#promptDrawerTitle').textContent = record ? '编辑记录' : '新增记录';
+  $('#promptDrawerMeta').textContent = record ? record.id : '新建';
+  $('#promptRecordName').value = record?.name || '';
+  renderPromptItems();
+  $('#promptDrawerBackdrop').hidden = false;
+}
+
+function closePromptDrawer() {
+  $('#promptDrawerBackdrop').hidden = true;
+  promptUI.editingId = null;
+  promptUI.items = [];
+}
+
+function renderPromptItems() {
+  const wrap = $('#promptItems');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  promptUI.items.forEach((item, index) => {
+    const row = document.createElement('div');
+    row.className = 'prompt-item-row';
+    row.innerHTML = `
+      <div class="prompt-item-head"><span>提示词 ${index + 1}</span><button type="button" class="prompt-item-remove" data-prompt-item-remove="${index}" title="删除这条" aria-label="删除这条">×</button></div>
+      <textarea class="prompt-item-text" rows="4" placeholder="粘贴或输入提示词">${escapeHtml(item.text)}</textarea>
+      <div class="prompt-item-foot"><label>时长 <input class="prompt-item-duration" type="number" min="1" max="600" step="1" value="${escapeHtml(item.duration)}" /> 秒</label></div>`;
+    row.querySelector('.prompt-item-text').addEventListener('input', (event) => { promptUI.items[index].text = event.target.value; });
+    row.querySelector('.prompt-item-duration').addEventListener('input', (event) => { promptUI.items[index].duration = event.target.value; });
+    row.querySelector('[data-prompt-item-remove]').addEventListener('click', () => {
+      promptUI.items.splice(index, 1);
+      if (!promptUI.items.length) promptUI.items.push({ text: '', duration: '5' });
+      renderPromptItems();
+    });
+    wrap.appendChild(row);
+  });
+  const count = $('#promptItemCount');
+  if (count) count.textContent = `${promptUI.items.length} 条`;
+}
+
+function addPromptItemRow() {
+  if (promptUI.items.length >= PROMPT_MAX_ITEMS) { alert(`单条记录最多 ${PROMPT_MAX_ITEMS} 条提示词`); return; }
+  promptUI.items.push({ text: '', duration: '5' });
+  renderPromptItems();
+  const rows = document.querySelectorAll('#promptItems .prompt-item-row');
+  const last = rows[rows.length - 1];
+  if (last) { last.querySelector('.prompt-item-text').focus(); last.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+}
+
+async function savePromptRecord() {
+  const name = $('#promptRecordName').value.trim();
+  if (!name) { alert('记录名称不能为空'); $('#promptRecordName').focus(); return; }
+  const items = promptUI.items
+    .map((item) => ({
+      text: String(item.text || '').trim(),
+      duration: Number(item.duration) > 0 ? Number(item.duration) : null,
+    }))
+    .filter((item) => item.text);
+  if (!items.length) { alert('至少填写一条提示词'); return; }
+  try {
+    const res = await fetch(`${settings.apiBase}/api/prompts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: promptUI.editingId || '', name, items }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+    closePromptDrawer();
+    await openPrompts();
+    showToast('提示词记录已保存', 'ok');
+  } catch (err) {
+    alert(`保存失败：${err.message}`);
+  }
+}
+
+async function deletePromptRecord(id) {
+  const record = state.prompts.find((item) => item.id === id);
+  if (!record) return;
+  const count = (record.items || []).length;
+  if (!window.confirm(`确定删除记录「${record.name}」及其中的 ${count} 条提示词吗？`)) return;
+  try {
+    const res = await fetch(`${settings.apiBase}/api/prompts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+    await openPrompts();
+    showToast('记录已删除', 'ok');
+  } catch (err) {
+    alert(`删除失败：${err.message}`);
+  }
+}
+
 async function openTokens() {
   showView('tokens');
   try {
@@ -3071,28 +3293,31 @@ function showView(view) {
   const isRecords = view === 'tasks';
   const isSettings = view === 'settings';
   const isTokens = view === 'tokens';
+  const isPrompts = view === 'prompts';
   const imageView = $('#imageView');
   const workspaceView = $('#workspaceView');
   const recordsView = $('#recordsView');
   const queryView = $('#queryView');
   const settingsView = $('#settingsView');
   const tokensView = $('#tokensView');
+  const promptsView = $('#promptsView');
   const pageTitle = $('#pageTitle');
   const pageEyebrow = $('#pageEyebrow');
-  workspaceView.hidden = isQuery || isRecords || isSettings || isTokens || isImage;
+  workspaceView.hidden = isQuery || isRecords || isSettings || isTokens || isPrompts || isImage;
   imageView.hidden = !isImage;
   recordsView.hidden = !isRecords;
   queryView.hidden = !isQuery;
   settingsView.hidden = !isSettings;
   tokensView.hidden = !isTokens;
-  pageTitle.textContent = isImage ? '图片生成' : isQuery ? '访问查询' : isRecords ? '任务记录' : isSettings ? '模型管理' : isTokens ? '令牌管理' : '视频生成工作台';
-  pageEyebrow.textContent = isImage ? 'WORKSPACE / IMAGE LAB' : isQuery ? 'AUTODL / COMFYUI' : isRecords ? 'WORKSPACE / HISTORY' : isSettings ? 'WORKSPACE / MODELS' : isTokens ? 'WORKSPACE / TOKENS' : 'WORKSPACE / VIDEO LAB';
+  promptsView.hidden = !isPrompts;
+  pageTitle.textContent = isImage ? '图片生成' : isQuery ? '访问查询' : isRecords ? '任务记录' : isSettings ? '模型管理' : isTokens ? '令牌管理' : isPrompts ? '提示词管理' : '视频生成工作台';
+  pageEyebrow.textContent = isImage ? 'WORKSPACE / IMAGE LAB' : isQuery ? 'AUTODL / COMFYUI' : isRecords ? 'WORKSPACE / HISTORY' : isSettings ? 'WORKSPACE / MODELS' : isTokens ? 'WORKSPACE / TOKENS' : isPrompts ? 'WORKSPACE / PROMPTS' : 'WORKSPACE / VIDEO LAB';
   $$('.main-nav .nav-item, .main-nav .nav-sub-item').forEach((item) => item.classList.remove('active'));
-  const activeId = isImage ? 'navImage' : isQuery ? 'navQuery' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : isRecords ? '' : 'navWorkspace';
+  const activeId = isImage ? 'navImage' : isQuery ? 'navQuery' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : isPrompts ? 'openPrompts' : isRecords ? '' : 'navWorkspace';
   const activeEl = activeId ? $(`#${activeId}`) : null;
   if (activeEl) activeEl.classList.add('active');
   if (isRecords) { expandGroup('tasks'); syncRecordsKindHighlight(); }
-  if (isSettings || isTokens) expandGroup('admin');
+  if (isSettings || isTokens || isPrompts) expandGroup('admin');
   $$('.mobile-nav button').forEach((item) => item.classList.remove('active'));
   $(`#${isImage ? 'mobileImage' : isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace'}`).classList.add('active');
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -3331,6 +3556,16 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#saveTokenEdit').addEventListener('click', saveTokenEdit);
   $('#tokenDrawerBackdrop').addEventListener('click', (event) => { if (event.target === $('#tokenDrawerBackdrop')) $('#tokenDrawerBackdrop').hidden = true; });
 
+  // 提示词管理
+  $('#openPrompts').addEventListener('click', openPrompts);
+  $('#addPromptRecord').addEventListener('click', () => openPromptDrawer(null));
+  $('#addPromptItem').addEventListener('click', addPromptItemRow);
+  $('#savePromptRecord').addEventListener('click', savePromptRecord);
+  $('#closePromptDrawer').addEventListener('click', closePromptDrawer);
+  $('#cancelPromptDrawer').addEventListener('click', closePromptDrawer);
+  $('#promptDrawerBackdrop').addEventListener('click', (event) => { if (event.target === $('#promptDrawerBackdrop')) closePromptDrawer(); });
+  bindPromptRecords();
+
   // 应用设置
   $('#openAppSettings').addEventListener('click', openAppSettingsPanel);
   $('#closeAppSettings').addEventListener('click', closeAppSettingsPanel);
@@ -3381,6 +3616,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!$('#taskDrawerBackdrop').hidden) closeTaskDetail();
     if (!$('#modelEditorBackdrop').hidden) requestCloseModelDrawer();
     if (!$('#tokenDrawerBackdrop').hidden) $('#tokenDrawerBackdrop').hidden = true;
+    if (!$('#promptDrawerBackdrop').hidden) closePromptDrawer();
   });
   ['prompt', 'taskName', 'taskSequence'].forEach((id) => {
     const el = $(`#${id}`);
@@ -3402,7 +3638,7 @@ async function bootApp() {
   const setText = (text) => { const el = $('#appBootText'); if (el) el.textContent = text; };
   try {
     setText('正在加载令牌与任务…');
-    await Promise.all([loadTokensCache(), loadTasks()]);
+    await Promise.all([loadTokensCache(), loadPromptsCache(), loadTasks()]);
     setText('正在加载模型配置…');
     await initializeModels();
     setText('正在准备界面…');

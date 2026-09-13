@@ -734,3 +734,31 @@ body.booting { overflow: hidden; }
 .tag-input-row input { flex: 1; }
 .tag-input-row .outline-button { width: auto; padding: 8px 14px; font-size: 12px; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 4px; }
+/* ===== 提示词管理 ===== */
+.prompts-view .gen-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.prompt-records { display: grid; gap: 14px; }
+.prompt-card { padding: 16px 18px; }
+.prompt-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.prompt-card-title b { font-size: 14px; color: #1f2b3e; }
+.prompt-card-title small { display: block; margin-top: 3px; color: #9aa4b2; font-size: 11px; }
+.prompt-card-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.prompt-items { display: grid; gap: 10px; }
+.prompt-card-item { position: relative; border: 1px solid #e5eaf1; border-radius: 9px; background: #fafbfd; padding: 12px 40px 10px 12px; }
+.prompt-text { margin: 0; font-size: 12px; line-height: 1.6; color: #33415c; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 132px; overflow-y: auto; }
+.prompt-meta { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.prompt-duration { font-size: 11px; color: #6a7686; background: #eef1f6; border-radius: 999px; padding: 2px 8px; }
+.prompt-copy-btn { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; border: 1px solid #e0e6ef; border-radius: 7px; background: #fff; color: #5b6878; font-size: 13px; line-height: 1; cursor: pointer; }
+.prompt-copy-btn:hover { border-color: var(--blue); color: var(--blue); }
+.prompt-empty-hint { color: #9aa4b2; font-size: 11px; }
+.prompt-drawer { width: min(640px, 92vw); }
+.prompt-drawer .drawer-group { display: grid; gap: 10px; }
+.prompt-drawer #promptRecordName { width: 100%; border: 1px solid #dce1e8; border-radius: 6px; padding: 10px 11px; }
+.prompt-item-row { border: 1px solid #e5eaf1; border-radius: 9px; padding: 10px 12px; background: #fafbfd; display: grid; gap: 8px; }
+.prompt-item-head { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #6a7686; font-weight: 600; }
+.prompt-item-remove { border: 0; background: none; color: #cf554c; font-size: 16px; line-height: 1; cursor: pointer; }
+.prompt-item-text { width: 100%; border: 1px solid #dce1e8; border-radius: 6px; padding: 9px 10px; font-size: 12px; line-height: 1.55; resize: vertical; }
+.prompt-item-foot label { font-size: 11px; color: #6a7686; }
+.prompt-item-duration { width: 72px; border: 1px solid #dce1e8; border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+.prompt-drawer .outline-button { width: auto; }
+#promptItems { display: grid; gap: 10px; padding: 4px 0; }
+#promptItems:empty { display: none; }
