@@ -70,6 +70,9 @@ const genValues = { video: { values: {} }, image: { values: {} } };
 function setGenFieldValue(kind, key, value) {
   genValues[kind].values[key] = value;
   saveGenValues();
+  // 参数变化后立刻刷新价格面板（时长、数量等会影响预计费用）
+  if (kind === 'image') renderImagePricePanel();
+  else renderCurrentPrice();
 }
 function loadGenValues() {
   try {
