@@ -277,6 +277,22 @@ function loadModels() {
   saveModels();
 }
 
+// 上次进程异常退出可能留下「提交中」且没有平台任务号的记录，启动时标记为失败，避免长期显示进行中
+function recoverStuckTasks() {
+  const cutoff = Date.now() - 2 * 60 * 1000;
+  let changed = false;
+  store.forEach((task) => {
+    if (task.status !== 'submitting' || task.provider_task_id) return;
+    const at = new Date(task.submitted_at || task.created_at || 0).getTime();
+    if (!Number.isNaN(at) && at > cutoff) return;
+    task.status = 'failed';
+    task.error = task.error || '提交中断（提交过程中客户端或服务退出）';
+    changed = true;
+    writeLog('warn', `任务 ${task.local_id} 曾在提交中被中断，已标记为失败`);
+  });
+  if (changed) saveStore();
+}
+
 function loadStore() {
   try {
     const parsed = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
@@ -327,10 +343,17 @@ function newLocalId() {
 }
 
 function chinaTimeParts(date = new Date()) {
+  // 传入非法时间会让 formatToParts 抛 RangeError（曾导致内置服务退出、客户端闪退）。
+  // 这里兜底为当前时间，并记录一条告警便于定位来源。
+  let value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) {
+    writeLog('warn', `时间参数非法（${String(date)}），已按当前时间处理`);
+    value = new Date();
+  }
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
-  }).formatToParts(date);
+  }).formatToParts(value);
   return Object.fromEntries(parts.map((part) => [part.type, Number(part.value)]));
 }
 
@@ -410,11 +433,16 @@ async function performSubmission(record) {
   }
   if (record.status === 'failed') writeLog('error', `任务 ${record.local_id} 提交失败: ${record.error}`);
   else writeLog('info', `任务 ${record.local_id} 提交成功，状态 ${record.status}`);
-  const costModel = models.get(record.model_id);
-  const rate = modelRateFor(costModel?.pricing, record.resolution, record.submitted_at);
-  if (rate != null && Number(record.duration) > 0) {
-    record.cost = Math.round(rate * Number(record.duration) * 1000) / 1000;
-    record.cost_currency = costModel?.pricing?.currency === 'USD' ? 'USD' : 'CNY';
+  // 费用计算属于附加信息，任何异常都不应影响任务记录与进程存活
+  try {
+    const costModel = models.get(record.model_id);
+    const rate = modelRateFor(costModel?.pricing, record.resolution, record.submitted_at);
+    if (rate != null && Number(record.duration) > 0) {
+      record.cost = Math.round(rate * Number(record.duration) * 1000) / 1000;
+      record.cost_currency = costModel?.pricing?.currency === 'USD' ? 'USD' : 'CNY';
+    }
+  } catch (err) {
+    writeLog('warn', `任务 ${record.local_id} 费用计算失败（不影响任务）：${err.message}`);
   }
   delete record.scheduled_at;
   saveStore();
@@ -1205,8 +1233,18 @@ function onListening() {
   writeLog('info', `模式 ${config.mock ? '演示 (mock)' : '真实 API'}${config.apiKey ? '' : '（未配置 API Key）'}`);
   writeLog('info', `查询能力 ${config.tasksToken || config.apiKey || tokens.size > 0 ? '已配置' : '未配置'}`);
   writeLog('info', `任务记录已恢复 ${store.size} 条`);
+  recoverStuckTasks();
   writeLog('info', `数据目录 ${DATA_DIR}`);
 }
+
+// 内置服务被 Electron 主进程托管：任何未捕获异常都不能终止进程，
+// 否则主进程会认为服务崩溃并弹出错误提示（表现为客户端闪退）。
+process.on('uncaughtException', (err) => {
+  writeLog('error', `未捕获异常：${err && err.stack ? err.stack : err}`);
+});
+process.on('unhandledRejection', (reason) => {
+  writeLog('error', `未处理的 Promise 拒绝：${reason && reason.stack ? reason.stack : reason}`);
+});
 
 if (config.host) server.listen(config.port, config.host, onListening);
 else server.listen(config.port, onListening);
