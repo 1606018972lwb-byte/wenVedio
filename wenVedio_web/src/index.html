@@ -512,6 +512,22 @@
         </div></footer>
       </aside>
     </div>
+    <div class="prompt-fullscreen" id="promptFullscreen" hidden>
+      <div class="prompt-fullscreen-panel" role="dialog" aria-modal="true">
+        <header class="prompt-fullscreen-head">
+          <b id="promptFullscreenTitle">编辑提示词</b>
+          <div class="prompt-fullscreen-head-right"><span class="mono" id="promptFullscreenCount">0 字</span><button class="model-drawer-close" id="promptFullscreenClose" type="button" aria-label="关闭">×</button></div>
+        </header>
+        <textarea id="promptFullscreenText" spellcheck="false" placeholder="粘贴或输入提示词（支持多行）"></textarea>
+        <footer class="prompt-fullscreen-foot">
+          <span class="prompt-fullscreen-hint">Esc 关闭 · Ctrl/⌘ + Enter 保存</span>
+          <div class="prompt-fullscreen-actions">
+            <button class="outline-button" id="promptFullscreenCancel" type="button">取消</button>
+            <button class="primary-button" id="promptFullscreenSave" type="button">保存</button>
+          </div>
+        </footer>
+      </div>
+    </div>
     <div id="toastWrap" aria-live="polite"></div>
     <script src="app.js"></script>
   </body>

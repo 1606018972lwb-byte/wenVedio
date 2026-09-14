@@ -2571,6 +2571,7 @@ function renderPrompts() {
 }
 
 // 复制图标：内联 SVG，避免依赖字体（图形字符在不同字体下会显示成奇怪方块）
+const EXPAND_ICON_SVG = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="M9.5 2.5h4v4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.5 2.5 9.2 6.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M6.5 13.5h-4v-4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 13.5l4.3-4.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
 const COPY_ICON_SVG = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><rect x="5.6" y="5.6" width="8.4" height="8.4" rx="1.7" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.4 3.7v-.5A1.7 1.7 0 0 0 8.7 1.5H3.2A1.7 1.7 0 0 0 1.5 3.2v5.5a1.7 1.7 0 0 0 1.7 1.7h.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
 
 function promptRecordCard(record) {
@@ -2658,6 +2659,41 @@ function applyPromptToVideo(prompt) {
   showToast('已填入视频生成页', 'ok');
 }
 
+let promptFullscreenIndex = null;
+
+function updatePromptFullscreenCount() {
+  const el = $('#promptFullscreenCount');
+  const area = $('#promptFullscreenText');
+  if (el && area) el.textContent = `${area.value.length} 字`;
+}
+
+function openPromptFullscreen(index) {
+  const item = promptUI.items[index];
+  if (!item) return;
+  promptFullscreenIndex = index;
+  $('#promptFullscreenTitle').textContent = `编辑提示词 ${index + 1}`;
+  $('#promptFullscreenText').value = String(item.text || '');
+  updatePromptFullscreenCount();
+  $('#promptFullscreen').hidden = false;
+  setTimeout(() => $('#promptFullscreenText').focus(), 30);
+}
+
+function closePromptFullscreen() {
+  $('#promptFullscreen').hidden = true;
+  promptFullscreenIndex = null;
+}
+
+// 保存回写到抽屉里对应的输入框（仍需在抽屉里点保存才会写入记录）
+function savePromptFullscreen() {
+  if (promptFullscreenIndex == null) return closePromptFullscreen();
+  const text = $('#promptFullscreenText').value;
+  const item = promptUI.items[promptFullscreenIndex];
+  if (item) item.text = text;
+  closePromptFullscreen();
+  renderPromptItems();
+  showToast('已写回提示词（别忘了点保存）', 'ok');
+}
+
 function bindPromptRecords() {
   const wrap = $('#promptRecords');
   if (!wrap) return;
@@ -2699,6 +2735,7 @@ function openPromptDrawer(id) {
   $('#promptRecordName').value = record?.name || '';
   renderPromptItems();
   $('#promptDrawerBackdrop').hidden = false;
+  closePromptFullscreen();
 }
 
 function closePromptDrawer() {
@@ -2719,6 +2756,7 @@ function renderPromptItems() {
       <div class="prompt-item-text-wrap">
         <textarea class="prompt-item-text" rows="4" placeholder="粘贴或输入提示词">${escapeHtml(item.text)}</textarea>
         <button type="button" class="prompt-item-copy" data-prompt-item-copy="${index}" title="复制这条提示词" aria-label="复制这条提示词">${COPY_ICON_SVG}</button>
+        <button type="button" class="prompt-item-expand" data-prompt-item-expand="${index}" title="全屏编辑" aria-label="全屏编辑">${EXPAND_ICON_SVG}</button>
       </div>
       <div class="prompt-item-foot"><label>时长 <input class="prompt-item-duration" type="number" min="1" max="600" step="1" value="${escapeHtml(item.duration)}" /> 秒</label></div>`;
     row.querySelector('.prompt-item-text').addEventListener('input', (event) => { promptUI.items[index].text = event.target.value; });
@@ -2726,6 +2764,9 @@ function renderPromptItems() {
     // 复制当前输入框内容（含尚未保存的修改）
     row.querySelector('[data-prompt-item-copy]').addEventListener('click', () => {
       copyPromptText(row.querySelector('.prompt-item-text').value);
+    });
+    row.querySelector('[data-prompt-item-expand]').addEventListener('click', () => {
+      openPromptFullscreen(Number(row.querySelector('[data-prompt-item-expand]').dataset.promptItemExpand));
     });
     row.querySelector('[data-prompt-item-remove]').addEventListener('click', () => {
       promptUI.items.splice(index, 1);
@@ -3666,6 +3707,14 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#closePromptDrawer').addEventListener('click', closePromptDrawer);
   $('#cancelPromptDrawer').addEventListener('click', closePromptDrawer);
   $('#promptDrawerBackdrop').addEventListener('click', (event) => { if (event.target === $('#promptDrawerBackdrop')) closePromptDrawer(); });
+  $('#promptFullscreenSave').addEventListener('click', savePromptFullscreen);
+  $('#promptFullscreenCancel').addEventListener('click', closePromptFullscreen);
+  $('#promptFullscreenClose').addEventListener('click', closePromptFullscreen);
+  $('#promptFullscreenText').addEventListener('input', updatePromptFullscreenCount);
+  $('#promptFullscreenText').addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); savePromptFullscreen(); }
+  });
+  $('#promptFullscreen').addEventListener('click', (event) => { if (event.target === $('#promptFullscreen')) closePromptFullscreen(); });
   bindPromptRecords();
 
   // 应用设置
@@ -3718,6 +3767,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!$('#taskDrawerBackdrop').hidden) closeTaskDetail();
     if (!$('#modelEditorBackdrop').hidden) requestCloseModelDrawer();
     if (!$('#tokenDrawerBackdrop').hidden) $('#tokenDrawerBackdrop').hidden = true;
+    if (!$('#promptFullscreen').hidden) { closePromptFullscreen(); return; }
     if (!$('#promptDrawerBackdrop').hidden) closePromptDrawer();
   });
   ['prompt', 'taskName', 'taskSequence'].forEach((id) => {
