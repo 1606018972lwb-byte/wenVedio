@@ -2184,6 +2184,9 @@ async function submitBatch() {
   const refField = (model.fields || []).find((field) => field && field.key === 'reference_images');
   const refsRequired = !refField || refField.required !== false;
   if (refsRequired && !refs[0]) { alert('请添加至少一张参考图片'); return; }
+  // 参考图为可选项时，未添加任何参考图先确认：这类多图参考工作流缺图会在平台侧执行失败
+  if (!refsRequired && !refs.length
+    && !window.confirm('当前没有添加参考图片。\n若该工作流需要参考图，任务提交后会在平台侧生成失败。\n确定继续提交吗？')) return;
   $('#submitBatch').disabled = true;
   try {
     const res = await fetch(`${settings.apiBase}/api/batches`, {
