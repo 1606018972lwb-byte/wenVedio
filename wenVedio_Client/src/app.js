@@ -1774,17 +1774,24 @@ function readImageFile(file) {
   });
 }
 
+// 点击选择时文件在 target.files，拖拽放入时在 dataTransfer.files
+function filesFromEvent(event) {
+  const list = event?.dataTransfer?.files ?? event?.target?.files;
+  return list ? [...list] : [];
+}
+
 async function addLocalImages(event) {
-  const files = [...event.target.files]
+  const files = filesFromEvent(event)
     .filter((file) => ['image/jpeg', 'image/png', 'image/webp'].includes(file.type))
     .slice(0, 10 - imageSourceCount());
+  if (!files.length) { showToast('未识别到可用的图片（支持 JPG / PNG / WebP）', 'error'); return; }
   if (files.length) {
     const values = await Promise.all(files.map((file) => readImageFile(file)));
     values.forEach((value, i) => state.imageItems.push({ id: imageId('file'), kind: 'file', value, name: files[i].name }));
     renderImagePreviews();
     saveForm();
   }
-  event.target.value = '';
+  if (event.target && 'value' in event.target) event.target.value = '';
 }
 
 function taskStatus(task) {
@@ -3082,14 +3089,17 @@ function updateImageRefMeta() {
 }
 
 async function addImageRefFiles(event) {
-  const files = [...event.target.files].filter((file) => ['image/jpeg', 'image/png', 'image/webp'].includes(file.type)).slice(0, 10 - imageRefCount());
+  const files = filesFromEvent(event)
+    .filter((file) => ['image/jpeg', 'image/png', 'image/webp'].includes(file.type))
+    .slice(0, 10 - imageRefCount());
+  if (!files.length) { showToast('未识别到可用的图片（支持 JPG / PNG / WebP）', 'error'); return; }
   if (files.length) {
     const values = await Promise.all(files.map((file) => readImageFile(file)));
     values.forEach((value, i) => state.imageRefItems.push({ id: imageId('file'), kind: 'file', value, name: files[i].name }));
     renderImageRefPreviews();
     saveImageRefDraftSoon();
   }
-  event.target.value = '';
+  if (event.target && 'value' in event.target) event.target.value = '';
 }
 
 async function writeImageRefDraft() {
