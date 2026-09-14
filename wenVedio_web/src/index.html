@@ -33,9 +33,9 @@
           <a class="nav-item nav-group" id="navAdmin" href="#admin"><span class="nav-icon">⚙</span><span class="nav-label">后台管理</span><span class="nav-chevron">⌃</span></a>
           <div class="nav-sub" id="adminGroup">
             <button class="nav-sub-item" id="openSettings" type="button"><span class="nav-icon">⚙</span><span class="nav-label">模型管理</span></button>
-            <button class="nav-sub-item" id="openPrompts" type="button"><span class="nav-icon">📝</span><span class="nav-label">提示词管理</span></button>
             <button class="nav-sub-item" id="openTokens" type="button"><span class="nav-icon">◈</span><span class="nav-label">令牌管理</span></button>
           </div>
+          <a class="nav-item" id="openPrompts" href="#prompts"><span class="nav-icon">📝</span><span class="nav-label">提示词管理</span></a>
           <a class="nav-item" id="navQuery" href="#query"><span class="nav-icon">↗</span><span class="nav-label">查询入口</span></a>
         </nav>
 
@@ -437,7 +437,15 @@
         <section class="prompts-view" id="promptsView" hidden>
           <div class="gen-head">
             <div><span class="section-kicker">WORKSPACE / PROMPTS</span><h2>提示词管理</h2><p>像笔记一样保存提示词：一条记录可包含多条提示词，每条记录提示词文本与时长。</p></div>
-            <button class="primary-button" id="addPromptRecord" type="button"><span>＋</span> 新增记录</button>
+            <div class="prompt-head-actions">
+              <button class="icon-action" id="expandAllPrompts" type="button" title="全部展开" aria-label="全部展开">
+                <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M4 6.6 8 10.6l4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 2.6 8 6.6l4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="icon-action" id="collapseAllPrompts" type="button" title="全部收起" aria-label="全部收起">
+                <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M4 9.4 8 5.4l4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 13.4 8 9.4l4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="primary-button" id="addPromptRecord" type="button"><span>＋</span> 新增记录</button>
+            </div>
           </div>
           <div class="prompt-records" id="promptRecords"></div>
           <div id="promptsEmpty" class="empty-state" hidden><span>📝</span><b>还没有提示词记录</b><p>点击右上角「新增记录」，把常用提示词保存下来</p></div>

@@ -2489,6 +2489,29 @@ async function loadTokensCache() {
 
 // ---------------- 提示词管理 ----------------
 const promptUI = { editingId: null, items: [] };
+const PROMPT_COLLAPSED_KEY = 'wenvedio-prompt-collapsed';
+
+// 记录列表的折叠状态（记住上次的选择）
+function promptCollapsedSet() {
+  if (!(promptUI.collapsed instanceof Set)) {
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem(PROMPT_COLLAPSED_KEY) || '[]'); } catch (_) { saved = []; }
+    promptUI.collapsed = new Set(Array.isArray(saved) ? saved.map(String) : []);
+  }
+  return promptUI.collapsed;
+}
+
+function savePromptCollapsed() {
+  try { localStorage.setItem(PROMPT_COLLAPSED_KEY, JSON.stringify([...promptCollapsedSet()])); } catch (_) { /* 忽略 */ }
+}
+
+function togglePromptCollapsed(id, collapsed) {
+  const set = promptCollapsedSet();
+  const next = collapsed == null ? !set.has(id) : collapsed;
+  if (next) set.add(id); else set.delete(id);
+  savePromptCollapsed();
+  renderPrompts();
+}
 const PROMPT_MAX_ITEMS = 50;
 
 async function loadPromptsCache() {
@@ -2521,13 +2544,18 @@ function renderPrompts() {
   if (empty) empty.hidden = state.prompts.length > 0;
 }
 
+// 复制图标：内联 SVG，避免依赖字体（图形字符在不同字体下会显示成奇怪方块）
+const COPY_ICON_SVG = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><rect x="5.6" y="5.6" width="8.4" height="8.4" rx="1.7" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.4 3.7v-.5A1.7 1.7 0 0 0 8.7 1.5H3.2A1.7 1.7 0 0 0 1.5 3.2v5.5a1.7 1.7 0 0 0 1.7 1.7h.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+
 function promptRecordCard(record) {
   const card = document.createElement('section');
-  card.className = 'panel prompt-card';
+  card.className = `panel prompt-card${promptCollapsedSet().has(record.id) ? ' collapsed' : ''}`;
   card.dataset.promptId = record.id;
   const items = Array.isArray(record.items) ? record.items : [];
+  const collapsed = promptCollapsedSet().has(record.id);
   card.innerHTML = `
-    <header class="prompt-card-head">
+    <header class="prompt-card-head" data-prompt-toggle="${escapeHtml(record.id)}" title="${collapsed ? '展开' : '收起'}这组提示词">
+      <span class="prompt-chevron" aria-hidden="true">${collapsed ? '›' : '⌄'}</span>
       <div class="prompt-card-title"><b>${escapeHtml(record.name || '未命名记录')}</b><small>${items.length} 条提示词 · 更新于 ${escapeHtml(relativeTime(record.updated_at || record.created_at) || '—')}</small></div>
       <div class="prompt-card-actions">
         <button type="button" class="model-action-button primary" data-prompt-edit="${escapeHtml(record.id)}">编辑</button>
@@ -2536,7 +2564,7 @@ function promptRecordCard(record) {
     </header>
     <div class="prompt-items">${items.map((item, index) => `
       <div class="prompt-card-item">
-        <button type="button" class="prompt-copy-btn" data-prompt-copy="${escapeHtml(record.id)}:${index}" title="复制提示词" aria-label="复制提示词">⧉</button>
+        <button type="button" class="prompt-copy-btn" data-prompt-copy="${escapeHtml(record.id)}:${index}" title="复制提示词" aria-label="复制提示词">${COPY_ICON_SVG}</button>
         <p class="prompt-text">${escapeHtml(item.text || '')}</p>
         <div class="prompt-meta">
           <span class="prompt-duration">${Number(item.duration) > 0 ? `${escapeHtml(String(item.duration))} 秒` : '时长未设置'}</span>
@@ -2544,6 +2572,21 @@ function promptRecordCard(record) {
         </div>
       </div>`).join('') || '<div class="prompt-empty-hint">该记录还没有提示词</div>'}</div>`;
   return card;
+}
+
+function expandAllPrompts() {
+  promptCollapsedSet().clear();
+  savePromptCollapsed();
+  renderPrompts();
+  showToast('已展开全部提示词', 'ok');
+}
+
+function collapseAllPrompts() {
+  const set = promptCollapsedSet();
+  state.prompts.forEach((record) => set.add(record.id));
+  savePromptCollapsed();
+  renderPrompts();
+  showToast('已收起全部提示词', 'ok');
 }
 
 function promptItemAt(token) {
@@ -2593,6 +2636,11 @@ function bindPromptRecords() {
   const wrap = $('#promptRecords');
   if (!wrap) return;
   wrap.addEventListener('click', async (event) => {
+    const head = event.target.closest('[data-prompt-toggle]');
+    if (head && !event.target.closest('.prompt-card-actions')) {
+      togglePromptCollapsed(head.dataset.promptToggle);
+      return;
+    }
     const copyBtn = event.target.closest('[data-prompt-copy]');
     if (copyBtn) {
       const prompt = promptItemAt(copyBtn.dataset.promptCopy);
@@ -2642,10 +2690,17 @@ function renderPromptItems() {
     row.className = 'prompt-item-row';
     row.innerHTML = `
       <div class="prompt-item-head"><span>提示词 ${index + 1}</span><button type="button" class="prompt-item-remove" data-prompt-item-remove="${index}" title="删除这条" aria-label="删除这条">×</button></div>
-      <textarea class="prompt-item-text" rows="4" placeholder="粘贴或输入提示词">${escapeHtml(item.text)}</textarea>
+      <div class="prompt-item-text-wrap">
+        <textarea class="prompt-item-text" rows="4" placeholder="粘贴或输入提示词">${escapeHtml(item.text)}</textarea>
+        <button type="button" class="prompt-item-copy" data-prompt-item-copy="${index}" title="复制这条提示词" aria-label="复制这条提示词">${COPY_ICON_SVG}</button>
+      </div>
       <div class="prompt-item-foot"><label>时长 <input class="prompt-item-duration" type="number" min="1" max="600" step="1" value="${escapeHtml(item.duration)}" /> 秒</label></div>`;
     row.querySelector('.prompt-item-text').addEventListener('input', (event) => { promptUI.items[index].text = event.target.value; });
     row.querySelector('.prompt-item-duration').addEventListener('input', (event) => { promptUI.items[index].duration = event.target.value; });
+    // 复制当前输入框内容（含尚未保存的修改）
+    row.querySelector('[data-prompt-item-copy]').addEventListener('click', () => {
+      copyPromptText(row.querySelector('.prompt-item-text').value);
+    });
     row.querySelector('[data-prompt-item-remove]').addEventListener('click', () => {
       promptUI.items.splice(index, 1);
       if (!promptUI.items.length) promptUI.items.push({ text: '', duration: '5' });
@@ -3317,7 +3372,7 @@ function showView(view) {
   const activeEl = activeId ? $(`#${activeId}`) : null;
   if (activeEl) activeEl.classList.add('active');
   if (isRecords) { expandGroup('tasks'); syncRecordsKindHighlight(); }
-  if (isSettings || isTokens || isPrompts) expandGroup('admin');
+  if (isSettings || isTokens) expandGroup('admin');
   $$('.mobile-nav button').forEach((item) => item.classList.remove('active'));
   $(`#${isImage ? 'mobileImage' : isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace'}`).classList.add('active');
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -3557,7 +3612,9 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#tokenDrawerBackdrop').addEventListener('click', (event) => { if (event.target === $('#tokenDrawerBackdrop')) $('#tokenDrawerBackdrop').hidden = true; });
 
   // 提示词管理
-  $('#openPrompts').addEventListener('click', openPrompts);
+  $('#openPrompts').addEventListener('click', (event) => { event.preventDefault(); openPrompts(); });
+  $('#expandAllPrompts').addEventListener('click', expandAllPrompts);
+  $('#collapseAllPrompts').addEventListener('click', collapseAllPrompts);
   $('#addPromptRecord').addEventListener('click', () => openPromptDrawer(null));
   $('#addPromptItem').addEventListener('click', addPromptItemRow);
   $('#savePromptRecord').addEventListener('click', savePromptRecord);

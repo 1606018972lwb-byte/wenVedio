@@ -245,15 +245,19 @@ function cleanExpiredLogs() {
 
 function loadTokens() {
   let records = null;
+  let fileExists = true;
   try {
     const parsed = JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf8'));
     records = Array.isArray(parsed) ? parsed : parsed.tokens;
   } catch (err) {
-    if (err.code !== 'ENOENT') writeLog('error', `读取令牌配置失败: ${err.message}`);
+    if (err.code === 'ENOENT') fileExists = false;
+    else writeLog('error', `读取令牌配置失败: ${err.message}`);
   }
   if (Array.isArray(records)) records.forEach((token) => { if (token?.id && token?.value) tokens.set(token.id, token); });
   if (!tokens.size && config.apiKey) tokens.set('default', { id: 'default', name: '默认 ComfyUI 令牌', value: config.apiKey, created_at: new Date().toISOString() });
-  saveTokens();
+  // 只在文件缺失（首次运行）时写盘：读取/解析失败时保留原文件，避免把已有配置覆盖成空
+  if (!fileExists) saveTokens();
+  else if (!Array.isArray(records)) writeLog('error', '令牌配置无法解析，已保留原文件不覆盖（请检查 data/config/tokens.json）');
 }
 
 // 提示词记录：一条记录包含多条提示词，每条含文本与时长（秒）
@@ -266,11 +270,13 @@ function savePrompts() {
 
 function loadPrompts() {
   let records = null;
+  let fileExists = true;
   try {
     const parsed = JSON.parse(fs.readFileSync(PROMPTS_FILE, 'utf8'));
     records = Array.isArray(parsed) ? parsed : parsed.prompts;
   } catch (err) {
-    if (err.code !== 'ENOENT') writeLog('error', `读取提示词记录失败: ${err.message}`);
+    if (err.code === 'ENOENT') fileExists = false;
+    else writeLog('error', `读取提示词记录失败: ${err.message}`);
   }
   if (Array.isArray(records)) {
     records.forEach((record) => {
@@ -290,16 +296,19 @@ function loadPrompts() {
       });
     });
   }
-  savePrompts();
+  if (!fileExists) savePrompts();
+  else if (!Array.isArray(records)) writeLog('error', '提示词记录无法解析，已保留原文件不覆盖（请检查 data/config/prompts.json）');
 }
 
 function loadModels() {
   let records = null;
+  let fileExists = true;
   try {
     const parsed = JSON.parse(fs.readFileSync(MODELS_FILE, 'utf8'));
     records = Array.isArray(parsed) ? parsed : parsed.models;
   } catch (err) {
-    if (err.code !== 'ENOENT') writeLog('error', `读取模型配置失败: ${err.message}`);
+    if (err.code === 'ENOENT') fileExists = false;
+    else writeLog('error', `读取模型配置失败: ${err.message}`);
   }
   const source = Array.isArray(records) && records.length ? records : DEFAULT_MODELS;
   source.forEach((model) => models.set(model.id, { ...model, token_id: model.token_id || 'default' }));
@@ -314,7 +323,9 @@ function loadModels() {
       }
     }
   }
-  saveModels();
+  // 文件缺失或补全了价格时写盘；解析失败时保留原文件，避免清空模型配置
+  if (!fileExists || pricingBackfilled) saveModels();
+  else if (!Array.isArray(records)) writeLog('error', '模型配置无法解析，已保留原文件不覆盖（请检查 data/config/models.json）');
 }
 
 // 上次进程异常退出可能留下「提交中」且没有平台任务号的记录，启动时标记为失败，避免长期显示进行中

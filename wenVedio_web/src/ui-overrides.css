@@ -762,3 +762,19 @@ body.booting { overflow: hidden; }
 .prompt-drawer .outline-button { width: auto; }
 #promptItems { display: grid; gap: 10px; padding: 4px 0; }
 #promptItems:empty { display: none; }
+.prompt-item-text-wrap { position: relative; }
+.prompt-item-text { padding-right: 44px; }
+.prompt-item-copy { position: absolute; top: 6px; right: 20px; width: 26px; height: 26px; border: 1px solid #e0e6ef; border-radius: 7px; background: #fff; color: #5b6878; font-size: 13px; line-height: 1; cursor: pointer; }
+.prompt-item-copy:hover { border-color: var(--blue); color: var(--blue); }
+.prompt-copy-btn, .prompt-item-copy { display: inline-flex; align-items: center; justify-content: center; }
+.prompt-copy-btn svg, .prompt-item-copy svg { display: block; }
+.prompt-head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.icon-action { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #dbe1e8; border-radius: 8px; background: #fff; color: #5b6878; cursor: pointer; }
+.icon-action:hover { border-color: var(--blue); color: var(--blue); }
+.icon-action svg { display: block; }
+.prompt-card-head[data-prompt-toggle] { cursor: pointer; align-items: center; }
+.prompt-card-head[data-prompt-toggle]:hover .prompt-card-title b { color: var(--blue); }
+.prompt-chevron { width: 14px; flex: 0 0 14px; color: #9aa4b2; font-size: 13px; line-height: 1; }
+.prompt-card.collapsed .prompt-items { display: none; }
+.prompt-card-head { gap: 10px; }
+.prompt-card-title { flex: 1; min-width: 0; }
