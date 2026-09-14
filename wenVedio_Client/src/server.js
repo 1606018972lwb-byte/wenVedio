@@ -536,10 +536,16 @@ async function queryTask(taskId, modelId) {
     : payload && typeof payload === 'object'
       ? (payload.list || payload.rows || payload.tasks || payload.records)
       : null;
-  if (Array.isArray(candidates)) {
-    return candidates.find((item) => String(item.task_id || item.id) === String(taskId)) || candidates[0] || {};
+  const pick = Array.isArray(candidates)
+    ? (candidates.find((item) => String(item.task_id || item.id) === String(taskId)) || candidates[0] || {})
+    : (payload || {});
+  // 平台的失败原因写在 data 的同级 msg 上，之前只取了 data 导致原因丢失
+  const topMessage = String(data?.msg || data?.message || data?.error || '').trim();
+  const status = normalizeProviderStatus(pick.status ?? pick.state ?? pick.task_status);
+  if (topMessage && ['failed', 'timeout'].includes(status) && !pick.msg && !pick.message && !pick.error) {
+    return { ...pick, msg: topMessage };
   }
-  return payload || {};
+  return pick;
 }
 
 function normalizeProviderStatus(value) {
@@ -1084,7 +1090,7 @@ async function handleApi(req, res, url) {
         : [];
       if (!prompt || prompt.length > 500000) return sendJson(res, 400, { ok: false, msg: 'prompt 长度必须是 1-500000' });
       if (!isImageModel && refsRequired) {
-        if (!Array.isArray(t.reference_images) || t.reference_images.length > 10) return sendJson(res, 400, { ok: false, msg: '图片参数最多支持 ref_image_0 到 ref_image_9' });
+        if (Array.isArray(t.reference_images) && t.reference_images.length > 10) return sendJson(res, 400, { ok: false, msg: '图片参数最多支持 ref_image_0 到 ref_image_9（最多 10 张）' });
         if (!refs[0]) return sendJson(res, 400, { ok: false, msg: '请填写 ref_image_0' });
       }
       const record = {
@@ -1257,6 +1263,10 @@ async function handleApi(req, res, url) {
         const videoUrl = findResultUrl(remote);
         if (videoUrl) rec.video_url = videoUrl;
         if (remote && remote.progress != null) rec.progress = remote.progress;
+        // 失败时记录平台给出的原因，便于在任务详情里直接看到
+        const platformMessage = String(remote?.msg || remote?.message || remote?.error || remote?.reason || '').trim();
+        if (['failed', 'timeout'].includes(rec.status) && platformMessage) rec.error = platformMessage;
+        if (rec.status === 'completed' && !rec.error) rec.error = null;
         rec.query_error = null;
         if (before !== JSON.stringify([rec.status, rec.video_url, rec.progress, rec.error, rec.query_error])) saveStore();
       } catch (err) {

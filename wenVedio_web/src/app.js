@@ -2117,6 +2117,22 @@ async function loadTasks() {
     state.tasks
       .filter((task) => !['completed', 'failed', 'timeout'].includes(taskStatus(task)))
       .forEach((task) => pollTask(task.id));
+    // 失败/超时但缺少原因的历史任务：启动时补拉一次，让失败原因可见
+    state.tasks
+      .filter((task) => ['failed', 'timeout'].includes(taskStatus(task)) && !task.error && task.provider_task_id)
+      .slice(0, 10)
+      .forEach(async (task) => {
+        try {
+          const res = await fetch(`${settings.apiBase}/api/tasks/${encodeURIComponent(task.id)}`);
+          const data = await res.json();
+          if (data.ok && data.task) {
+            task.error = data.task.error || task.error;
+            task.status = data.task.status || task.status;
+            task.video_url = data.task.video_url || task.video_url;
+          }
+        } catch (_) { /* 忽略单条刷新失败 */ }
+        renderTasks();
+      });
   } catch (err) {
     console.error('读取任务记录失败', err);
     renderTasks();
