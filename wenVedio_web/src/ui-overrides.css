@@ -778,3 +778,5 @@ body.booting { overflow: hidden; }
 .prompt-card.collapsed .prompt-items { display: none; }
 .prompt-card-head { gap: 10px; }
 .prompt-card-title { flex: 1; min-width: 0; }
+.gen-panel-actions { display: flex; justify-content: flex-end; margin: -4px 0 2px; }
+.gen-panel-actions .text-button { font-size: 12px; }

@@ -3226,6 +3226,21 @@ async function submitImageBatch() {
     $('#submitImageBatch').disabled = false;
   }
 }
+// 清空视频表单：仅清除提示词与已填写的参考图片，时长/分辨率等参数保持不变
+function clearVideoForm() {
+  const promptEl = $('#prompt');
+  if (promptEl) { promptEl.value = ''; updateCharCount('prompt'); }
+  state.imageItems = [{ id: 'link-0', kind: 'link', value: '' }];
+  const upload = $('#localImageUpload');
+  if (upload) upload.value = '';
+  renderImageInputs();
+  renderImagePreviews();
+  updateImageMeta();
+  saveForm();
+  renderCurrentPrice();
+  showToast('已清空提示词与参考图片', 'ok');
+}
+
 function clearImageForm() {
   $('#imagePrompt').value = '';
   genValues.image.values = {};
@@ -3482,6 +3497,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 视频生成
   $('#modelSelect').addEventListener('change', () => { applySelectedModel(); saveForm(); updateGenStatCards(); });
+  $('#clearVideoForm').addEventListener('click', clearVideoForm);
   $('#submitBatch').addEventListener('click', submitBatch);
   $('#scheduleSubmit').addEventListener('change', () => { saveForm(); syncVideoSubmitLabel(); });
   $('#videoSeed').addEventListener('input', () => { genValues.video.values.seed = $('#videoSeed').value; saveGenValues(); });
