@@ -88,7 +88,7 @@ const DEFAULT_MODELS = [
     fields: [
       { key: 'prompt', label: 'prompt', type: 'textarea', required: true, max: 500000 },
       { key: 'duration', label: '时长', type: 'number', min: 1, max: 15, step: 1, default: 5 },
-      { key: 'resolution', label: '分辨率', type: 'select', options: ['480p竖', '768p竖', '480p横', '768p横', '480p(1:1)', '768p(1:1)'] },
+      { key: 'resolution', label: '分辨率', type: 'select', options: ['480p竖', '768p竖', '1080p竖', '480p横', '768p横', '1080p横', '480p(1:1)', '768p(1:1)', '1080p(1:1)'] },
       { key: 'seed', label: '随机种子', type: 'number', min: 1, max: MAX_SEED, step: 1 },
       { key: 'reference_images', label: '参考图片', type: 'images', required: true, min: 1, max: 10 },
     ],
@@ -323,8 +323,28 @@ function loadModels() {
       }
     }
   }
-  // 文件缺失或补全了价格时写盘；解析失败时保留原文件，避免清空模型配置
-  if (!fileExists || pricingBackfilled) saveModels();
+  // H3 系列支持 1080p：老数据只到 768p 时补齐缺失的 1080p 选项
+  const RESOLUTION_1080 = ['1080p竖', '1080p横', '1080p(1:1)'];
+  let resolutionBackfilled = false;
+  for (const model of models.values()) {
+    if (!/minimax_h3/i.test(`${model.id || ''} ${model.workflow || ''}`)) continue;
+    const fields = Array.isArray(model.fields) ? model.fields : [];
+    const field = fields.find((item) => item && item.key === 'resolution' && Array.isArray(item.options));
+    if (!field || field.options.some((option) => /1080/i.test(String(option)))) continue;
+    const next = [...field.options];
+    RESOLUTION_1080.forEach((option) => {
+      const sibling = option.replace('1080', '768');
+      const at = next.indexOf(sibling);
+      if (at >= 0) next.splice(at + 1, 0, option);
+      else next.push(option);
+    });
+    model.fields = fields.map((item) => (item === field ? { ...field, options: next } : item));
+    resolutionBackfilled = true;
+  }
+  if (resolutionBackfilled) writeLog('info', '已为 H3 系列模型补齐 1080p 分辨率选项');
+
+  // 文件缺失或补全了价格/分辨率选项时写盘；解析失败时保留原文件，避免清空模型配置
+  if (!fileExists || pricingBackfilled || resolutionBackfilled) saveModels();
   else if (!Array.isArray(records)) writeLog('error', '模型配置无法解析，已保留原文件不覆盖（请检查 data/config/models.json）');
 }
 
