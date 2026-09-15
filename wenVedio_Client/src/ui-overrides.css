@@ -796,3 +796,7 @@ body.booting { overflow: hidden; }
 .prompt-fullscreen-hint { color: #9aa4b2; font-size: 11px; }
 .prompt-fullscreen-actions { display: flex; gap: 10px; }
 .prompt-fullscreen-actions .outline-button, .prompt-fullscreen-actions .primary-button { width: auto; padding: 9px 18px; }
+.prompt-item-title { width: 100%; border: 1px solid #dce1e8; border-radius: 6px; padding: 7px 10px; font-size: 12px; font-weight: 600; color: #28323f; }
+.prompt-item-title:focus { border-color: var(--blue); outline: none; box-shadow: 0 0 0 3px rgba(69, 102, 245, .1); }
+.prompt-item-title-label { display: block; margin-bottom: 4px; font-size: 12px; color: #1f2b3e; }
+.prompt-item-text-wrap { margin-top: 8px; }

@@ -2592,6 +2592,7 @@ function promptRecordCard(record) {
     <div class="prompt-items">${items.map((item, index) => `
       <div class="prompt-card-item">
         <button type="button" class="prompt-copy-btn" data-prompt-copy="${escapeHtml(record.id)}:${index}" title="复制提示词" aria-label="复制提示词">${COPY_ICON_SVG}</button>
+        ${item.title ? `<b class="prompt-item-title-label">${escapeHtml(item.title)}</b>` : ''}
         <p class="prompt-text">${escapeHtml(item.text || '')}</p>
         <div class="prompt-meta">
           <span class="prompt-duration">${Number(item.duration) > 0 ? `${escapeHtml(String(item.duration))} 秒` : '时长未设置'}</span>
@@ -2726,10 +2727,11 @@ function openPromptDrawer(id) {
   const record = id ? state.prompts.find((item) => item.id === id) : null;
   promptUI.editingId = record ? record.id : null;
   promptUI.items = (record?.items || []).map((item) => ({
+    title: String(item.title || ''),
     text: String(item.text || ''),
     duration: Number(item.duration) > 0 ? String(item.duration) : '',
   }));
-  if (!promptUI.items.length) promptUI.items.push({ text: '', duration: '5' });
+  if (!promptUI.items.length) promptUI.items.push({ title: '', text: '', duration: '5' });
   $('#promptDrawerTitle').textContent = record ? '编辑记录' : '新增记录';
   $('#promptDrawerMeta').textContent = record ? record.id : '新建';
   $('#promptRecordName').value = record?.name || '';
@@ -2753,12 +2755,14 @@ function renderPromptItems() {
     row.className = 'prompt-item-row';
     row.innerHTML = `
       <div class="prompt-item-head"><span>提示词 ${index + 1}</span><button type="button" class="prompt-item-remove" data-prompt-item-remove="${index}" title="删除这条" aria-label="删除这条">×</button></div>
+      <input class="prompt-item-title" type="text" maxlength="40" placeholder="小标题（可选，例如：镜头1 / 开场）" value="${escapeHtml(item.title || '')}" />
       <div class="prompt-item-text-wrap">
         <textarea class="prompt-item-text" rows="4" placeholder="粘贴或输入提示词">${escapeHtml(item.text)}</textarea>
         <button type="button" class="prompt-item-copy" data-prompt-item-copy="${index}" title="复制这条提示词" aria-label="复制这条提示词">${COPY_ICON_SVG}</button>
         <button type="button" class="prompt-item-expand" data-prompt-item-expand="${index}" title="全屏编辑" aria-label="全屏编辑">${EXPAND_ICON_SVG}</button>
       </div>
       <div class="prompt-item-foot"><label>时长 <input class="prompt-item-duration" type="number" min="1" max="600" step="1" value="${escapeHtml(item.duration)}" /> 秒</label></div>`;
+    row.querySelector('.prompt-item-title').addEventListener('input', (event) => { promptUI.items[index].title = event.target.value; });
     row.querySelector('.prompt-item-text').addEventListener('input', (event) => { promptUI.items[index].text = event.target.value; });
     row.querySelector('.prompt-item-duration').addEventListener('input', (event) => { promptUI.items[index].duration = event.target.value; });
     // 复制当前输入框内容（含尚未保存的修改）
@@ -2770,7 +2774,7 @@ function renderPromptItems() {
     });
     row.querySelector('[data-prompt-item-remove]').addEventListener('click', () => {
       promptUI.items.splice(index, 1);
-      if (!promptUI.items.length) promptUI.items.push({ text: '', duration: '5' });
+      if (!promptUI.items.length) promptUI.items.push({ title: '', text: '', duration: '5' });
       renderPromptItems();
     });
     wrap.appendChild(row);
@@ -2781,7 +2785,7 @@ function renderPromptItems() {
 
 function addPromptItemRow() {
   if (promptUI.items.length >= PROMPT_MAX_ITEMS) { alert(`单条记录最多 ${PROMPT_MAX_ITEMS} 条提示词`); return; }
-  promptUI.items.push({ text: '', duration: '5' });
+  promptUI.items.push({ title: '', text: '', duration: '5' });
   renderPromptItems();
   const rows = document.querySelectorAll('#promptItems .prompt-item-row');
   const last = rows[rows.length - 1];
@@ -2793,6 +2797,7 @@ async function savePromptRecord() {
   if (!name) { alert('记录名称不能为空'); $('#promptRecordName').focus(); return; }
   const items = promptUI.items
     .map((item) => ({
+      title: String(item.title || '').trim(),
       text: String(item.text || '').trim(),
       duration: Number(item.duration) > 0 ? Number(item.duration) : null,
     }))

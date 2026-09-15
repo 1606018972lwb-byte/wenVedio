@@ -287,6 +287,7 @@ function loadPrompts() {
         items: (Array.isArray(record.items) ? record.items : [])
           .map((item, index) => ({
             id: String(item?.id || `item-${index}`),
+            title: String(item?.title || '').trim().slice(0, 40),
             text: String(item?.text || ''),
             duration: Number(item?.duration) > 0 ? Math.round(Number(item.duration)) : null,
           }))
@@ -925,6 +926,7 @@ async function handleApi(req, res, url) {
     const items = (Array.isArray(payload.items) ? payload.items : [])
       .map((item, index) => ({
         id: String(item?.id || `item-${Date.now().toString(36)}-${index}`),
+        title: String(item?.title || '').trim().slice(0, 40),
         text: String(item?.text || '').trim(),
         duration: Number(item?.duration) > 0 ? Math.min(600, Math.round(Number(item.duration))) : null,
       }))
