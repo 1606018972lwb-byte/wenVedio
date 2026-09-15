@@ -3388,7 +3388,12 @@ function renderUsageStats() {
   });
   table.innerHTML = [...byModel.values()].map((entry) => `<tr><td>${escapeHtml(entry.name)}</td><td>${entry.count}</td><td>${Object.entries(entry.sums).map(([cur, value]) => `${cur === 'USD' ? '$' : '¥'}${value.toFixed(2)}`).join(' + ')}</td></tr>`).join('') || '<tr><td colspan="3" class="usage-empty">暂无花费数据，新提交的任务完成后会计入</td></tr>';
 }
-const GROUP_KEYS = { tasks: 'wenvedio-tasks-group-collapsed', admin: 'wenvedio-admin-group-collapsed' };
+const GROUP_KEYS = { tasks: 'wenvedio-tasks-group-collapsed', admin: 'wenvedio-admin-group-collapsed', ai: 'wenvedio-ai-group-collapsed' };
+const GROUP_DOM = {
+  tasks: { group: '#tasksGroup', nav: '#navTasks' },
+  admin: { group: '#adminGroup', nav: '#navAdmin' },
+  ai: { group: '#aiGroup', nav: '#navAi' },
+};
 
 function isGroupCollapsed(name) {
   try { return localStorage.getItem(GROUP_KEYS[name]) === 'true'; } catch (_) { return false; }
@@ -3396,7 +3401,8 @@ function isGroupCollapsed(name) {
 
 function applyGroupCollapsed(name, collapsed) {
   $('#sidebar').classList.toggle(`${name}-collapsed`, collapsed);
-  const chevron = $(name === 'tasks' ? '#navTasks .nav-chevron' : '#navAdmin .nav-chevron');
+  const dom = GROUP_DOM[name];
+  const chevron = dom ? $(dom.nav + ' .nav-chevron') : null;
   if (chevron) chevron.textContent = collapsed ? '⌄' : '⌃';
 }
 
@@ -3457,6 +3463,7 @@ function showView(view) {
   const activeEl = activeId ? $(`#${activeId}`) : null;
   if (activeEl) activeEl.classList.add('active');
   if (isRecords) { expandGroup('tasks'); syncRecordsKindHighlight(); }
+  if (isImage || (!isQuery && !isRecords && !isSettings && !isTokens && !isImage)) expandGroup('ai');
   if (isSettings || isTokens) expandGroup('admin');
   $$('.mobile-nav button').forEach((item) => item.classList.remove('active'));
   $(`#${isImage ? 'mobileImage' : isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace'}`).classList.add('active');
@@ -3561,6 +3568,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadGenValues();
   loadTasks();
   initializeSidebar();
+  applyGroupCollapsed('ai', isGroupCollapsed('ai'));
   applyGroupCollapsed('tasks', isGroupCollapsed('tasks'));
   applyGroupCollapsed('admin', isGroupCollapsed('admin'));
   showView('workspace');
@@ -3746,6 +3754,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 导航
   $('#navImage').addEventListener('click', (event) => { event.preventDefault(); showView('image'); });
   $('#navWorkspace').addEventListener('click', (event) => { event.preventDefault(); showView('workspace'); });
+  $('#navAi').addEventListener('click', (event) => { event.preventDefault(); toggleGroupCollapse('ai'); });
   $('#navTasks').addEventListener('click', (event) => { event.preventDefault(); toggleGroupCollapse('tasks'); });
   $('#navAdmin').addEventListener('click', (event) => { event.preventDefault(); toggleGroupCollapse('admin'); });
   $('#navTasksAll').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('all'); });

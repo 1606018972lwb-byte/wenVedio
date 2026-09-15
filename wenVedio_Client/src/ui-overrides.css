@@ -367,6 +367,8 @@ th, td { padding: 13px 12px; }
 
 button.nav-sub-item { border: 0; background: none; width: 100%; text-align: left; font: inherit; cursor: pointer; }
 #sidebar.tasks-collapsed #tasksGroup { display: none; }
+#sidebar.ai-collapsed #aiGroup { display: none; }
+#sidebar.ai-collapsed #navAi .nav-chevron { transform: rotate(180deg); }
 #sidebar.admin-collapsed #adminGroup { display: none; }
 #sidebar.tasks-collapsed #navTasks .nav-chevron, #sidebar.admin-collapsed #navAdmin .nav-chevron { transform: rotate(180deg); }
 #sidebar.tasks-collapsed .nav-chevron { transform: rotate(180deg); }
