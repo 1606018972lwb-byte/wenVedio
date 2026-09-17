@@ -1797,7 +1797,8 @@ async function addLocalImages(event) {
 function taskStatus(task) {
   const status = String(task.status || 'queued').toLowerCase();
   if (status === 'scheduled') return 'scheduled';
-  if (['timeout', 'timed_out', 'expired'].includes(status)) return 'timeout';
+  if (['timeout', 'timed_out'].includes(status)) return 'timeout';
+  if (status === 'expired') return 'expired';
   if (['success', 'succeeded', 'complete', 'completed', 'finished', 'done'].includes(status)) return 'completed';
   if (['failure', 'failed', 'error', 'cancelled', 'canceled'].includes(status)) return 'failed';
   if (['running', 'processing', 'generating', 'executing', 'in_progress'].includes(status)) return 'processing';
@@ -1814,6 +1815,7 @@ function statusBadgeHtml(task) {
     scheduled: ['已预约', 'badge-purple'],
     failed: ['失败', 'badge-red'],
     timeout: ['失败', 'badge-red'],
+    expired: ['已过期', 'badge-gray'],
   };
   const entry = map[taskStatus(task)] || ['排队中', 'badge-amber'];
   return `<span class="badge ${entry[1]}">${entry[0]}</span>`;
@@ -1895,7 +1897,7 @@ function tcMatches(task) {
   if (f.filter === 'processing' && !['submitting', 'queued', 'processing'].includes(status)) return false;
   if (f.filter === 'scheduled' && status !== 'scheduled') return false;
   if (f.filter === 'completed' && status !== 'completed') return false;
-  if (f.filter === 'failed' && !['failed', 'timeout'].includes(status)) return false;
+  if (f.filter === 'failed' && !['failed', 'timeout', 'expired'].includes(status)) return false;
   if (f.model && task.model_id !== f.model) return false;
   if (f.date && (beijingDayKey(task.created_at) || '') !== f.date) return false;
   if (f.search) {
@@ -1925,7 +1927,7 @@ function renderTaskCenter() {
     processing: scoped.filter((t) => ['submitting', 'queued', 'processing'].includes(taskStatus(t))).length,
     scheduled: scoped.filter((t) => taskStatus(t) === 'scheduled').length,
     completed: scoped.filter((t) => taskStatus(t) === 'completed').length,
-    failed: scoped.filter((t) => ['failed', 'timeout'].includes(taskStatus(t))).length,
+    failed: scoped.filter((t) => ['failed', 'timeout', 'expired'].includes(taskStatus(t))).length,
   };
   const title = $('#tcTitle');
   if (title) title.textContent = scopeText ? `${scopeText}任务` : '任务中心';
@@ -1974,7 +1976,7 @@ function taskCenterRow(task, index) {
     actions.push(`<button type="button" data-tc-run="${escapeHtml(task.id)}">立即执行</button>`);
     actions.push(`<button type="button" class="danger" data-tc-cancel="${escapeHtml(task.id)}">取消预约</button>`);
   }
-  if (['failed', 'timeout'].includes(status)) actions.push(`<button type="button" data-tc-retry="${escapeHtml(task.id)}">↻ 重新提交</button>`);
+  if (['failed', 'timeout', 'expired'].includes(status)) actions.push(`<button type="button" data-tc-retry="${escapeHtml(task.id)}">↻ 重新提交</button>`);
   actions.push(`<button type="button" data-tc-locate="${escapeHtml(task.id)}">📁 文件位置</button>`);
   actions.push(`<button type="button" data-tc-view="${escapeHtml(task.id)}">👁 查看</button>`);
   actions.push(`<button type="button" class="danger" data-tc-delete="${escapeHtml(task.id)}">🗑 删除</button>`);
@@ -2115,7 +2117,7 @@ async function loadTasks() {
     })).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     renderTasks();
     state.tasks
-      .filter((task) => !['completed', 'failed', 'timeout'].includes(taskStatus(task)))
+      .filter((task) => !['completed', 'failed', 'timeout', 'expired'].includes(taskStatus(task)))
       .forEach((task) => pollTask(task.id));
     // 失败/超时但缺少原因的历史任务：启动时补拉一次，让失败原因可见
     state.tasks
@@ -2257,7 +2259,7 @@ function notifyTaskFinished(task, ok) {
 // 轮询单个任务状态
 function pollTask(localId) {
   const t = state.tasks.find((x) => x.id === localId);
-  if (!t || state.pollingTasks.has(localId) || ['completed', 'failed', 'timeout'].includes(taskStatus(t))) return;
+  if (!t || state.pollingTasks.has(localId) || ['completed', 'failed', 'timeout', 'expired'].includes(taskStatus(t))) return;
   state.pollingTasks.add(localId);
   const poll = async () => {
     if (!state.tasks.some((task) => task.id === localId)) {
@@ -2280,9 +2282,10 @@ function pollTask(localId) {
       const status = taskStatus(t);
       if (status === 'completed') { t.progress = 100; state.pollingTasks.delete(localId); notifyTaskFinished(t, true); showToast('生成完成', 'ok'); }
       else if (['failed', 'timeout'].includes(status)) { state.pollingTasks.delete(localId); notifyTaskFinished(t, false); showToast('生成失败，可在任务中心查看详情', 'error'); }
+      else if (status === 'expired') { state.pollingTasks.delete(localId); notifyTaskFinished(t, false); showToast('任务已超过 24 小时未完成，判定为过期', 'error'); }
       else { t.progress = remote.progress || t.progress || 8; }
       renderTasks();
-      if (!['completed', 'failed', 'timeout'].includes(status)) scheduleNext();
+      if (!['completed', 'failed', 'timeout', 'expired'].includes(status)) scheduleNext();
     } catch (_) {
       // 网络或鉴权异常不会误判任务失败，一分钟后继续查询。
       scheduleNext();
@@ -2369,7 +2372,7 @@ async function downloadImageTasks(tasks) {
         }
       }
     }
-    alert(failed ? `已下载 ${completed} 张图片，${failed} 张失败。` : `已下载 ${completed} 张图片到 ${directory.name || directory.path}。`);
+    showToast(failed ? `已下载 ${completed} 张图片，${failed} 张失败` : `已下载 ${completed} 张图片到 ${directory.name || directory.path}`, failed ? 'error' : 'ok');
   } finally {
     button.innerHTML = original;
     updateSelection();
@@ -2430,7 +2433,7 @@ async function downloadTasks(tasks) {
       await writable.close();
       completed += 1;
     }
-    alert(`已下载 ${completed} 个视频到所选文件夹。`);
+    showToast(`已下载 ${completed} 个视频到所选文件夹`, 'ok');
   } catch (err) {
     if (err.name !== 'AbortError') alert(`批量下载失败：${err.message}`);
   } finally {
@@ -2468,7 +2471,7 @@ Prompt: ${task.prompt}`], { type: 'video/mp4' })
       rememberTaskFile(task, saved?.path);
       completed += 1;
     }
-    alert(`已下载 ${completed} 个视频到 ${directory.name || directory.path}。`);
+    showToast(`已下载 ${completed} 个视频到 ${directory.name || directory.path}`, 'ok');
   } catch (err) {
     alert(`批量下载失败：${err.message}`);
   } finally {
@@ -3357,7 +3360,7 @@ async function downloadImageTask(task) {
       return;
     }
   }
-  alert(`已下载 ${files.length} 张图片。`);
+  showToast(`已下载 ${files.length} 张图片`, 'ok');
 }
 
 // 用量统计：总花费 / 本月花费 / 本月任务与成功率 / 按模型花费
@@ -3509,7 +3512,7 @@ function openTaskDetailDrawer(id) {
   $('#taskDrawerId').textContent = task.id;
   const statusMeta = {
     completed: ['已完成', 'enabled'], processing: ['生成中', 'enabled'], queued: ['排队中', 'enabled'],
-    submitting: ['提交中', 'enabled'], scheduled: ['已预约', 'enabled'], failed: ['失败', 'failed'], timeout: ['失败', 'failed'],
+    submitting: ['提交中', 'enabled'], scheduled: ['已预约', 'enabled'], failed: ['失败', 'failed'], timeout: ['失败', 'failed'], expired: ['已过期', 'failed'],
   }[taskStatus(task)] || ['—', 'enabled'];
   const statusEl = $('#taskDrawerStatus');
   statusEl.className = `state ${statusMeta[1]}`;
@@ -3537,7 +3540,7 @@ function openTaskDetailDrawer(id) {
   $('#taskDrawerError').textContent = task.error || '';
   const downloadable = task.status === 'completed' && (task.kind === 'image' ? (task.image_files || []).length : task.video_url);
   $('#taskDrawerDownload').hidden = !downloadable;
-  $('#taskDrawerRetry').hidden = !['failed', 'timeout'].includes(taskStatus(task));
+  $('#taskDrawerRetry').hidden = !['failed', 'timeout', 'expired'].includes(taskStatus(task));
   const note = $('#taskDrawerFootNote');
   if (note) note.textContent = task.kind === 'image' && (task.image_files || []).length > 1 ? `共 ${(task.image_files || []).length} 张图片，下载将逐张保存` : '';
   $('#taskDrawerBackdrop').hidden = false;
@@ -3561,12 +3564,17 @@ function retryFromTaskDrawer() {
 function showToast(message, type = 'ok') {
   const wrap = $('#toastWrap');
   if (!wrap) return;
+  const life = type === 'error' ? 6000 : 4200;
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
+  toast.style.setProperty('--toast-life', `${life}ms`);
   toast.textContent = message;
   wrap.appendChild(toast);
-  setTimeout(() => toast.classList.add('show'), 30);
-  setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 3200);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 700);
+  }, life);
 }
 
 document.addEventListener('DOMContentLoaded', () => {

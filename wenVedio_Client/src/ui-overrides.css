@@ -673,11 +673,16 @@ button.nav-sub-item { border: 0; background: none; width: 100%; text-align: left
 .token-bound-item.empty { color: #9aa4b2; border-style: dashed; }
 
 /* ===== Toast ===== */
-#toastWrap { position: fixed; right: 20px; top: 20px; z-index: 100; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-.toast { padding: 11px 16px; border-radius: 10px; font-size: 12px; font-weight: 600; color: #fff; background: #1f2b3e; box-shadow: 0 10px 30px rgba(15, 23, 34, .25); opacity: 0; transform: translateY(-8px); transition: all .25s ease; max-width: 340px; }
+#toastWrap { position: fixed; right: 22px; top: 22px; z-index: 100; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; pointer-events: none; }
+.toast { position: relative; display: flex; align-items: center; gap: 10px; min-width: 200px; max-width: 380px; padding: 13px 18px 14px; border-radius: 13px; background: #fff; color: #28323f; border: 1px solid rgba(15, 23, 34, .06); box-shadow: 0 14px 36px rgba(15, 23, 34, .16), 0 2px 6px rgba(15, 23, 34, .06); font-size: 12.5px; font-weight: 600; line-height: 1.5; opacity: 0; transform: translateY(-12px) scale(.97); transition: opacity .5s ease, transform .5s cubic-bezier(.22, .61, .36, 1); overflow: hidden; }
 .toast.show { opacity: 1; transform: none; }
-.toast.ok { background: #15956a; }
-.toast.error { background: #db5c52; }
+.toast::before { content: ''; flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 4px rgba(69, 102, 245, .12); }
+.toast.ok::before { background: var(--green); box-shadow: 0 0 0 4px rgba(26, 167, 120, .14); }
+.toast.error::before { background: #db5c52; box-shadow: 0 0 0 4px rgba(219, 92, 82, .14); }
+.toast::after { content: ''; position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--blue); opacity: .35; transform-origin: left center; animation: toastLife var(--toast-life, 4200ms) linear forwards; }
+.toast.ok::after { background: var(--green); }
+.toast.error::after { background: #db5c52; }
+@keyframes toastLife { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 .clear-form-button{width:100%;margin-top:8px;text-align:center}
 
 /* ===== 表格缩略图与花费统计（视觉验收修复） ===== */

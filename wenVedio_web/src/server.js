@@ -74,7 +74,7 @@ const tokens = new Map();
 const prompts = new Map();
 let seq = 0;
 const MAX_SEED = 999999999999999;
-const TASK_TIMEOUT_MS = 20 * 60 * 1000;
+const TASK_EXPIRE_MS = 24 * 60 * 60 * 1000; // 距开始生成超过 24 小时仍未完成 → 判定过期
 let scheduledBusy = false;
 let lastScheduledSubmissionAt = 0;
 
@@ -1246,11 +1246,12 @@ async function handleApi(req, res, url) {
 
     const currentStatus = normalizeProviderStatus(rec.status);
     const createdAt = new Date(rec.submitted_at || rec.created_at).getTime();
-    if (rec.status !== 'scheduled' && !['completed', 'failed'].includes(currentStatus)
+    // 超过 24 小时仍未完成：直接判定过期，不再向上游查询（重启后的第一次查询也跳过）
+    if (rec.status !== 'scheduled' && !['completed', 'failed', 'expired'].includes(currentStatus)
       && Number.isFinite(createdAt)
-      && Date.now() - createdAt >= TASK_TIMEOUT_MS) {
-      rec.status = 'timeout';
-      rec.error = '任务超过 20 分钟未完成，已超时';
+      && Date.now() - createdAt >= TASK_EXPIRE_MS) {
+      rec.status = 'expired';
+      rec.error = '距开始生成已超过 24 小时仍未完成，已判定为过期';
       saveStore();
       return sendJson(res, 200, { ok: true, task: rec });
     }
