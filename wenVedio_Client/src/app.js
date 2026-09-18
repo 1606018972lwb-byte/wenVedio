@@ -3961,8 +3961,9 @@ function showToast(message, type = 'ok') {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // 平台类名：macOS 的红绿灯在左上角，标题栏需要给它留位置
+  // 平台类名：macOS 的红绿灯在左上角要给它留位；浏览器端没有系统窗口按钮，标题栏不留空
   if (desktopBridge?.platform) document.body.classList.add(`is-${desktopBridge.platform}`);
+  else document.body.classList.add('is-web');
   // 主题：内联脚本已定好首帧，这里只同步按钮状态并接上切换事件
   applyTheme();
   const themeSwitch = $('#themeSwitch');

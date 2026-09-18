@@ -51,6 +51,109 @@ function loadAppSettings() {
 }
 const appSettings = loadAppSettings();
 
+// ---- 界面主题：light / dark / system，存 localStorage，可在「应用设置」里切换 ----
+// 首帧主题由 index.html 里的内联脚本先行设定，这里只负责同步按钮与响应系统切换。
+const THEME_KEY = 'wenvedio-theme';
+const THEME_MODES = ['light', 'dark', 'system'];
+
+function storedThemeMode() {
+  try {
+    const value = localStorage.getItem(THEME_KEY);
+    return THEME_MODES.includes(value) ? value : 'system';
+  } catch (_) {
+    return 'system';
+  }
+}
+
+function systemPrefersDark() {
+  return Boolean(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+
+function resolvedTheme(mode) {
+  if (mode === 'light' || mode === 'dark') return mode;
+  return systemPrefersDark() ? 'dark' : 'light';
+}
+
+function syncThemeSwitch() {
+  const mode = storedThemeMode();
+  $$('#themeSwitch [data-theme-set]').forEach((button) => {
+    const on = button.dataset.themeSet === mode;
+    button.classList.toggle('active', on);
+    button.setAttribute('aria-checked', String(on));
+  });
+}
+
+// Windows 的系统窗口按钮由主进程用 titleBarOverlay 绘制，主题变了要同步底色与符号色
+const TITLE_BAR_COLORS = {
+  light: { color: '#ffffff', symbolColor: '#4d5b73' },
+  dark: { color: '#0e141d', symbolColor: '#a6b3c6' },
+};
+
+function syncTitleBar(resolved) {
+  if (!desktopBridge || typeof desktopBridge.setTitleBarTheme !== 'function') return;
+  const palette = TITLE_BAR_COLORS[resolved] || TITLE_BAR_COLORS.light;
+  desktopBridge.setTitleBarTheme(palette).catch(() => { /* 旧版本或非 Windows 忽略 */ });
+}
+
+// animate=true 时给根节点挂一小段过渡，避免整页硬切造成的闪烁
+function applyTheme(mode = storedThemeMode(), animate = false) {
+  const root = document.documentElement;
+  if (animate) {
+    root.classList.add('theme-anim');
+    setTimeout(() => root.classList.remove('theme-anim'), 260);
+  }
+  const resolved = resolvedTheme(mode);
+  root.setAttribute('data-theme', resolved);
+  syncTitleBar(resolved);
+  syncThemeSwitch();
+}
+
+function setThemeMode(mode) {
+  if (!THEME_MODES.includes(mode)) return;
+  try { localStorage.setItem(THEME_KEY, mode); } catch (_) { /* 存不了就只在本次生效 */ }
+  applyTheme(mode, true);
+}
+
+// 「跟随系统」时，Windows 外观变化要即时生效
+if (window.matchMedia) {
+  const themeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  const onSystemThemeChange = () => { if (storedThemeMode() === 'system') applyTheme('system'); };
+  if (themeQuery.addEventListener) themeQuery.addEventListener('change', onSystemThemeChange);
+  else if (themeQuery.addListener) themeQuery.addListener(onSystemThemeChange);
+}
+
+// ---- 标题栏的服务状态指示：以前是一句写死的假文字，现在反映真实连接 ----
+const HEALTH_POLL_MS = 20000;
+let healthTimer = null;
+
+function renderServiceStatus(ok, detail) {
+  const el = $('#serviceStatus');
+  if (!el) return;
+  const text = $('#serviceStatusText');
+  el.dataset.state = ok ? 'ok' : 'down';
+  el.title = ok
+    ? `本地服务正常${detail ? ` · ${detail}` : ''}`
+    : `连不上本地服务${detail ? `（${detail}）` : ''}；任务状态可能不再更新，请重启客户端`;
+  if (text) text.textContent = ok ? '服务正常' : '服务已断开';
+}
+
+async function checkService() {
+  try {
+    const res = await fetch(`${settings.apiBase}/api/health`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderServiceStatus(true, data.mock ? '演示模式' : '');
+  } catch (err) {
+    renderServiceStatus(false, err.message);
+  }
+}
+
+function startServiceWatch() {
+  checkService();
+  if (healthTimer) clearInterval(healthTimer);
+  healthTimer = setInterval(checkService, HEALTH_POLL_MS);
+}
+
 function saveAppSettings(patch) {
   Object.assign(appSettings, patch);
   try { localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(appSettings)); } catch (_) { /* 保存失败不影响使用 */ }
@@ -352,40 +455,46 @@ function pricingBreakdown(pricing) {
 function renderCurrentPrice() {
   const el = $('#currentPrice');
   if (!el) return;
+  const lines = $('#videoPriceLines');
+  const showEmpty = (text) => {
+    el.classList.add('is-empty');
+    el.innerHTML = `<small>${escapeHtml(text)}</small>`;
+    if (lines) lines.innerHTML = '';
+  };
+  // 价格面板改成「大号总额 + 时段标签 + 拆分行」，避免长句换行把等号挤到下一行
+  el.classList.remove('is-empty');
   const pricing = (selectedModel() || {}).pricing;
   if (!pricing || (pricing.peak == null && pricing.valley == null && !pricing.by_resolution)) {
-    el.textContent = '当前模型未配置价格';
     el.title = '当前模型未配置价格，可在「模型管理」里设置';
-    const lines = $('#videoPriceLines');
-    if (lines) lines.innerHTML = '';
+    showEmpty('当前模型未配置价格');
     return;
   }
   const resolution = genValues.video.values.resolution || '';
   const duration = Math.max(1, Math.round(Number(genValues.video.values.duration) || 5));
   const rate = modelRateFor(pricing, resolution, new Date().toISOString());
   if (rate == null) {
-    el.textContent = '';
     el.title = '';
-    const lines = $('#videoPriceLines');
-    if (lines) lines.innerHTML = '';
+    showEmpty('');
     return;
   }
-  let label;
-  if (resolution && pricing.by_resolution && pricing.by_resolution[resolution] != null) label = `（${resolution}）`;
-  else if (pricing.valley != null && rate === pricing.valley) label = '（谷值）';
-  else label = '（峰值）';
+  let tag;
+  if (resolution && pricing.by_resolution && pricing.by_resolution[resolution] != null) tag = { text: resolution, cls: '' };
+  else if (pricing.valley != null && rate === pricing.valley) tag = { text: '谷值', cls: 'valley' };
+  else tag = { text: '峰值', cls: '' };
   const symbol = priceSymbol(pricing);
-  el.textContent = `${symbol}${rate}/秒${label} · ${duration} 秒 = ${symbol}${(rate * duration).toFixed(2)}`;
+  const total = (rate * duration).toFixed(2);
   el.title = pricingBreakdown(pricing);
-  const lines = $('#videoPriceLines');
+  el.innerHTML = `<b>${escapeHtml(symbol + total)}</b>`
+    + `<span class="price-tag ${tag.cls}">${escapeHtml(tag.text)}</span>`
+    + `<small>${escapeHtml(`${symbol}${rate} / 秒 × ${duration} 秒`)}</small>`;
   if (lines) {
     const rows = [
-      `清晰度：${resolution ? resolution.replace(/(竖|横|\(1:1\))$/, '') : '默认'}`,
-      `画幅：${resolution.includes('竖') ? '竖屏' : resolution.includes('横') ? '横屏' : resolution.includes('1:1') ? '1:1' : '默认'}`,
-      `时长：${duration} 秒`,
-      `预计：${symbol}${(rate * duration).toFixed(2)}`,
+      ['清晰度', resolution ? resolution.replace(/(竖|横|\(1:1\))$/, '') : '默认'],
+      ['画幅', resolution.includes('竖') ? '竖屏' : resolution.includes('横') ? '横屏' : resolution.includes('1:1') ? '1:1' : '默认'],
+      ['时长', `${duration} 秒`],
+      ['单价', `${symbol}${rate} / 秒`],
     ];
-    lines.innerHTML = rows.map((row) => `<div>${escapeHtml(row)}</div>`).join('');
+    lines.innerHTML = rows.map(([key, value]) => `<div><span>${escapeHtml(key)}</span><b>${escapeHtml(value)}</b></div>`).join('');
   }
 }
 const modelUI = {
@@ -795,7 +904,7 @@ async function duplicateModel(id) {
   copy.created_at = new Date().toISOString();
   copy.updated_at = copy.created_at;
   try {
-    const res = await fetch(`${settings.apiBase}/api/models`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: copy }) });
+    const res = await fetch(`${settings.apiBase}/api/models`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: copy, mode: 'create' }) });
     const data = await res.json();
     if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
     state.models.push(normalizeModel(data.model));
@@ -870,14 +979,21 @@ async function batchDeleteSelected() {
 }
 
 // ---- 抽屉编辑器 ----
-function openModelDrawer(id) {
+// preset：由「AI 自动配置」生成的模型草稿，复用同一条编辑器与保存路径
+function openModelDrawer(id, preset) {
+  const banner = $('#aiDraftBanner');
+  if (banner) banner.hidden = true;
   const source = id ? state.models.find((m) => m.id === id) : null;
-  const draft = normalizeModel(source || {
+  const draft = normalizeModel(source || preset || {
     kind: modelUI.kind === 'image' || modelUI.kind === 'text' ? modelUI.kind : 'video',
     fields: defaultFieldsFor(modelUI.kind === 'image' || modelUI.kind === 'text' ? modelUI.kind : 'video'),
     pricing: { unit: 'per_second', peak: 0.04, valley: 0.03, valley_start: '00:00', valley_end: '08:00' },
   });
-  if (!source) draft.fields = defaultFieldsFor(draft.kind);
+  if (!source) {
+    const presetFields = preset && Array.isArray(preset.fields) ? preset.fields : null;
+    draft.fields = presetFields && presetFields.length ? presetFields : defaultFieldsFor(draft.kind);
+    draft.pricing = preset ? (preset.pricing || null) : draft.pricing;
+  }
   modelUI.editingId = id || null;
   modelUI.drawerFields = JSON.parse(JSON.stringify(draft.fields || []));
   modelUI.drawerPricing = draft.pricing ? JSON.parse(JSON.stringify(draft.pricing)) : null;
@@ -885,6 +1001,8 @@ function openModelDrawer(id) {
   modelUI.dirty = false;
   modelUI.fieldsMode = 'visual';
   populateDrawer(draft);
+  // AI 草稿的模型 ID 允许改，方便自己调整
+  if (!source && preset) $('#modelId').readOnly = false;
   setDrawerTab('basic');
   setFieldsMode('visual');
   $('#modelEditorBackdrop').hidden = false;
@@ -1248,6 +1366,11 @@ function collectDrawerModel() {
   if (!model.request_url) throw new Error('提交地址为必填');
   if (model.kind === 'video' && !model.query_url) throw new Error('视频模型的查询地址为必填');
   if (!model.token_id) throw new Error('请选择使用令牌');
+  // 新增时不允许撞已有 ID：服务端也会拦，这里先给更直白的提示。
+  // 修改已有模型（modelUI.editingId 有值）或启用/停用等更新不受影响。
+  if (!modelUI.editingId && state.models.some((m) => m.id === model.id)) {
+    throw new Error(`模型 ID「${model.id}」已经配置过了，不能重复配置；要修改它请在列表里打开该模型`);
+  }
   return model;
 }
 
@@ -1259,7 +1382,9 @@ async function saveSettings() {
       modelUI.drawerFields = JSON.parse($('#modelFields').value);
     }
     const model = collectDrawerModel();
-    const res = await fetch(`${settings.apiBase}/api/models`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
+    // 明确告诉服务端这是新增还是修改：新增时服务端会拒绝撞已有 ID，避免静默覆盖旧配置
+    const writeMode = modelUI.editingId ? 'update' : 'create';
+    const res = await fetch(`${settings.apiBase}/api/models`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, mode: writeMode }) });
     const data = await res.json();
     if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
     const saved = normalizeModel(data.model);
@@ -1275,6 +1400,243 @@ async function saveSettings() {
     showToast('保存成功', 'ok');
   } catch (err) {
     alert(`保存失败：${err.message}`);
+  }
+}
+
+// ---------------- AI 自动配置 ----------------
+// 给一个接口文档链接 → 抓取 + 解析 → 得到模型草稿 → 填进模型编辑器让用户核对。
+// 解析固定用 DeepSeek：填一把 DeepSeek Key 即可；拿不到 Key 或调用失败时后端会退回内置规则兜底。
+
+// 是否已经存过 DeepSeek 令牌：存过就不必每次再填 Key
+function hasDeepSeekToken() {
+  return state.tokens.some((token) => /deepseek/i.test(`${token.provider || ''} ${token.name || ''}`));
+}
+
+function syncAutoDsKey() {
+  const requiredMark = $('#autoDsKeyReq');
+  const hint = $('#autoDsKeyHint');
+  const saved = hasDeepSeekToken();
+  if (requiredMark) requiredMark.hidden = saved;
+  if (hint) {
+    hint.textContent = saved
+      ? '已保存 DeepSeek 令牌，这里可以留空；填了就用这次填的'
+      : '用于让 DeepSeek 读文档生成配置；会自动存成令牌，下次不用再填';
+  }
+}
+
+// 把面板里填的 DeepSeek Key 存成令牌（同一个 Key 服务端会复用，不会重复）
+async function ensureDeepSeekToken(key) {
+  if (!key || hasDeepSeekToken()) return false;
+  try {
+    const res = await fetch(`${settings.apiBase}/api/tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'DeepSeek Key', value: key, provider: 'DeepSeek' }),
+    });
+    const data = await res.json();
+    if (!data.ok) return false;
+    await loadTokensCache();
+    syncAutoDsKey();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function openAutoConfigPanel() {
+  setAutoConfigStatus('');
+  const dup = $('#autoConfigDuplicate');
+  if (dup) { dup.hidden = true; dup.innerHTML = ''; }
+  renderAutoNameHint();
+  syncAutoDsKey();
+  $('#autoConfigBackdrop').hidden = false;
+  document.body.classList.add('modal-open');
+  setTimeout(() => { const el = $('#autoDocUrl'); if (el) el.focus(); }, 60);
+}
+
+function closeAutoConfigPanel() {
+  $('#autoConfigBackdrop').hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function setAutoConfigStatus(text, kind) {
+  const el = $('#autoConfigStatus');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = kind === false ? 'var(--danger)' : kind === true ? 'var(--ok)' : '';
+}
+
+// 面板里填了 Key 就先落成令牌，随后自动绑定到新模型。
+// 服务端对同一个 Key 会复用已有令牌，这里把 reused 带回去用于提示。
+async function createTokenForAutoConfig(name, value, provider) {
+  const res = await fetch(`${settings.apiBase}/api/tokens`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: `${name} Key`.slice(0, 40), value, provider: provider || '' }),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+  return { id: data.token.id, reused: data.reused === true };
+}
+
+// ---------------- 防重复配置 ----------------
+
+function slugifyClient(text) {
+  return String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+}
+
+// 按 ID 优先、其次按名称，找已经配置过的同一个模型
+function findDuplicateModel(draft) {
+  if (!draft) return null;
+  const byId = state.models.find((m) => m.id === String(draft.id || ''));
+  if (byId) return { model: normalizeModel(byId), by: 'id' };
+  const name = String(draft.name || '').trim().toLowerCase();
+  if (!name) return null;
+  const byName = state.models.find((m) => String(m.name || '').trim().toLowerCase() === name);
+  return byName ? { model: normalizeModel(byName), by: 'name' } : null;
+}
+
+function suggestNewModelId(baseId) {
+  const base = String(baseId || 'model').replace(/-\d+$/, '') || 'model';
+  let n = 2;
+  while (state.models.some((m) => m.id === `${base}-${n}`)) n += 1;
+  return `${base}-${n}`;
+}
+
+// 输入模型名称时先给个提示，省得解析完才发现已经有了
+function renderAutoNameHint() {
+  const hint = $('#autoNameHint');
+  const input = $('#autoModelName');
+  if (!hint || !input) return;
+  const raw = input.value.trim();
+  const hit = raw
+    ? (state.models.find((m) => m.id === slugifyClient(raw))
+      || state.models.find((m) => String(m.name || '').trim().toLowerCase() === raw.toLowerCase()))
+    : null;
+  if (!hit) { hint.hidden = true; hint.textContent = ''; return; }
+  hint.textContent = `已经配置过「${hit.name}」（ID ${hit.id}），解析后会提示，不会重复创建`;
+  hint.hidden = false;
+}
+
+function renderAutoDuplicate(dup, draft) {
+  const el = $('#autoConfigDuplicate');
+  if (!el) return;
+  const reason = dup.by === 'id'
+    ? `模型 ID 相同：${dup.model.id}`
+    : `模型名称相同：${dup.model.name}`;
+  const suggestion = suggestNewModelId(draft.id || dup.model.id);
+  el.innerHTML = '<b>⚠ 这个模型已经配置过了</b>'
+    + `<p>${escapeHtml(reason)}。已存在的是「${escapeHtml(dup.model.name)}」（ID ${escapeHtml(dup.model.id)}）。`
+    + '为避免覆盖已有配置，这里没有再新建。</p>'
+    + '<div class="auto-dup-actions">'
+    + `<button type="button" class="outline-button" id="autoDupEdit">打开已有模型</button>`
+    + `<button type="button" class="outline-button" id="autoDupNewId">以新 ID「${escapeHtml(suggestion)}」新建</button>`
+    + '</div>';
+  el.hidden = false;
+  const editButton = $('#autoDupEdit');
+  if (editButton) {
+    editButton.addEventListener('click', () => {
+      closeAutoConfigPanel();
+      openModelDrawer(dup.model.id);
+      showToast('已打开该模型，可直接修改', 'ok');
+    });
+  }
+  const newIdButton = $('#autoDupNewId');
+  if (newIdButton) {
+    newIdButton.addEventListener('click', () => {
+      closeAutoConfigPanel();
+      openModelDrawer(null, { ...draft, id: suggestion });
+      renderAiDraftBanner({ source: 'rules', warnings: [`因为原 ID 已存在，这里改成了 ${suggestion}，请确认`] });
+      showToast('已换成新 ID，请确认后保存', 'ok');
+    });
+  }
+}
+
+const AI_CONFIDENCE_LABEL = { high: '置信度高', medium: '置信度中', low: '置信度低' };
+
+function renderAiDraftBanner(info) {
+  const el = $('#aiDraftBanner');
+  if (!el) return;
+  const bits = [info.source === 'llm' ? '✨ AI 解析' : '⚙ 内置规则'];
+  if (info.confidence && AI_CONFIDENCE_LABEL[info.confidence]) bits.push(AI_CONFIDENCE_LABEL[info.confidence]);
+  if (info.chat) bits.push(`解析模型 ${info.chat.model}`);
+  if (info.doc && info.doc.chars) bits.push(`文档 ${info.doc.chars} 字`);
+  if (info.tokenReused) bits.push('复用了已有的同 Key 令牌');
+  else if (info.tokenId) bits.push('已按你填的 Key 新建令牌并绑定');
+  if (info.dsKeySaved) bits.push('已把 DeepSeek Key 存成令牌，下次不用再填');
+  const lines = [];
+  if (info.notes) lines.push(info.notes);
+  (info.warnings || []).forEach((w) => lines.push(w));
+  el.innerHTML = `<div class="ai-draft-head"><b>${escapeHtml(bits.join(' · '))}</b><button type="button" class="text-button" id="aiDraftDismiss">知道了</button></div>`
+    + (lines.length ? `<ul>${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>` : '');
+  el.hidden = false;
+  const dismiss = $('#aiDraftDismiss');
+  if (dismiss) dismiss.addEventListener('click', () => { el.hidden = true; });
+}
+
+async function runAutoConfig() {
+  const docUrl = $('#autoDocUrl').value.trim();
+  const modelName = $('#autoModelName').value.trim();
+  const modelKey = $('#autoApiKey').value.trim();
+  const dsKey = $('#autoDsKey').value.trim();
+  if (!docUrl) { setAutoConfigStatus('请填写接口文档链接', false); $('#autoDocUrl').focus(); return; }
+  if (!modelName) { setAutoConfigStatus('请填写模型名称', false); $('#autoModelName').focus(); return; }
+  // 解析固定走 DeepSeek：要么这次填 Key，要么之前已经存过 DeepSeek 令牌
+  if (!dsKey && !hasDeepSeekToken()) {
+    setAutoConfigStatus('请填写 DeepSeek API Key —— AI 解析需要它', false);
+    $('#autoDsKey').focus();
+    return;
+  }
+
+  const button = $('#runAutoConfig');
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = '解析中…';
+  setAutoConfigStatus('正在抓取文档并交给 DeepSeek 解析，可能要十几秒…');
+  try {
+    const res = await fetch(`${settings.apiBase}/api/models/auto-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        doc_url: docUrl,
+        model_name: modelName,
+        api_key: modelKey,
+        chat_key: dsKey,
+        chat_model: $('#autoChatModel').value.trim(),
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
+
+    // 已经有这个模型了就不再走后面的流程，连令牌都不用建
+    const duplicate = findDuplicateModel(data.draft);
+    if (duplicate) {
+      renderAutoDuplicate(duplicate, data.draft);
+      setAutoConfigStatus(`已存在模型「${duplicate.model.name}」（ID ${duplicate.model.id}），没有重复配置`, true);
+      return;
+    }
+
+    let tokenId = '';
+    let tokenReused = false;
+    if (modelKey) {
+      setAutoConfigStatus('正在保存模型令牌…');
+      const created = await createTokenForAutoConfig(modelName, modelKey, data.draft.provider);
+      tokenId = created.id;
+      tokenReused = created.reused;
+      await loadTokensCache();
+    }
+    // 解析成功说明这把 DeepSeek Key 可用，顺手存成令牌，下次不用再填
+    const dsKeySaved = data.source === 'llm' ? await ensureDeepSeekToken(dsKey) : false;
+
+    closeAutoConfigPanel();
+    openModelDrawer(null, { ...data.draft, token_id: tokenId });
+    renderAiDraftBanner({ ...data, tokenId, tokenReused, dsKeySaved });
+    showToast(data.source === 'llm' ? 'DeepSeek 已生成配置，请核对后保存' : '已按内置规则生成配置，请核对后保存', data.source === 'llm' ? 'ok' : 'error');
+  } catch (err) {
+    setAutoConfigStatus(`解析失败：${err.message}`, false);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
   }
 }
 
@@ -1412,6 +1774,8 @@ function buildGenField(kind, model, field) {
     input.addEventListener('input', () => setGenFieldValue(kind, field.key, input.value));
     body.appendChild(input);
   }
+  // 分辨率的分段控件较宽，让它独占一整行（时长 / seed 之类两列并排）
+  if (body.querySelector('.seg-stack')) block.classList.add('gen-field-wide');
   block.appendChild(body);
   return block;
 }
@@ -1939,16 +2303,12 @@ function renderTaskCenter() {
   if (costLabel) costLabel.textContent = scopeText ? `${scopeText}总花费` : '总花费';
   const monthCostLabel = $('#tcMonthCostLabel');
   if (monthCostLabel) monthCostLabel.textContent = scopeText ? `${scopeText}本月花费` : '本月花费';
-  const set = (id, value) => { const el = $(id); if (el) el.textContent = String(value); };
-  set('#tcAll', counts.all);
-  set('#tcProcessing', counts.processing);
-  set('#tcScheduled', counts.scheduled);
-  set('#tcCompleted', counts.completed);
-  set('#tcFailed', counts.failed);
+  // 统计数字只在筛选标签页上出现一次（页头原来那排重复的统计卡已移除）
+  const tabLabels = { all: '全部任务', processing: '进行中', scheduled: '已预约', completed: '已完成', failed: '失败' };
   $$('.tc-tabs [data-tc-filter]').forEach((button) => {
     const key = button.dataset.tcFilter;
     const value = key === 'all' ? counts.all : counts[key] != null ? counts[key] : 0;
-    button.innerHTML = `${{ all: '全部任务', processing: '进行中', scheduled: '已预约', completed: '已完成', failed: '失败' }[key]} ${value}`;
+    button.innerHTML = `${tabLabels[key] || key}<span class="tc-tab-count">${value}</span>`;
   });
   const tasks = filterTaskCenter();
   wrap.innerHTML = '';
@@ -2939,6 +3299,7 @@ async function deleteToken(id) {
 async function openAppSettingsPanel() {
   $('#settingNotify').checked = Boolean(appSettings.notifyOnFinish);
   $('#settingPollInterval').value = String(appSettings.pollIntervalSeconds);
+  syncThemeSwitch();
   const desktopRows = $$('[data-desktop-only]');
   if (desktopBridge?.getAppSettings) {
     try {
@@ -2972,7 +3333,7 @@ function closeAppSettingsPanel() {
 async function saveScheduleIntervalSeconds(value) {
   const seconds = Math.round(Number(value));
   const status = $('#appSettingsStatus');
-  const fail = (msg) => { if (status) { status.textContent = msg; status.style.color = '#db5c52'; } };
+  const fail = (msg) => { if (status) { status.textContent = msg; status.style.color = 'var(--danger)'; } };
   if (!Number.isFinite(seconds) || seconds < 1 || seconds > 600) return fail('预约提交间隔必须是 1-600 的整数秒');
   try {
     const res = await fetch(`${settings.apiBase}/api/settings`, {
@@ -2982,7 +3343,7 @@ async function saveScheduleIntervalSeconds(value) {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.msg || `HTTP ${res.status}`);
-    if (status) { status.textContent = '预约提交间隔已保存'; status.style.color = 'var(--green)'; }
+    if (status) { status.textContent = '预约提交间隔已保存'; status.style.color = 'var(--ok)'; }
   } catch (err) {
     fail(`保存失败：${err.message}`);
   }
@@ -3022,23 +3383,31 @@ function renderImagePricePanel() {
   const big = $('#imageCurrentPrice');
   const lines = $('#imagePriceLines');
   if (!big) return;
-  if (!pricing || (pricing.peak == null && pricing.valley == null && !pricing.by_resolution)) {
-    big.textContent = '未配置价格';
+  const showEmpty = (text) => {
+    big.classList.add('is-empty');
+    big.innerHTML = `<small>${escapeHtml(text)}</small>`;
     if (lines) lines.innerHTML = '';
+  };
+  big.classList.remove('is-empty');
+  if (!pricing || (pricing.peak == null && pricing.valley == null && !pricing.by_resolution)) {
+    showEmpty('当前模型未配置价格');
     return;
   }
   const symbol = priceSymbol(pricing);
   const size = typeof params.size === 'string' ? params.size : '';
   const rate = modelRateFor(pricing, size, new Date().toISOString());
-  if (rate == null) { big.textContent = '—'; if (lines) lines.innerHTML = ''; return; }
+  if (rate == null) { showEmpty(''); return; }
   const n = Math.max(1, Math.round(Number(params.n) || 1));
-  big.textContent = `${symbol}${rate} / 张${size ? `（${size}）` : ''}`;
+  big.innerHTML = `<b>${escapeHtml(symbol + (rate * n).toFixed(2))}</b>`
+    + (size ? `<span class="price-tag">${escapeHtml(size)}</span>` : '')
+    + `<small>${escapeHtml(`${symbol}${rate} / 张 × ${n} 张`)}</small>`;
   if (lines) {
-    const rows = [];
-    rows.push(`尺寸：${size || '默认'}`);
-    rows.push(`数量：${n}`);
-    rows.push(`预计：${symbol}${(rate * n).toFixed(2)}`);
-    lines.innerHTML = rows.map((row) => `<div>${escapeHtml(row)}</div>`).join('');
+    const rows = [
+      ['尺寸', size || '默认'],
+      ['数量', `${n} 张`],
+      ['单价', `${symbol}${rate} / 张`],
+    ];
+    lines.innerHTML = rows.map(([key, value]) => `<div><span>${escapeHtml(key)}</span><b>${escapeHtml(value)}</b></div>`).join('');
   }
 }
 // 图片参数：旧的表单字段已由 genValues 驱动的参数字段替代
@@ -3455,7 +3824,6 @@ function showView(view) {
   const settingsView = $('#settingsView');
   const tokensView = $('#tokensView');
   const promptsView = $('#promptsView');
-  const pageTitle = $('#pageTitle');
   const pageEyebrow = $('#pageEyebrow');
   workspaceView.hidden = isQuery || isRecords || isSettings || isTokens || isPrompts || isImage;
   imageView.hidden = !isImage;
@@ -3464,8 +3832,17 @@ function showView(view) {
   settingsView.hidden = !isSettings;
   tokensView.hidden = !isTokens;
   promptsView.hidden = !isPrompts;
-  pageTitle.textContent = isImage ? '图片生成' : isQuery ? '访问查询' : isRecords ? '任务记录' : isSettings ? '模型管理' : isTokens ? '令牌管理' : isPrompts ? '提示词管理' : '视频生成工作台';
-  pageEyebrow.textContent = isImage ? 'WORKSPACE / IMAGE LAB' : isQuery ? 'AUTODL / COMFYUI' : isRecords ? 'WORKSPACE / HISTORY' : isSettings ? 'WORKSPACE / MODELS' : isTokens ? 'WORKSPACE / TOKENS' : isPrompts ? 'WORKSPACE / PROMPTS' : 'WORKSPACE / VIDEO LAB';
+  // 页面标题由各视图内的 h2 承担，顶栏只留一行面包屑，避免同一句话出现两三次
+  const crumbs = {
+    image: 'AI 工具 / 图片生成',
+    workspace: 'AI 工具 / 视频生成',
+    tasks: '任务记录',
+    query: '查询入口',
+    settings: '后台管理 / 模型管理',
+    tokens: '后台管理 / 令牌管理',
+    prompts: '提示词管理',
+  };
+  if (pageEyebrow) pageEyebrow.textContent = crumbs[view] || crumbs.workspace;
   $$('.main-nav .nav-item, .main-nav .nav-sub-item').forEach((item) => item.classList.remove('active'));
   const activeId = isImage ? 'navImage' : isQuery ? 'navQuery' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : isPrompts ? 'openPrompts' : isRecords ? '' : 'navWorkspace';
   const activeEl = activeId ? $(`#${activeId}`) : null;
@@ -3475,18 +3852,24 @@ function showView(view) {
   if (isSettings || isTokens) expandGroup('admin');
   $$('.mobile-nav button').forEach((item) => item.classList.remove('active'));
   $(`#${isImage ? 'mobileImage' : isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace'}`).classList.add('active');
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  // 内容区是独立滚动容器（标题栏固定），所以滚它而不是 window
+  const scroller = document.querySelector('.main-content');
+  if (scroller) scroller.scrollTo({ top: 0, behavior: 'smooth' });
+  else window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function initializeSidebar() {
   const collapsed = localStorage.getItem('wenvedio-sidebar-collapsed') === 'true';
   $('#sidebar').classList.toggle('collapsed', collapsed);
+  // 折叠按钮画在标题栏上，不在 sidebar 内部，所以状态同时挂到 body
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
   $('#sidebarToggle').title = collapsed ? '展开侧边栏' : '收起侧边栏';
   $('#sidebarToggle').setAttribute('aria-label', $('#sidebarToggle').title);
 }
 
 function toggleSidebar() {
   const collapsed = $('#sidebar').classList.toggle('collapsed');
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
   localStorage.setItem('wenvedio-sidebar-collapsed', String(collapsed));
   $('#sidebarToggle').title = collapsed ? '展开侧边栏' : '收起侧边栏';
   $('#sidebarToggle').setAttribute('aria-label', $('#sidebarToggle').title);
@@ -3578,6 +3961,19 @@ function showToast(message, type = 'ok') {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  // 平台类名：macOS 的红绿灯在左上角要给它留位；浏览器端没有系统窗口按钮，标题栏不留空
+  if (desktopBridge?.platform) document.body.classList.add(`is-${desktopBridge.platform}`);
+  else document.body.classList.add('is-web');
+  // 主题：内联脚本已定好首帧，这里只同步按钮状态并接上切换事件
+  applyTheme();
+  const themeSwitch = $('#themeSwitch');
+  if (themeSwitch) {
+    themeSwitch.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-theme-set]');
+      if (button) setThemeMode(button.dataset.themeSet);
+    });
+  }
+  startServiceWatch();
   loadGenValues();
   loadTasks();
   initializeSidebar();
@@ -3657,6 +4053,18 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#modelBatchDelete').addEventListener('click', batchDeleteSelected);
   $('#openSettings').addEventListener('click', openSettings);
   $('#addModel').addEventListener('click', () => openModelDrawer(null));
+  // AI 自动配置
+  $('#autoConfigModel').addEventListener('click', openAutoConfigPanel);
+  $('#closeAutoConfig').addEventListener('click', closeAutoConfigPanel);
+  $('#cancelAutoConfig').addEventListener('click', closeAutoConfigPanel);
+  $('#autoConfigBackdrop').addEventListener('click', (event) => { if (event.target === $('#autoConfigBackdrop')) closeAutoConfigPanel(); });
+  $('#runAutoConfig').addEventListener('click', runAutoConfig);
+  const autoNameInput = $('#autoModelName');
+  if (autoNameInput) autoNameInput.addEventListener('input', renderAutoNameHint);
+  ['autoDocUrl', 'autoModelName', 'autoApiKey'].forEach((id) => {
+    const el = $(`#${id}`);
+    if (el) el.addEventListener('keydown', (event) => { if (event.key === 'Enter') runAutoConfig(); });
+  });
   $('#saveSettings').addEventListener('click', saveSettings);
   $('#deleteModel').addEventListener('click', deleteModelFromDrawer);
   $('#closeModelEditor').addEventListener('click', requestCloseModelDrawer);
@@ -3789,6 +4197,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!$('#taskDrawerBackdrop').hidden) closeTaskDetail();
     if (!$('#modelEditorBackdrop').hidden) requestCloseModelDrawer();
     if (!$('#tokenDrawerBackdrop').hidden) $('#tokenDrawerBackdrop').hidden = true;
+    if (!$('#autoConfigBackdrop').hidden) { closeAutoConfigPanel(); return; }
     if (!$('#promptFullscreen').hidden) { closePromptFullscreen(); return; }
     if (!$('#promptDrawerBackdrop').hidden) closePromptDrawer();
   });

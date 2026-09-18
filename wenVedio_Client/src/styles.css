@@ -160,6 +160,10 @@ a:focus-visible,
 body.is-darwin .titlebar { padding-left: 84px; padding-right: 12px; }
 body.is-darwin { --win-controls-w: 0px; }
 
+/* 浏览器端（web 版）：没有系统窗口按钮，右侧不留空位，也没有拖拽区 */
+body.is-web { --win-controls-w: 0px; }
+body.is-web .titlebar { padding-right: 14px; -webkit-app-region: no-drag; }
+
 .titlebar .brand { display: flex; align-items: center; gap: 9px; padding: 0; margin: 0; }
 .titlebar .brand-mark { width: 26px; height: 26px; flex: 0 0 26px; border-radius: var(--r-sm); font-size: 14px; box-shadow: none; }
 .titlebar .brand-name { font-size: 14.5px; }
