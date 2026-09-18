@@ -1,10 +1,12 @@
 // wenVedio 桌面客户端 · 预加载脚本
-// 只向页面暴露下载相关的少量能力，渲染进程拿不到 Node 权限。
+// 只向页面暴露自绘标题栏与下载相关的少量能力，渲染进程拿不到 Node 权限。
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('wenvedioDesktop', {
   isDesktop: true,
   platform: process.platform,
+  // 自绘标题栏配色：{ color, symbolColor }
+  setTitleBarTheme: (payload) => ipcRenderer.invoke('wenvedio:set-titlebar-theme', payload),
   // 应用设置：开机自启 / 关闭时最小化到托盘
   getAppSettings: () => ipcRenderer.invoke('wenvedio:get-app-settings'),
   setAppSettings: (payload) => ipcRenderer.invoke('wenvedio:set-app-settings', payload),

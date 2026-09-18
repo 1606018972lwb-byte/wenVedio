@@ -13,6 +13,8 @@ const http = require('http');
 const APP_NAME = 'wenVedio';
 const IS_MAC = process.platform === 'darwin';
 const PREFERRED_PORT = Number(process.env.WENVEDIO_PORT || 8787);
+// 与前端 CSS 的 --titlebar-h 保持一致：系统窗口按钮的高度必须对得上
+const TITLEBAR_HEIGHT = 46;
 
 // 必须在读取 userData 之前固定应用名与数据目录：Electron 会依据包名提前缓存该路径，
 // 放到 whenReady 里 setName 已经来不及。
@@ -153,6 +155,12 @@ async function createWindow(port) {
     title: APP_NAME,
     backgroundColor: '#f3f5f7',
     autoHideMenuBar: true,
+    // 自绘标题栏：Windows/Linux 只保留系统的最小化/最大化/关闭按钮（颜色由前端按主题同步），
+    // macOS 用 hiddenInset 保留原生红灯，并给左侧留出交通灯的位置。
+    titleBarStyle: IS_MAC ? 'hiddenInset' : 'hidden',
+    ...(IS_MAC
+      ? { trafficLightPosition: { x: 14, y: 15 } }
+      : { titleBarOverlay: { color: '#ffffff', symbolColor: '#4d5b73', height: TITLEBAR_HEIGHT } }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -332,6 +340,23 @@ function registerIpc() {
       else destroyTray();
     }
     return { openAtLogin: app.getLoginItemSettings().openAtLogin, minimizeToTray };
+  });
+
+  // 自绘标题栏随主题换色（Windows / Linux 的 titleBarOverlay）
+  ipcMain.handle('wenvedio:set-titlebar-theme', (_event, payload) => {
+    if (!mainWindow || mainWindow.isDestroyed() || typeof mainWindow.setTitleBarOverlay !== 'function') {
+      return { ok: false, msg: '当前平台不支持自定义标题栏配色' };
+    }
+    try {
+      mainWindow.setTitleBarOverlay({
+        color: String(payload?.color || '#ffffff'),
+        symbolColor: String(payload?.symbolColor || '#4d5b73'),
+        height: TITLEBAR_HEIGHT,
+      });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, msg: err.message };
+    }
   });
 }
 

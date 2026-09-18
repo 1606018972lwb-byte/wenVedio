@@ -3,25 +3,43 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FrameFlow 视频生成工作台</title>
+    <title>wenVedio · 视频生成工作台</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="ui-overrides.css" />
+    <script>
+      // 首帧前定好主题，避免浅色闪一下再变深色
+      (function () {
+        var mode = 'system';
+        try { mode = localStorage.getItem('wenvedio-theme') || 'system'; } catch (e) { /* 隐私模式下忽略 */ }
+        var dark = mode === 'dark' || (mode === 'system' && window.matchMedia
+          && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      })();
+    </script>
   </head>
   <body>
     <div class="app-boot" id="appBoot">
       <div class="app-boot-card">
-        <div class="app-boot-mark">F</div>
-        <div class="app-boot-title">Frame<span>Flow</span></div>
+        <div class="app-boot-mark">W</div>
+        <div class="app-boot-title">wen<span>Vedio</span></div>
         <div class="app-boot-bar"><i></i></div>
         <p class="app-boot-text" id="appBootText">正在加载配置…</p>
       </div>
     </div>
-    <div class="app-shell">
+    <div class="app-window">
+      <!-- 自绘标题栏：整条可拖动，右上角留给系统窗口按钮（titleBarOverlay） -->
+      <header class="titlebar">
+        <button class="sidebar-toggle" id="sidebarToggle" type="button" title="收起侧边栏" aria-label="收起侧边栏">‹</button>
+        <div class="brand"><span class="brand-mark">W</span><span class="brand-name">wen<span class="brand-accent">Vedio</span></span></div>
+        <span class="titlebar-sep" aria-hidden="true"></span>
+        <span class="eyebrow" id="pageEyebrow">AI 工具 / 视频生成</span>
+        <div class="top-actions"><span class="sync-status" id="serviceStatus" data-state="checking" title="本地服务连接状态"><i></i><span id="serviceStatusText">检查中…</span></span></div>
+      </header>
+      <div class="app-shell">
       <aside class="sidebar" id="sidebar">
-        <div class="brand"><span class="brand-mark">F</span><span class="brand-name">Frame<span class="brand-accent">Flow</span></span><button class="sidebar-toggle" id="sidebarToggle" type="button" title="收起侧边栏" aria-label="收起侧边栏">‹</button></div>
         <nav class="main-nav" aria-label="主导航">
           <a class="nav-item nav-group" id="navAi" href="#ai"><span class="nav-icon">✦</span><span class="nav-label">AI 工具</span><span class="nav-chevron">⌃</span></a>
           <div class="nav-sub" id="aiGroup">
@@ -47,10 +65,6 @@
       </aside>
 
       <main class="main-content">
-        <header class="topbar">
-          <div><p class="eyebrow" id="pageEyebrow">WORKSPACE / VIDEO LAB</p><h1 id="pageTitle">视频生成工作台</h1></div>
-          <div class="top-actions"><span class="sync-status"><i></i>服务正常 · 刚刚同步</span><button class="icon-button" title="通知">♢<span class="notification-dot"></span></button><button class="avatar-button">MC</button></div>
-        </header>
         <nav class="mobile-nav" aria-label="移动端导航"><button id="mobileImage" class="active" type="button">图片生成</button><button id="mobileWorkspace" type="button">视频生成</button><button id="mobileTasks" type="button">任务记录</button><button id="mobileQuery" type="button">查询入口</button><button id="mobileApi" type="button">模型管理</button></nav>
 
         <section class="gen-view" id="imageView" hidden>
@@ -161,14 +175,7 @@
 
         <section class="records-view task-center" id="recordsView" hidden>
           <div class="gen-head">
-            <div><span class="section-kicker">WORKSPACE / TASK CENTER</span><h2 id="tcTitle">任务中心</h2><p id="tcSubtitle">查看和管理所有生成任务，包括进行中、已预约和已完成任务。</p></div>
-          </div>
-          <div class="stat-strip five">
-            <div class="stat-card"><div class="stat-copy"><span>全部任务</span><b id="tcAll">0</b><small>累计生成任务数</small></div></div>
-            <div class="stat-card"><div class="stat-copy"><span>进行中</span><b id="tcProcessing">0</b><small>正在生成的任务</small></div></div>
-            <div class="stat-card"><div class="stat-copy"><span>已预约</span><b id="tcScheduled">0</b><small>待执行的任务</small></div></div>
-            <div class="stat-card"><div class="stat-copy"><span>已完成</span><b id="tcCompleted">0</b><small>已完成的任务</small></div></div>
-            <div class="stat-card"><div class="stat-copy"><span>失败</span><b id="tcFailed">0</b><small>失败的任务</small></div></div>
+            <div><h2 id="tcTitle">任务中心</h2><p id="tcSubtitle">查看和管理所有生成任务，包括进行中、已预约和已完成任务。</p></div>
           </div>
           <section class="panel task-center-panel">
             <div class="tc-toolbar">
@@ -205,7 +212,10 @@
 
         <section class="settings-view" id="settingsView" hidden>
           <div class="page-head slim"><div><span class="section-kicker">04 / MODELS</span><h2>模型管理</h2><p>管理图片与视频生成模型、调用配置和启用状态</p></div></div>
-            <button class="primary-button" id="addModel" type="button"><span>＋</span> 新增模型</button>
+            <div class="model-head-actions">
+              <button class="outline-button accent" id="autoConfigModel" type="button" title="贴一个接口文档链接，自动生成模型配置"><span>✨</span> AI 自动配置</button>
+              <button class="primary-button" id="addModel" type="button"><span>＋</span> 新增模型</button>
+            </div>
           <section class="model-stats" aria-label="模型统计">
             <div class="model-stat-card"><span class="model-stat-icon stat-all">◫</span><div class="model-stat-copy"><span>全部模型</span><b id="statAllModels">0</b></div></div>
             <div class="model-stat-card"><span class="model-stat-icon stat-image">▣</span><div class="model-stat-copy"><span>图片模型</span><b id="statImageModels">0</b></div></div>
@@ -278,6 +288,7 @@
                 <button type="button" data-model-tab="advanced">高级设置</button>
               </nav>
               <div class="model-drawer-body">
+                <div class="ai-draft-banner" id="aiDraftBanner" hidden></div>
                 <div class="drawer-pane" data-model-pane="basic">
                   <div class="drawer-group"><b class="drawer-group-title">基础信息</b>
                     <div class="drawer-grid">
@@ -456,6 +467,7 @@
           <div id="promptsEmpty" class="empty-state" hidden><span>📝</span><b>还没有提示词记录</b><p>点击右上角「新增记录」，把常用提示词保存下来</p></div>
         </section>
       </main>
+      </div>
     </div>
     <div class="app-settings-backdrop" id="appSettingsModal" hidden>
       <section class="app-settings-modal" role="dialog" aria-modal="true" aria-labelledby="appSettingsTitle">
@@ -464,6 +476,7 @@
           <button class="task-detail-close" id="closeAppSettings" type="button" aria-label="关闭">×</button>
         </div>
         <div class="app-settings-list">
+          <div class="app-setting-row"><div><b>界面主题</b><small>深色适合长时间查看任务；跟随系统会随 Windows 外观自动切换</small></div><div class="theme-switch" id="themeSwitch" role="radiogroup" aria-label="界面主题"><button type="button" data-theme-set="light">浅色</button><button type="button" data-theme-set="dark">深色</button><button type="button" data-theme-set="system">跟随系统</button></div></div>
           <div class="app-setting-row" data-desktop-only hidden><div><b>开机自动启动</b><small>登录系统时自动运行客户端</small></div><label class="switch"><input id="settingOpenAtLogin" type="checkbox" /><span></span></label></div>
           <div class="app-setting-row" data-desktop-only hidden><div><b>关闭时最小化到托盘</b><small>点关闭按钮时隐藏到系统托盘，从托盘图标退出</small></div><label class="switch"><input id="settingMinimizeToTray" type="checkbox" /><span></span></label></div>
           <div class="app-setting-row"><div><b>任务完成桌面通知</b><small>生成完成或失败时弹出系统通知</small></div><label class="switch"><input id="settingNotify" type="checkbox" /><span></span></label></div>
@@ -531,6 +544,46 @@
           </div>
         </footer>
       </div>
+    </div>
+    <div class="model-editor-backdrop" id="autoConfigBackdrop" hidden>
+      <aside class="model-drawer auto-config-drawer" role="dialog" aria-modal="true" aria-labelledby="autoConfigTitle">
+        <header class="model-drawer-header">
+          <div class="model-drawer-title"><h3 id="autoConfigTitle">✨ AI 自动配置</h3><p>给一个接口文档链接，自动生成模型配置，再让你核对</p></div>
+          <button class="model-drawer-close" id="closeAutoConfig" type="button" aria-label="关闭">×</button>
+        </header>
+        <div class="model-drawer-body">
+          <div class="drawer-group">
+            <b class="drawer-group-title">要配置的模型</b>
+            <div class="drawer-grid">
+              <label class="field field-wide"><span>接口文档链接 <i class="req">*</i></span><input id="autoDocUrl" type="url" placeholder="https://平台文档/接口说明页面" /><small class="field-help">支持 HTML 文档页与 OpenAPI / JSON 规范；需要登录才能看的页面抓不到</small></label>
+              <label class="field field-wide"><span>模型名称 <i class="req">*</i></span><input id="autoModelName" type="text" placeholder="例：gpt-image-1" maxlength="60" /><small class="field-help warn-hint" id="autoNameHint" hidden></small></label>
+              <label class="field field-wide"><span>模型 API Key <small>可选</small></span><input id="autoApiKey" type="password" placeholder="要配置的这个模型用哪把 Key" /><small class="field-help">填了会自动存成令牌并绑定到这个模型；与「令牌管理」共用同一份</small></label>
+            </div>
+          </div>
+          <div class="drawer-group">
+            <b class="drawer-group-title">AI 解析 · DeepSeek</b>
+            <div class="drawer-grid">
+              <label class="field field-wide"><span>DeepSeek API Key <i class="req" id="autoDsKeyReq">*</i></span><input id="autoDsKey" type="password" placeholder="sk-...（DeepSeek 开放平台的 Key）" /><small class="field-help" id="autoDsKeyHint">用于让 DeepSeek 读文档生成配置；会自动存成令牌，下次不用再填</small></label>
+            </div>
+            <details class="adv-details">
+              <summary>解析模型（默认 deepseek-chat）</summary>
+              <div class="drawer-grid">
+                <label class="field field-wide"><span>模型名</span><input id="autoChatModel" type="text" placeholder="留空 = deepseek-chat" /></label>
+              </div>
+            </details>
+            <p class="field-help">自动配置固定用 DeepSeek 解析。Key 无效或调用失败时会退回内置规则兜底，并在结果里标明来源。</p>
+          </div>
+          <div class="auto-dup" id="autoConfigDuplicate" hidden></div>
+          <p class="test-result" id="autoConfigStatus" role="status"></p>
+        </div>
+        <footer class="model-drawer-footer">
+          <span>解析结果会填进模型编辑器，确认后再保存</span>
+          <div class="model-drawer-footer-actions">
+            <button class="outline-button" id="cancelAutoConfig" type="button">取消</button>
+            <button class="primary-button" id="runAutoConfig" type="button">开始解析</button>
+          </div>
+        </footer>
+      </aside>
     </div>
     <div id="toastWrap" aria-live="polite"></div>
     <script src="app.js"></script>
