@@ -1163,6 +1163,7 @@ async function openRunDetail(runId) {
           <span class="mono">${nodeState.duration_ms != null ? `${(nodeState.duration_ms / 1000).toFixed(1)}s` : ''}${nodeState.attempts > 1 ? ` · 第 ${nodeState.attempts} 次` : ''}</span>
         </div>
         ${nodeState.error ? `<div class="wf-io bad"><span class="io-title">错误</span><pre>${esc(nodeState.error)}</pre></div>` : ''}
+        ${nodeState.input !== undefined ? `<div class="wf-io"><span class="io-title">输入</span><pre>${esc(JSON.stringify(nodeState.input, null, 2)).slice(0, 1600)}</pre></div>` : ''}
         ${nodeState.output !== undefined ? `<div class="wf-io"><span class="io-title">输出</span><pre>${esc(JSON.stringify(nodeState.output, null, 2)).slice(0, 2500)}</pre></div>` : ''}
       </div>`).join('');
     openDrawer(`运行 ${String(run.id).slice(4, 14)}`, `
