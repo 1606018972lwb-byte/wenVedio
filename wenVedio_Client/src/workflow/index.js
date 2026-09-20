@@ -140,6 +140,16 @@ function create(deps) {
 
   const store = createStore({ configDir, writeLog });
   const engine = createEngine({ store, bridge, writeLog });
+
+  // 循环节点用：列出可选子工作流、按 id 把它跑到结束
+  bridge.listWorkflows = () => store.listWorkflows().map((item) => ({
+    id: item.id, name: item.name, nodes: (item.nodes || []).length, published: item.published === true,
+  }));
+  bridge.runWorkflow = (workflowId, inputs, options) => {
+    const target = store.getWorkflow(workflowId);
+    if (!target) throw new Error(`子工作流不存在：${workflowId}`);
+    return engine.runToCompletion(target, inputs, options);
+  };
   const api = createApi({
     store, engine, host: bridge, writeLog, sendJson, readBody,
     nodeMeta: describeNodes(),

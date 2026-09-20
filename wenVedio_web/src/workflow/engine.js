@@ -436,7 +436,29 @@ function create({ store, bridge, writeLog }) {
     return { output: output === undefined ? null : output, duration_ms: Date.now() - started };
   }
 
-  return { start, stop, startRun, kick, cancelRun, pauseRun, resumeRun, resumeOnLoad, testNode, isAdvancing: (id) => advancing.has(id) };
+  // 把一个工作流跑到结束并返回运行记录：循环节点用它重复执行子工作流
+  async function runToCompletion(workflow, inputs, { timeoutMs = 600000, parentRunId = '' } = {}) {
+    const run = startRun(workflow, inputs, 'sub');
+    if (parentRunId) { run.parent_run_id = parentRunId; store.saveRun(run); }
+    const deadline = Date.now() + Math.max(1000, timeoutMs);
+    for (;;) {
+      const current = store.getRun(run.id) || run;
+      if (RUN_TERMINAL.has(current.status)) {
+        if (current.status !== 'success') {
+          throw new Error(`子工作流「${workflow.name}」${current.status === 'cancelled' ? '被取消' : '失败'}：${current.error || '未知原因'}`);
+        }
+        return current;
+      }
+      if (Date.now() > deadline) {
+        current.cancel_requested = true;
+        store.saveRun(current);
+        throw new Error(`子工作流「${workflow.name}」执行超时`);
+      }
+      await delay(200);
+    }
+  }
+
+  return { start, stop, startRun, kick, cancelRun, pauseRun, resumeRun, resumeOnLoad, testNode, runToCompletion, isAdvancing: (id) => advancing.has(id) };
 }
 
 module.exports = { create };

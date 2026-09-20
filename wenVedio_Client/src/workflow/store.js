@@ -226,7 +226,13 @@ function create({ configDir, writeLog }) {
 
   // 记录会一直增长，超出上限时丢掉最旧的已结束记录
   function pruneRuns() {
-    if (runs.size <= MAX_RUNS) return;
+    // 循环产生的子运行没有单独查看的价值，超限时优先丢它们
+    const subs = [...runs.values()].filter((run) => run.finished_at && run.mode === 'sub');
+    for (const run of subs) {
+      if (runs.size <= MAX_RUNS) break;
+      runs.delete(run.id);
+    }
+    if (runs.size <= MAX_RUNS) { if (subs.length) saveRuns(); return; }
     const finished = [...runs.values()]
       .filter((run) => run.finished_at)
       .sort((a, b) => String(a.finished_at).localeCompare(String(b.finished_at)));
@@ -239,8 +245,10 @@ function create({ configDir, writeLog }) {
     saveRuns();
   }
 
-  function listRuns(workflowId, limit = 50) {
+  // 运行记录默认不列子运行（循环体内的），否则会把真正的记录挤掉
+  function listRuns(workflowId, limit = 50, { includeSub = false } = {}) {
     return [...runs.values()]
+      .filter((run) => includeSub || run.mode !== 'sub')
       .filter((run) => !workflowId || run.workflow_id === workflowId)
       .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
       .slice(0, Math.max(1, Math.min(200, Number(limit) || 50)));

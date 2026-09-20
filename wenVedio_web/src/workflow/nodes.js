@@ -144,6 +144,76 @@ const NODE_DEFS = {
     },
   },
 
+  loop: {
+    label: '循环', icon: '↻', group: '逻辑', color: 'violet',
+    description: '对一个数组的每一项都执行同一个子工作流，把结果收成一个数组',
+    inputs: ['main'],
+    outputs: [
+      { key: 'results', label: '结果数组', type: 'array' },
+      { key: 'count', label: '成功条数', type: 'number' },
+      { key: 'failed', label: '失败明细', type: 'array' },
+    ],
+    params: [
+      { key: 'items', label: '要遍历的数组', type: 'prompt', rows: 2, required: true,
+        placeholder: '{{code_1.list}}，也可以直接写 ["a","b"]' },
+      { key: 'workflow_id', label: '重复执行的子工作流', type: 'workflow', required: true,
+        help: '每一项都会用同一个子工作流跑一遍' },
+      { key: 'item_key', label: '每项传进去的字段名', type: 'text', default: 'item',
+        help: '子工作流的「开始」节点里定义同名输入项即可接住当前这一项' },
+      { key: 'concurrency', label: '并发数', type: 'number', min: 1, max: 5, default: 1,
+        help: '1 表示一条一条跑；调大可加速，但会同时占用模型配额' },
+      { key: 'fail_fast', label: '遇到失败就整体中止', type: 'switch', default: false },
+      { key: 'timeout_ms', label: '每项超时(毫秒)', type: 'number', min: 1000, max: 3600000, default: 600000 },
+    ],
+    async run(ctx) {
+      const raw = ctx.params.items;
+      let list = [];
+      if (Array.isArray(raw)) list = raw;
+      else if (typeof raw === 'string' && raw.trim()) {
+        try { const parsed = JSON.parse(raw); list = Array.isArray(parsed) ? parsed : [parsed]; }
+        catch (_) { list = raw.split('\n').map((line) => line.trim()).filter(Boolean); }
+      } else if (raw !== undefined && raw !== null && raw !== '') list = [raw];
+      if (!list.length) return { results: [], count: 0, failed: [], total: 0 };
+
+      const workflowId = String(ctx.params.workflow_id || '').trim();
+      if (!workflowId) throw new Error('循环节点需要先选一个要重复执行的子工作流');
+      const itemKey = String(ctx.params.item_key || 'item').trim() || 'item';
+      const concurrency = Math.max(1, Math.min(5, Number(ctx.params.concurrency) || 1));
+      const timeoutMs = Math.max(1000, Math.min(3600000, Number(ctx.params.timeout_ms) || 600000));
+      const results = new Array(list.length).fill(null);
+      const failed = [];
+      let cursor = 0;
+      let done = 0;
+
+      const worker = async () => {
+        for (;;) {
+          const index = cursor;
+          cursor += 1;
+          if (index >= list.length) return;
+          if (ctx.isCancelled && ctx.isCancelled()) throw new Error('运行已被取消');
+          const inputs = { [itemKey]: list[index], index, total: list.length };
+          try {
+            const sub = await ctx.bridge.runWorkflow(workflowId, inputs, { timeoutMs, parentRunId: ctx.run.id });
+            results[index] = sub.outputs;
+          } catch (err) {
+            results[index] = null;
+            failed.push({ index, item: list[index], error: err.message });
+            ctx.log(`第 ${index + 1} 项失败：${err.message}`);
+            if (ctx.params.fail_fast === true) throw err;
+          }
+          done += 1;
+          ctx.progress(Math.round((done / list.length) * 100));
+        }
+      };
+
+      await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, worker));
+      if (failed.length && ctx.params.fail_fast === true) {
+        throw new Error(`${failed.length} 项失败，已按「遇到失败就中止」停止`);
+      }
+      return { results, count: results.filter((item) => item !== null).length, failed, total: list.length };
+    },
+  },
+
   // ---------------- AI 能力 ----------------
   llm: {
     label: '大模型', icon: '✦', group: 'AI 能力', color: 'blue',

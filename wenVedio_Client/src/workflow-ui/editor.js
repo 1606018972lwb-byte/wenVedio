@@ -624,6 +624,13 @@ function renderParam(param, values, node) {
       return `<div class="wf-field">${label}<small class="help">${esc(param.help || '')}</small>
         <div class="wf-rows" data-pairs2="1">${renderPairRows(value)}</div>
         <button type="button" class="wf-add-row" data-pair2-add="1">＋ 添加</button></div>`;
+    case 'workflow': {
+      const options = (state.workflows || []).filter((item) => !state.current || item.id !== state.current.id);
+      const text = options.length
+        ? options.map((item) => `<option value="${esc(item.id)}"${value === item.id ? ' selected' : ''}>${esc(item.name)}（${(item.nodes || []).length} 个节点${item.published ? ' · 已发布' : ''}）</option>`).join('')
+        : '<option value="">（还没有其它工作流可选）</option>';
+      return `<label class="wf-field">${label}<select data-param="${key}"><option value="">请选择子工作流</option>${text}</select>${help}</label>`;
+    }
     default:
       return `<label class="wf-field">${label}<input type="text" data-param="${key}" value="${esc(value == null ? '' : value)}" placeholder="${esc(param.placeholder || '')}" />${help}</label>`;
   }
