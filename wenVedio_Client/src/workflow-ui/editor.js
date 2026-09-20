@@ -117,6 +117,7 @@ function renderList() {
         <button type="button" data-run="${esc(wf.id)}">运行</button>
         <button type="button" data-copy="${esc(wf.id)}">复制</button>
         <button type="button" data-runs="${esc(wf.id)}">记录</button>
+        <button type="button" data-export="${esc(wf.id)}">导出</button>
         <button type="button" class="danger" data-del="${esc(wf.id)}">删除</button>
       </div>
     </article>`).join('');
@@ -135,6 +136,8 @@ function renderList() {
     <div class="wf-toolbar">
       <input id="wfSearch" type="search" placeholder="搜索工作流…" value="${esc($('#wfSearch')?.value || '')}" />
       <span class="grow"></span>
+      <button class="outline-button" id="wfImport" type="button">导入</button>
+      <input type="file" id="wfImportFile" accept=".json,application/json" hidden />
       <button class="outline-button accent" id="wfPythonEnv" type="button">🐍 Python 环境</button>
       <button class="primary-button" id="wfNew" type="button"><span>＋</span> 新建工作流</button>
     </div>
@@ -151,6 +154,9 @@ function renderList() {
   $$('button[data-open]', host).forEach((el) => el.addEventListener('click', () => openWorkflow(el.dataset.open)));
   $$('button[data-run]', host).forEach((el) => el.addEventListener('click', () => promptRun(el.dataset.run)));
   $$('button[data-runs]', host).forEach((el) => el.addEventListener('click', () => openRunList(el.dataset.runs)));
+  $$('button[data-export]', host).forEach((el) => el.addEventListener('click', () => exportWorkflow(el.dataset.export)));
+  $('#wfImport')?.addEventListener('click', () => $('#wfImportFile')?.click());
+  $('#wfImportFile')?.addEventListener('change', (event) => importWorkflow(event.target.files?.[0]));
   $$('button[data-copy]', host).forEach((el) => el.addEventListener('click', async () => {
     try { await api(`/api/workflows/${encodeURIComponent(el.dataset.copy)}/duplicate`, { method: 'POST' }); await loadWorkflows(); renderList(); }
     catch (err) { toast(`复制失败：${err.message}`, 'error'); }
@@ -186,6 +192,52 @@ async function createWorkflow(preset) {
     toast(`创建失败：${err.message}`, 'error');
     return null;
   }
+}
+
+// 导出成 JSON 文件，方便备份或分享给别人导入
+async function exportWorkflow(id) {
+  try {
+    const data = await api(`/api/workflows/${encodeURIComponent(id)}/export`);
+    const name = String(data.workflow?.name || 'workflow').replace(/[\\/:*?"<>|]/g, '_');
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${name}.wenvedio-workflow.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    toast(`已导出 ${name}`);
+  } catch (err) { toast(`导出失败：${err.message}`, 'error'); }
+}
+
+async function importWorkflow(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    let payload;
+    try { payload = JSON.parse(text); }
+    catch (_) { throw new Error('文件不是合法 JSON'); }
+    const data = await api('/api/workflows/import', { method: 'POST', body: payload });
+    await loadWorkflows();
+    renderList();
+    toast(`已导入：${data.workflow.name}`);
+    await openWorkflow(data.workflow.id);
+  } catch (err) { toast(`导入失败：${err.message}`, 'error'); }
+  finally { const input = $('#wfImportFile'); if (input) input.value = ''; }
+}
+
+// 用这条运行当时的输入，按当前定义再跑一次
+async function rerunWorkflow(runId) {
+  try {
+    const data = await api(`/api/workflow-runs/${encodeURIComponent(runId)}/rerun`, { method: 'POST' });
+    closeDrawer();
+    state.activeRunId = data.run_id;
+    toast('已用同样的输入重新运行');
+    if (!state.current || state.current.id !== data.run.workflow_id) await openWorkflow(data.run.workflow_id);
+    pollRun(data.run_id);
+  } catch (err) { toast(`重跑失败：${err.message}`, 'error'); }
 }
 
 // ---------------- 编辑器 ----------------
@@ -1027,9 +1079,14 @@ async function openRunDetail(runId) {
             耗时毫秒: run.duration_ms, Token: run.total_tokens, 错误: run.error || null,
           }, null, 2))}</pre>
         </div>
-        ${run.outputs ? `<div class="wf-io ok"><span class="io-title">工作流输出</span><pre>${esc(JSON.stringify(run.outputs, null, 2)).slice(0, 3000)}</pre></div>` : ''}
+        <div class="wf-insp-actions" style="margin-top:10px">
+        <button type="button" data-rerun="${esc(run.id)}">↻ 用同样输入重跑</button>
+      </div>
+      ${run.outputs ? `<div class="wf-io ok"><span class="io-title">工作流输出</span><pre>${esc(JSON.stringify(run.outputs, null, 2)).slice(0, 3000)}</pre></div>` : ''}
         ${blocks}
-      </div>`);
+      </div>`, (root) => {
+      $$('[data-rerun]', root).forEach((button) => button.addEventListener('click', () => rerunWorkflow(button.dataset.rerun)));
+    });
   } catch (err) { toast(`读取运行详情失败：${err.message}`, 'error'); }
 }
 

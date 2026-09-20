@@ -89,6 +89,26 @@ function create({ store, engine, host, python, writeLog, sendJson, readBody, nod
       return true;
     }
 
+    // 导入工作流：接受导出文件原样，或 { workflow: {...} }
+    if (route === '/api/workflows/import' && method === 'POST') {
+      const payload = await readJson(req);
+      const source = payload?.workflow && typeof payload.workflow === 'object' ? payload.workflow : payload;
+      if (!source || !Array.isArray(source.nodes) || !source.nodes.length) {
+        sendJson(res, 400, { ok: false, msg: '导入内容里没有节点，可能不是工作流导出文件' });
+        return true;
+      }
+      const record = store.saveWorkflow({
+        name: `${String(source.name || '导入的工作流').slice(0, 50)}（导入）`,
+        description: String(source.description || '').slice(0, 200),
+        nodes: source.nodes,
+        edges: source.edges,
+        variables: source.variables,
+      });
+      writeLog('info', `导入工作流：${record.name}（${record.nodes.length} 个节点）`);
+      sendJson(res, 200, { ok: true, workflow: record });
+      return true;
+    }
+
     if (route === '/api/workflows' && method === 'GET') {
       sendJson(res, 200, { ok: true, workflows: store.listWorkflows() });
       return true;
@@ -108,7 +128,7 @@ function create({ store, engine, host, python, writeLog, sendJson, readBody, nod
       return true;
     }
 
-    let match = route.match(/^\/api\/workflow-runs\/([^/]+)(?:\/(cancel|pause|resume))?$/);
+    let match = route.match(/^\/api\/workflow-runs\/([^/]+)(?:\/(cancel|pause|resume|rerun))?$/);
     if (match) {
       const runId = decodeURIComponent(match[1]);
       const action = match[2];
@@ -116,6 +136,23 @@ function create({ store, engine, host, python, writeLog, sendJson, readBody, nod
         const run = store.getRun(runId);
         if (!run) { sendJson(res, 404, { ok: false, msg: '运行记录不存在' }); return true; }
         sendJson(res, 200, { ok: true, run, advancing: engine.isAdvancing(runId) });
+        return true;
+      }
+      if (action === 'rerun' && method === 'POST') {
+        // 用这条运行当时的输入，按当前的工作流定义再跑一次
+        const source = store.getRun(runId);
+        if (!source) { sendJson(res, 404, { ok: false, msg: '运行记录不存在' }); return true; }
+        const workflow = store.getWorkflow(source.workflow_id);
+        if (!workflow) { sendJson(res, 404, { ok: false, msg: '这条运行对应的工作流已被删除' }); return true; }
+        try {
+          validateInputs(workflow, source.inputs);
+        } catch (err) {
+          sendJson(res, 400, { ok: false, msg: err.message });
+          return true;
+        }
+        const rerun = engine.startRun(workflow, source.inputs, 'draft');
+        writeLog('info', `重跑 ${runId} → ${rerun.id}`);
+        sendJson(res, 200, { ok: true, run_id: rerun.id, run: rerun, inputs: source.inputs });
         return true;
       }
       if (action && method === 'POST') {
@@ -166,6 +203,24 @@ function create({ store, engine, host, python, writeLog, sendJson, readBody, nod
     if (action === 'duplicate' && method === 'POST') {
       const workflow = store.duplicateWorkflow(id);
       sendJson(res, workflow ? 200 : 404, workflow ? { ok: true, workflow } : { ok: false, msg: '工作流不存在' });
+      return true;
+    }
+
+    if (action === 'export' && method === 'GET') {
+      const workflow = store.getWorkflow(id);
+      if (!workflow) { sendJson(res, 404, { ok: false, msg: '工作流不存在' }); return true; }
+      sendJson(res, 200, {
+        ok: true,
+        kind: 'wenvedio-workflow',
+        exported_at: new Date().toISOString(),
+        workflow: {
+          name: workflow.name,
+          description: workflow.description || '',
+          nodes: workflow.nodes,
+          edges: workflow.edges,
+          variables: workflow.variables || [],
+        },
+      });
       return true;
     }
 
