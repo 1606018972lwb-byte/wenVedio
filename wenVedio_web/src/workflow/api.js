@@ -105,7 +105,9 @@ function create({ store, engine, host, python, writeLog, sendJson, readBody, nod
         variables: source.variables,
       });
       writeLog('info', `导入工作流：${record.name}（${record.nodes.length} 个节点）`);
-      sendJson(res, 200, { ok: true, workflow: record });
+      // 代码节点会真的执行里面的代码，导入别人的工作流时要让用户知道
+      const codeNodes = record.nodes.filter((node) => node.type === 'code').length;
+      sendJson(res, 200, { ok: true, workflow: record, code_nodes: codeNodes });
       return true;
     }
 

@@ -220,6 +220,14 @@ async function importWorkflow(file) {
     try { payload = JSON.parse(text); }
     catch (_) { throw new Error('文件不是合法 JSON'); }
     const data = await api('/api/workflows/import', { method: 'POST', body: payload });
+    if (data.code_nodes > 0) {
+      const ok = window.confirm(`这个工作流里有 ${data.code_nodes} 个代码节点。\n运行时会真的执行其中的代码（JavaScript 在受限沙箱里跑，Python 有完整系统权限）。\n\n只导入你自己信任的文件。要继续吗？`);
+      if (!ok) {
+        await api(`/api/workflows/${encodeURIComponent(data.workflow.id)}`, { method: 'DELETE' }).catch(() => {});
+        toast('已取消导入');
+        return;
+      }
+    }
     await loadWorkflows();
     renderList();
     toast(`已导入：${data.workflow.name}`);

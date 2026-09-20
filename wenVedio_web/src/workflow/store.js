@@ -104,7 +104,14 @@ function create({ configDir, writeLog }) {
     if (runsSaveTimer.unref) runsSaveTimer.unref();
     return true;
   }
-  process.once('exit', () => { if (runsSaveTimer) saveRunsNow(); });
+  // 退出时补写最后一次改动。这里绝不能动定时器：在 'exit' 阶段 clearTimeout
+  // 会撞上 libuv 的 handle 状态断言（Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)），
+  // 直接同步写就够了。
+  process.once('exit', () => {
+    if (!runsSaveTimer) return;
+    runsSaveTimer = null;
+    writeJson(RUNS_FILE, { version: 1, runs: [...runs.values()] });
+  });
 
   // ---------------- 定义 ----------------
 

@@ -576,31 +576,58 @@ const NODE_DEFS = {
         return { output: value === undefined ? null : value, printed, interpreter: out.interpreter, env_name: out.env_name };
       }
 
+      // 只让「字符串」跨越宿主与沙箱的边界：
+      // 输入用 JSON 字符串传进去、在上下文内 JSON.parse，日志与结果也在上下文内序列化出来。
+      // 这样沙箱里拿到的 Object/Function 都是上下文自己的（受 VM_OPTIONS 约束），
+      // 堵住 input.constructor.constructor('return process')() 这类沿原型链爬到宿主 realm 的逃逸。
       const sandbox = {
-        input: ctx.input,
-        outputs: ctx.scope,
-        vars: ctx.run.variables || {},
-        console: { log: (...args) => ctx.log(args.map((a) => safeString(a)).join(' ')) },
-        JSON, Math, Date, String, Number, Boolean, Array, Object,
-        parseInt, parseFloat, isNaN, isFinite, encodeURIComponent, decodeURIComponent,
-        result: undefined,
+        __input: JSON.stringify(ctx.input ?? null),
+        __outputs: JSON.stringify(ctx.scope ?? {}),
+        __vars: JSON.stringify(ctx.run.variables || {}),
       };
-      vm.createContext(sandbox);
-      vm.runInContext(
-        `result = (function(input, outputs, vars){${code}\n})(input, outputs, vars);`,
-        sandbox,
-        { timeout: Math.max(500, Math.min(300000, Number(ctx.params.timeout_ms) || 30000)) },
-      );
-      const value = sandbox.result;
-      if (value === undefined) throw new Error('代码没有 return 任何值');
-      let plain;
+      vm.createContext(sandbox, VM_OPTIONS);
+      const logs = [];
+      const wrapper = `(function(){
+  var __log = [];
+  var input = JSON.parse(__input);
+  var outputs = JSON.parse(__outputs);
+  var vars = JSON.parse(__vars);
+  var console = { log: function(){ var parts = []; for (var i = 0; i < arguments.length; i += 1) { var a = arguments[i]; try { parts.push(typeof a === 'string' ? a : JSON.stringify(a)); } catch (_) { parts.push(String(a)); } } __log.push(parts.join(' ')); } };
+  var __value;
+  try {
+    __value = (function(input, outputs, vars, console){${code}\n})(input, outputs, vars, console);
+  } catch (err) {
+    return JSON.stringify({ ok: false, error: String(err && err.message ? err.message : err), logs: __log });
+  }
+  var __text;
+  try { __text = JSON.stringify({ ok: true, value: __value === undefined ? null : __value, logs: __log }); }
+  catch (err) { return JSON.stringify({ ok: false, error: '返回值无法序列化：' + String(err && err.message ? err.message : err), logs: __log }); }
+  return __text;
+})()`;
+      let packed;
       try {
-        plain = JSON.parse(JSON.stringify(value ?? null));
-      } catch (_) {
-        throw new Error('代码返回的值无法序列化（不能包含函数或循环引用）');
+        packed = vm.runInContext(wrapper, sandbox, {
+          timeout: Math.max(500, Math.min(300000, Number(ctx.params.timeout_ms) || 30000)),
+        });
+      } catch (err) {
+        // 沙箱外的执行错误（语法错误、超时打断等）
+        throw new Error(err && err.message ? err.message : String(err));
       }
-      if (plain && typeof plain === 'object' && !Array.isArray(plain)) return { output: plain, ...plain };
-      return { output: plain };
+      let parsed;
+      try {
+        parsed = JSON.parse(packed);
+      } catch (_) {
+        throw new Error('代码返回值解析失败');
+      }
+      for (const line of parsed.logs || []) logs.push(line);
+      if (logs.length) ctx.log(logs.join(' / '));
+      if (parsed.ok === false) throw new Error(parsed.error || '代码执行失败');
+      const value = parsed.value;
+      if (value === undefined) throw new Error('代码没有 return 任何值');
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return { output: value, ...value, printed: logs.join('\n') };
+      }
+      return { output: value, printed: logs.join('\n') };
     },
   },
 
@@ -660,6 +687,11 @@ const NODE_DEFS = {
 
 const delay = (ms) => new Promise((resolve) => { const timer = setTimeout(resolve, ms); if (timer.unref) timer.unref(); });
 
+// 沙箱上下文统一用这个配置建：禁掉「从字符串生成代码」，
+// 于是 Object.constructor('return process')() / eval / new Function 统统被挡，
+// 经典的 vm 逃逸链就断了。vm 自身不是安全边界，这一层把它收紧到可用范围。
+const VM_OPTIONS = { codeGeneration: { strings: false, wasm: false } };
+
 // 条件分支用的表达式求值：在受限沙箱里对 input / outputs / vars 求值
 function evaluateExpression(expr, ctx) {
   const sandbox = {
@@ -670,7 +702,7 @@ function evaluateExpression(expr, ctx) {
     parseInt, parseFloat, isNaN, isFinite,
     result: undefined,
   };
-  vm.createContext(sandbox);
+  vm.createContext(sandbox, VM_OPTIONS);
   vm.runInContext(
     `result = (function(input, outputs, vars){ return (${expr}); })(input, outputs, vars);`,
     sandbox,
