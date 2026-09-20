@@ -50,7 +50,7 @@ export function createCanvas(host, handlers = {}) {
     <button type="button" data-zoom="layout" title="自动布局">⇉</button>`;
   const hint = document.createElement('div');
   hint.className = 'wf-canvas-hint';
-  hint.textContent = '拖动空白平移 · 滚轮缩放 · Shift+拖动框选 · Delete 删除';
+  hint.textContent = '右键节点改设置 · 拖动空白平移 · 滚轮缩放 · Shift+框选 · Delete 删除';
   wrap.append(svg, toolbar, hint);
   host.appendChild(wrap);
 
@@ -359,6 +359,29 @@ export function createCanvas(host, handlers = {}) {
     applyTransform();
   }, { passive: false });
 
+  svg.addEventListener('contextmenu', (event) => {
+    const target = event.target;
+    const edgeGroup = target.closest ? target.closest('[data-edge]') : null;
+    const nodeGroup = target.closest ? target.closest('.wf-node') : null;
+    if (edgeGroup) {
+      event.preventDefault();
+      handlers.onEdgeMenu?.(edgeGroup.getAttribute('data-edge'), event);
+      return;
+    }
+    if (nodeGroup) {
+      event.preventDefault();
+      const id = nodeGroup.dataset.node;
+      selection = new Set([id]);
+      selectedEdge = null;
+      render();
+      emitSelect();
+      handlers.onNodeMenu?.(id, event);
+      return;
+    }
+    event.preventDefault();
+    handlers.onCanvasMenu?.(event);
+  });
+
   toolbar.addEventListener('click', (event) => {
     const action = event.target.closest('button')?.dataset.zoom;
     if (action === 'in') zoomBy(1.2);
@@ -596,7 +619,7 @@ export function createCanvas(host, handlers = {}) {
   function setReadOnly(value) {
     readOnly = Boolean(value);
     wrap.style.opacity = readOnly ? '0.96' : '';
-    hint.textContent = readOnly ? '运行回放：只读' : '拖动空白平移 · 滚轮缩放 · Shift+拖动框选 · Delete 删除';
+    hint.textContent = readOnly ? '运行回放：只读' : '右键节点改设置 · 拖动空白平移 · 滚轮缩放 · Shift+框选 · Delete 删除';
   }
 
   function selectNode(id) {
@@ -613,6 +636,23 @@ export function createCanvas(host, handlers = {}) {
     panX = rect.width / 2 - (node.x + NODE_W / 2) * scale;
     panY = rect.height / 2 - (node.y + NODE_H / 2) * scale;
     applyTransform();
+  }
+
+  // 节点在屏幕上的位置，用来把设置浮层贴在节点旁边
+  function nodeScreenRect(id) {
+    const group = nodeEls.get(id);
+    if (group) return group.getBoundingClientRect();
+    const node = nodes.find((n) => n.id === id);
+    if (!node) return null;
+    const rect = svg.getBoundingClientRect();
+    return {
+      left: rect.left + panX + node.x * scale,
+      top: rect.top + panY + node.y * scale,
+      width: NODE_W * scale,
+      height: NODE_H * scale,
+      right: rect.left + panX + (node.x + NODE_W) * scale,
+      bottom: rect.top + panY + (node.y + NODE_H) * scale,
+    };
   }
 
   function destroy() {
@@ -634,6 +674,7 @@ export function createCanvas(host, handlers = {}) {
     setReadOnly,
     selectNode,
     centerOn,
+    nodeScreenRect,
     addNode,
     updateNode,
     updateNodeParams,

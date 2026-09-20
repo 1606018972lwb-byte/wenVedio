@@ -212,14 +212,13 @@ function renderEditor() {
       </div>
     </div>
     <div class="wf-body">
+      <div class="wf-canvas-host" id="wfCanvasHost"></div>
       <aside class="wf-palette" id="wfPalette"></aside>
-      <div class="wf-canvas-host" id="wfCanvasHost" style="min-width:0"></div>
-      <aside class="wf-inspector" id="wfInspector"></aside>
     </div>`;
 
   renderPalette();
   mountCanvas();
-  renderInspector();
+  closeNodePop();
 
   $('#wfBack').addEventListener('click', backToList);
   $('#wfUndo').addEventListener('click', () => state.canvas.undo());
@@ -234,26 +233,43 @@ function renderEditor() {
 function renderPalette() {
   const host = $('#wfPalette');
   const keyword = (host.dataset.search || '').toLowerCase();
+  const collapsed = host.dataset.collapsed === '1';
+  host.classList.toggle('collapsed', collapsed);
   const groups = new Map();
   for (const def of Object.values(state.meta?.nodes || {})) {
     if (keyword && !`${def.label} ${def.type} ${def.description}`.toLowerCase().includes(keyword)) continue;
     if (!groups.has(def.group)) groups.set(def.group, []);
     groups.get(def.group).push(def);
   }
-  host.innerHTML = `<input class="wf-palette-search" id="wfPaletteSearch" placeholder="搜索节点…" value="${esc(host.dataset.search || '')}" />`
-    + [...groups.entries()].map(([group, list]) => `
+  host.innerHTML = `
+    <div class="wf-palette-head"><b>节点库</b><button type="button" class="wf-palette-toggle" id="wfPaletteToggle" title="${collapsed ? '展开' : '收起'}">${collapsed ? '＋' : '－'}</button></div>
+    <div class="wf-palette-body">
+      <input class="wf-palette-search" id="wfPaletteSearch" placeholder="搜索节点…" value="${esc(host.dataset.search || '')}" />
+      ${[...groups.entries()].map(([group, list]) => `
         <div class="wf-palette-group">${esc(group)}</div>
         ${list.map((def) => `<button type="button" class="wf-node-btn" draggable="true" data-type="${esc(def.type)}" title="${esc(def.description || '')}">
           <span class="ico">${esc(def.icon || '●')}</span><span>${esc(def.label)}</span></button>`).join('')}
-      `).join('');
+      `).join('')}
+    </div>`;
 
+  $('#wfPaletteToggle')?.addEventListener('click', () => {
+    host.dataset.collapsed = collapsed ? '0' : '1';
+    renderPalette();
+  });
   const search = $('#wfPaletteSearch');
   search?.addEventListener('input', () => { host.dataset.search = search.value; renderPalette(); search.focus(); });
   $$('.wf-node-btn', host).forEach((button) => {
     button.addEventListener('click', () => {
-      const node = state.canvas.addNode(button.dataset.type, { x: 140, y: 120 }, state.meta.nodes[button.dataset.type]);
+      const graph = state.canvas.getGraph();
+      // 落在当前视口可见位置，避免新增节点跑到画布外面
+      const hostRect = $('#wfCanvasHost').getBoundingClientRect();
+      const center = state.canvas.screenToWorld(hostRect.left + hostRect.width / 2, hostRect.top + hostRect.height / 2);
+      const offset = graph.nodes.length % 6;
+      const node = state.canvas.addNode(button.dataset.type,
+        { x: Math.round(center.x - NODE_W / 2 + offset * 18), y: Math.round(center.y - NODE_H / 2 + offset * 14) },
+        state.meta.nodes[button.dataset.type]);
       state.selectedNodeId = node.id;
-      renderInspector();
+      renderNodePop();
     });
     button.addEventListener('dragstart', (event) => {
       event.dataTransfer.setData('text/wf-node', button.dataset.type);
@@ -270,8 +286,12 @@ function mountCanvas() {
   host.innerHTML = '';
   state.canvas = createCanvas(host, {
     onChange: () => { markDirty(); syncSelectionLabel(); },
-    onSelect: (ids) => { state.selectedNodeId = ids[0] || null; renderInspector(); },
+    onSelect: (ids) => { state.selectedNodeId = ids[0] || null; if (!ids.length) closeNodePop(); },
     onStatus: (message) => toast(message),
+    // 详细设置由右键节点弹出
+    onNodeMenu: (id) => { state.selectedNodeId = id; renderNodePop(); },
+    onCanvasMenu: () => closeNodePop(),
+    onEdgeMenu: () => toast('右键连线可删除：先点这条线，再按 Delete'),
   });
   state.canvas.setGraph(state.current.nodes || [], state.current.edges || []);
   host.addEventListener('dragover', (event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; });
@@ -283,7 +303,7 @@ function mountCanvas() {
     const point = state.canvas.screenToWorld(event.clientX, event.clientY);
     const node = state.canvas.addNode(type, { x: point.x - NODE_W / 2, y: point.y - NODE_H / 2 }, state.meta.nodes[type]);
     state.selectedNodeId = node.id;
-    renderInspector();
+    renderNodePop();
   });
   setTimeout(() => state.canvas?.fit(), 60);
 }
@@ -391,53 +411,89 @@ function upstreamPaths(nodeId) {
   return out;
 }
 
-function renderInspector() {
-  const host = $('#wfInspector');
+// 节点设置改成右键节点弹出的浮层，不再占用画布宽度
+function closeNodePop() {
+  $('#wfNodePop')?.remove();
+}
+
+function positionNodePop(pop, nodeId) {
+  const anchor = state.canvas?.nodeScreenRect?.(nodeId);
+  const margin = 12;
+  const rect = pop.getBoundingClientRect();
+  let left = margin;
+  let top = margin;
+  if (anchor) {
+    left = anchor.right + margin;
+    if (left + rect.width > window.innerWidth - margin) left = anchor.left - rect.width - margin;
+    top = anchor.top - 8;
+  }
+  left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
+  top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.top = `${Math.round(top)}px`;
+}
+
+function renderNodePop() {
   const id = state.selectedNodeId;
   const node = id ? state.canvas.getGraph().nodes.find((n) => n.id === id) : null;
-  if (!node) {
-    host.innerHTML = '<div class="wf-insp-empty">选中画布上的节点后，这里显示它的参数。<br><br>· 从左侧节点库点一下或拖到画布即可添加<br>· 从节点右侧圆点拖到另一个节点左侧圆点即可连线<br>· Ctrl+Z 撤销 · Delete 删除 · Shift+拖动框选</div>';
-    return;
-  }
+  if (!node) { closeNodePop(); return; }
   const def = state.meta.nodes[node.type] || { label: node.type, params: [], outputs: [] };
   const values = node.params || {};
   const runState = state.runNodeStates?.[node.id];
 
-  host.innerHTML = `
-    <div class="wf-insp-title"><span>${esc(def.icon || '●')}</span><span>${esc(node.title || def.label)}</span></div>
-    <div class="wf-insp-type">${esc(node.type)} · ${esc(node.id)}</div>
-    <label class="wf-field"><span class="lbl">节点名称</span><input type="text" id="wfNodeTitle" value="${esc(node.title || '')}" maxlength="60" /></label>
-    ${def.params.map((param) => renderParam(param, values, node)).join('')}
-    <div class="wf-insp-section">错误处理</div>
-    <label class="wf-field"><span class="lbl">节点失败时</span>
-      <select id="wfPolicy">
-        <option value="stop"${node.error_policy === 'stop' ? ' selected' : ''}>停止整个工作流</option>
-        <option value="continue"${node.error_policy === 'continue' ? ' selected' : ''}>继续执行下游</option>
-        <option value="retry"${node.error_policy === 'retry' ? ' selected' : ''}>自动重试</option>
-      </select>
-    </label>
-    ${node.error_policy === 'retry' ? `
-      <label class="wf-field"><span class="lbl">最大重试次数</span><input type="number" id="wfMaxRetry" min="0" max="10" value="${Number(node.max_retry) || 0}" /></label>
-      <label class="wf-field"><span class="lbl">重试间隔(毫秒)</span><input type="number" id="wfRetryInterval" min="0" max="60000" step="100" value="${Number(node.retry_interval_ms) || 2000}" /></label>` : ''}
-    <div class="wf-insp-section">输出字段（可被下游引用）</div>
-    <div class="wf-io"><pre>${esc((def.outputs || []).map((o) => `${node.id}.${o.key}  ${o.label || ''}`).join('\n') || '（无输出）')}</pre></div>
-    ${runState ? `
-      <div class="wf-insp-section">本次运行</div>
-      <div class="wf-io ${runState.status === 'failed' ? 'bad' : runState.status === 'success' ? 'ok' : ''}">
-        <span class="io-title">${esc(runState.status)}${runState.duration_ms != null ? ` · ${(runState.duration_ms / 1000).toFixed(1)}s` : ''}</span>
-        <pre>${esc(JSON.stringify(runState.error ? { error: runState.error } : (runState.output ?? null), null, 2)).slice(0, 3000)}</pre>
-      </div>` : ''}
-    <div class="wf-insp-actions">
-      <button type="button" id="wfTestNode">⚡ 测试运行</button>
-      <button type="button" id="wfDeleteNode">删除节点</button>
+  closeNodePop();
+  const pop = document.createElement('div');
+  pop.className = 'wf-node-pop';
+  pop.id = 'wfNodePop';
+  pop.innerHTML = `
+    <div class="wf-node-pop-head">
+      <span class="ico">${esc(def.icon || '●')}</span><b>${esc(node.title || def.label)}</b>
+      <span class="type">${esc(node.type)}</span>
+      <button type="button" class="wf-node-pop-close" data-pop-close aria-label="关闭">×</button>
+    </div>
+    <div class="wf-node-pop-body">
+      <label class="wf-field"><span class="lbl">节点名称</span><input type="text" id="wfNodeTitle" value="${esc(node.title || '')}" maxlength="60" /></label>
+      ${def.params.map((param) => renderParam(param, values, node)).join('')}
+      <div class="wf-insp-section">错误处理</div>
+      <label class="wf-field"><span class="lbl">节点失败时</span>
+        <select id="wfPolicy">
+          <option value="stop"${node.error_policy === 'stop' ? ' selected' : ''}>停止整个工作流</option>
+          <option value="continue"${node.error_policy === 'continue' ? ' selected' : ''}>继续执行下游</option>
+          <option value="retry"${node.error_policy === 'retry' ? ' selected' : ''}>自动重试</option>
+        </select>
+      </label>
+      ${node.error_policy === 'retry' ? `
+        <label class="wf-field"><span class="lbl">最大重试次数</span><input type="number" id="wfMaxRetry" min="0" max="10" value="${Number(node.max_retry) || 0}" /></label>
+        <label class="wf-field"><span class="lbl">重试间隔(毫秒)</span><input type="number" id="wfRetryInterval" min="0" max="60000" step="100" value="${Number(node.retry_interval_ms) || 2000}" /></label>` : ''}
+      <div class="wf-insp-section">输出字段（可被下游引用）</div>
+      <div class="wf-io"><pre>${esc((def.outputs || []).map((o) => `${node.id}.${o.key}  ${o.label || ''}`).join('\n') || '（无输出）')}</pre></div>
+      ${runState ? `
+        <div class="wf-insp-section">本次运行</div>
+        <div class="wf-io ${runState.status === 'failed' ? 'bad' : runState.status === 'success' ? 'ok' : ''}">
+          <span class="io-title">${esc(runState.status)}${runState.duration_ms != null ? ` · ${(runState.duration_ms / 1000).toFixed(1)}s` : ''}</span>
+          <pre>${esc(JSON.stringify(runState.error ? { error: runState.error } : (runState.output ?? null), null, 2)).slice(0, 3000)}</pre>
+        </div>` : ''}
+      <div class="wf-insp-actions">
+        <button type="button" id="wfTestNode">⚡ 测试运行</button>
+        <button type="button" id="wfDeleteNode">删除节点</button>
+      </div>
     </div>`;
+  document.body.appendChild(pop);
+  positionNodePop(pop, node.id);
+  // 浮层内部的点击不要冒泡到画布，否则会被当成点空白而关掉
+  pop.addEventListener('mousedown', (event) => event.stopPropagation());
+  pop.querySelector('[data-pop-close]').addEventListener('click', () => closeNodePop());
 
   bindParamInputs(node, def);
-  $('#wfNodeTitle').addEventListener('input', (event) => state.canvas.updateNode(node.id, { title: event.target.value }, { record: false }));
-  $('#wfPolicy').addEventListener('change', (event) => { state.canvas.updateNode(node.id, { error_policy: event.target.value }); renderInspector(); });
+  $('#wfNodeTitle').addEventListener('input', (event) => {
+    state.canvas.updateNode(node.id, { title: event.target.value }, { record: false });
+    const head = pop.querySelector('.wf-node-pop-head b');
+    if (head) head.textContent = event.target.value;
+  });
+  $('#wfPolicy').addEventListener('change', (event) => { state.canvas.updateNode(node.id, { error_policy: event.target.value }); renderNodePop(); });
   $('#wfMaxRetry')?.addEventListener('change', (event) => state.canvas.updateNode(node.id, { max_retry: Number(event.target.value) || 0 }));
   $('#wfRetryInterval')?.addEventListener('change', (event) => state.canvas.updateNode(node.id, { retry_interval_ms: Number(event.target.value) || 0 }));
-  $('#wfDeleteNode').addEventListener('click', () => { state.canvas.selectNode(node.id); state.canvas.removeSelected(); state.selectedNodeId = null; renderInspector(); });
+  $('#wfDeleteNode').addEventListener('click', () => { state.canvas.selectNode(node.id); state.canvas.removeSelected(); state.selectedNodeId = null; closeNodePop(); });
   $('#wfTestNode').addEventListener('click', () => debugNode(node));
 }
 
@@ -526,7 +582,7 @@ function renderParam(param, values, node) {
 
 function collectRows(node, def) {
   const params = { ...(node.params || {}) };
-  const host = $('#wfInspector');
+  const host = $('#wfNodePop');
   for (const param of def.params || []) {
     const type = param.type;
     if (type === 'fields') {
@@ -549,7 +605,7 @@ function collectRows(node, def) {
 }
 
 function bindParamInputs(node, def) {
-  const host = $('#wfInspector');
+  const host = $('#wfNodePop');
   const commit = () => state.canvas.updateNodeParams(node.id, collectRows(node, def), { record: false });
   $$('[data-param]', host).forEach((input) => {
     const event = input.type === 'checkbox' ? 'change' : (input.tagName === 'SELECT' ? 'change' : 'input');
@@ -565,9 +621,9 @@ function bindParamInputs(node, def) {
       } else value = input.value;
       const next = { ...(node.params || {}), [key]: value };
       state.canvas.updateNodeParams(node.id, next, { record: false });
-      if (param.showWhen) renderInspector();
+      if (param.showWhen) renderNodePop();
     });
-    if (input.tagName === 'SELECT') input.addEventListener('change', () => renderInspector());
+    if (input.tagName === 'SELECT') input.addEventListener('change', () => renderNodePop());
   });
 
   // 行编辑（输入项 / 输出映射 / 图片列表）
@@ -578,21 +634,21 @@ function bindParamInputs(node, def) {
     const rows = collectRows(node, def);
     rows[button.dataset.pairAdd] = [...(rows[button.dataset.pairAdd] || []), { key: '', value: '' }];
     state.canvas.updateNodeParams(node.id, rows);
-    renderInspector();
+    renderNodePop();
   }));
   $$('[data-pair-del]', host).forEach((button) => button.addEventListener('click', () => {
     const type = button.closest('[data-pairs]').dataset.pairs;
     const rows = collectRows(node, def);
     rows[type] = (rows[type] || []).filter((_, index) => index !== Number(button.dataset.pairDel));
     state.canvas.updateNodeParams(node.id, rows);
-    renderInspector();
+    renderNodePop();
   }));
   $$('[data-row-add]', host).forEach((button) => button.addEventListener('click', () => {
     const key = button.dataset.rowAdd;
     const rows = collectRows(node, def);
     rows[key] = [...(rows[key] || []), ''];
     state.canvas.updateNodeParams(node.id, rows);
-    renderInspector();
+    renderNodePop();
   }));
   $$('[data-row-del]', host).forEach((button) => button.addEventListener('click', () => {
     const key = button.dataset.rowDel;
@@ -601,19 +657,19 @@ function bindParamInputs(node, def) {
     const rows = collectRows(node, def);
     rows[key] = (rows[key] || []).filter((_, i) => i !== index);
     state.canvas.updateNodeParams(node.id, rows);
-    renderInspector();
+    renderNodePop();
   }));
   $('#wfAddField')?.addEventListener('click', () => {
     const rows = collectRows(node, def);
     rows.fields = [...(rows.fields || []), { key: '', label: '', type: 'text' }];
     state.canvas.updateNodeParams(node.id, rows);
-    renderInspector();
+    renderNodePop();
   });
   $$('[data-field-del]', host).forEach((button) => button.addEventListener('click', () => {
     const rows = collectRows(node, def);
     rows.fields = (rows.fields || []).filter((_, index) => index !== Number(button.dataset.fieldDel));
     state.canvas.updateNodeParams(node.id, rows);
-    renderInspector();
+    renderNodePop();
   }));
 
   // 变量选择器
@@ -639,7 +695,7 @@ function bindParamInputs(node, def) {
       const data = await api('/api/workflows/python/pip', { method: 'POST', body: { env_id: envId } });
       toast(data.ok ? (data.installed ? `pip 已${data.via === 'ensurepip' ? '用 ensurepip' : '用 get-pip.py'}安装完成` : 'pip 已存在') : `失败：${data.msg}`, data.ok ? 'ok' : 'error');
       await ensurePythonEnvs(true);
-      renderInspector();
+      renderNodePop();
     } catch (err) { toast(`pip 检查失败：${err.message}`, 'error'); }
   });
   $('#wfOpenEnvPanel')?.addEventListener('click', () => openPythonPanel());
@@ -732,7 +788,7 @@ function pollRun(runId) {
       const run = data.run;
       state.runNodeStates = run.nodes;
       state.canvas?.setNodeStates(run.nodes);
-      if (state.selectedNodeId) renderInspector();
+      if (state.selectedNodeId) renderNodePop();
       updateRunIndicator(run);
       if (['success', 'failed', 'cancelled'].includes(run.status)) {
         stopRunPolling();
@@ -898,7 +954,7 @@ async function openPythonPanel() {
           toast('已切换 Python 环境');
           root.querySelector('.model-drawer-body').innerHTML = render();
           bind();
-          renderInspector();
+          renderNodePop();
         } catch (err) { toast(`切换失败：${err.message}`, 'error'); }
       }));
       $('#wfInstallPy', root)?.addEventListener('click', async () => {
@@ -1044,7 +1100,20 @@ export async function mount() {
 export function unmount() {
   stopRunPolling();
   closeVarPicker();
+  closeNodePop();
 }
+
+// 右键节点的浮层：Esc 关闭、点画布空白关闭
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeNodePop();
+});
+document.addEventListener('mousedown', (event) => {
+  const pop = $('#wfNodePop');
+  if (!pop) return;
+  if (pop.contains(event.target)) return;
+  if (event.target.closest && event.target.closest('.wf-canvas')) return; // 交给画布自己处理
+  closeNodePop();
+});
 
 if (typeof window !== 'undefined') {
   window.wenvedioWorkflow = { mount, unmount };
