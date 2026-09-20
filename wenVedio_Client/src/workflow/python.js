@@ -49,6 +49,9 @@ function create({ dataDir, configDir, writeLog }) {
 
   let selectedId = '';
   let cache = { at: 0, envs: [] };
+  // 落盘的环境清单：首次打开面板先用它立刻渲染，再后台重新探测
+  let diskCache = null;
+  let refreshing = false;
   let installJob = null;
 
   // ---------------- 基础工具 ----------------
@@ -57,14 +60,16 @@ function create({ dataDir, configDir, writeLog }) {
     try {
       const parsed = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
       selectedId = String(parsed?.python_env_id || '');
+      if (parsed?.env_cache && Array.isArray(parsed.env_cache.envs)) diskCache = parsed.env_cache;
     } catch (_) { /* 首次运行没有该文件 */ }
   }
 
   function writeSettings() {
     try {
       fs.mkdirSync(configDir, { recursive: true });
-      const temporary = `${SETTINGS_FILE}.tmp`;
-      fs.writeFileSync(temporary, JSON.stringify({ python_env_id: selectedId }, null, 2));
+      const temporary = `${SETTINGS_FILE}.${process.pid}.tmp`;
+      const envCache = cache.envs.length ? { at: cache.at, envs: cache.envs } : diskCache;
+      fs.writeFileSync(temporary, JSON.stringify({ python_env_id: selectedId, env_cache: envCache }, null, 2));
       fs.renameSync(temporary, SETTINGS_FILE);
     } catch (err) {
       writeLog('error', `保存 Python 环境选择失败: ${err.message}`);
@@ -223,7 +228,20 @@ function create({ dataDir, configDir, writeLog }) {
   }
 
   async function listEnvs({ force = false } = {}) {
-    if (!force && cache.envs.length && Date.now() - cache.at < ENV_CACHE_MS) return cache.envs;
+    if (force) return probeAll();
+    // 内存里还新就直接用
+    if (cache.envs.length && Date.now() - cache.at < ENV_CACHE_MS) return cache.envs;
+    // 否则先用上次落盘的结果立刻返回（首次打开面板不再干等 conda 与环境探测），
+    // 同时在后台重新探测，下一次请求就是新的
+    if (diskCache && diskCache.envs.length) {
+      if (!cache.envs.length) cache = { at: diskCache.at || 0, envs: diskCache.envs };
+      refreshInBackground();
+      return cache.envs;
+    }
+    return probeAll();
+  }
+
+  async function probeAll() {
     const raw = [...await detectCondaEnvs(), ...detectOwnVenvs(), ...await detectSystemPythons()];
 
     // 同一个解释器可能被多条路径发现（例如 conda 的 base 也会出现在系统 Python 里），
@@ -245,7 +263,21 @@ function create({ dataDir, configDir, writeLog }) {
     }
     envs.sort((a, b) => (rank[a.kind] - rank[b.kind]) || (a.is_base === b.is_base ? 0 : a.is_base ? -1 : 1));
     cache = { at: Date.now(), envs };
+    diskCache = cache;
+    writeSettings();
     return envs;
+  }
+
+  // 后台重新探测，避免阻塞请求：面板先用旧结果渲染，稍后再刷新一次
+  function refreshInBackground() {
+    if (refreshing) return;
+    refreshing = true;
+    const timer = setTimeout(() => {
+      listEnvs({ force: true })
+        .catch(() => {})
+        .finally(() => { refreshing = false; });
+    }, 30);
+    if (timer.unref) timer.unref();
   }
 
   // 默认优先级：conda base → conda 的第一个 → 自建虚拟环境 → 系统 Python

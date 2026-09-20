@@ -1189,7 +1189,9 @@ async function ensurePythonEnvs(force) {
 }
 
 async function openPythonPanel() {
-  await ensurePythonEnvs(true);
+  // 先用落盘缓存立刻渲染：探测环境很慢（conda env list + 每个解释器两个子进程），
+  // 直接显示上次结果 + 一个「重新检测」按钮，比让面板转几十秒好得多
+  await ensurePythonEnvs();
   const data = state.pythonEnvs;
   const render = () => {
     const envs = data.envs || [];
@@ -1209,6 +1211,7 @@ async function openPythonPanel() {
           <b style="font-size:12.5px">${install.running ? esc(install.message || '安装中…') : install.stage === 'done' ? '安装完成' : install.stage === 'failed' ? `安装失败：${esc(install.error || '')}` : '没有 Python？可以自动下载安装 3.12'}</b>
           <div class="wf-progress" style="margin-top:6px"><i style="width:${Number(install.percent) || 0}%"></i></div>
         </div>
+        <button class="outline-button" id="wfRefreshEnvs" type="button">重新检测</button>
         <button class="primary-button" id="wfInstallPy" type="button"${install.running ? ' disabled' : ''}>${install.running ? '安装中…' : '自动安装 Python 3.12'}</button>
       </div>
       <p class="wf-insp-empty" style="margin-top:10px">安装会依次尝试清华、北外、南大、中科大镜像与官方源，任一条失败会自动切换下一条；装好后会创建独立环境并确认 pip。</p>`;
@@ -1227,6 +1230,19 @@ async function openPythonPanel() {
           renderInspector();
         } catch (err) { toast(`切换失败：${err.message}`, 'error'); }
       }));
+      $('#wfRefreshEnvs', root)?.addEventListener('click', async () => {
+        const button = $('#wfRefreshEnvs', root);
+        if (button) { button.disabled = true; button.textContent = '检测中…'; }
+        toast('正在重新检测本机 Python 环境…');
+        try {
+          await ensurePythonEnvs(true);
+          toast('检测完成');
+          await openPythonPanel();
+        } catch (err) {
+          toast(`检测失败：${err.message}`, 'error');
+          if (button) { button.disabled = false; button.textContent = '重新检测'; }
+        }
+      });
       $('#wfInstallPy', root)?.addEventListener('click', async () => {
         try {
           await api('/api/workflows/python/install', { method: 'POST' });
