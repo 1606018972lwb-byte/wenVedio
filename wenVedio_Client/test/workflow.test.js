@@ -217,6 +217,47 @@ async function testImportExportRerun() {
   check('重跑结果一致', rerun?.outputs?.结果 === 49, JSON.stringify(rerun?.outputs));
 }
 
+async function testRunFromNode() {
+  console.log('\n[从中间节点开始] 上游沿用历史结果、平行分支跳过、无历史运行被拒');
+  const definition = {
+    name: '测试·从中间节点开始',
+    nodes: [
+      startNode([{ key: 'n', label: '数字', type: 'number' }]),
+      codeNode('code_a', 'return { v: Number(input.n) + 1 };'),
+      codeNode('code_b', 'return { v: Number(input.output.v) * 10 };'),
+      codeNode('code_c', 'return { v: Number(input.output.v) + 5 };'),
+      codeNode('code_p', "return { v: '不该跑' };"),
+      { id: 'end_1', type: 'end', title: '结束', x: 800, y: 0, params: { outputs: [{ key: 'C的结果', value: '{{code_c.output.v}}' }] } },
+    ],
+    edges: [
+      { id: 'e1', from: 'start_1', to: 'code_a' },
+      { id: 'e2', from: 'code_a', to: 'code_b' },
+      { id: 'e3', from: 'code_b', to: 'code_c' },
+      { id: 'e4', from: 'code_b', to: 'code_p' },
+      { id: 'e5', from: 'code_c', to: 'end_1' },
+    ],
+  };
+  const wf = await createWorkflow(definition);
+  const full = await waitRun(await startRun(wf.id, { n: 2 }));
+  check('完整跑：A=3 B=30 C=35',
+    full?.nodes?.code_a?.output?.v === 3 && full?.nodes?.code_b?.output?.v === 30 && full?.nodes?.code_c?.output?.v === 35,
+    statuses(full || { nodes: {} }));
+  check('完整跑：平行分支也执行了', full?.nodes?.code_p?.status === 'success', statuses(full || { nodes: {} }));
+
+  const partial = await waitRun((await api('POST', `/api/workflows/${wf.id}/run`, { from_node: 'code_c' })).data.run_id);
+  check('从 C 开始：整体成功', partial?.status === 'success', partial?.error);
+  check('从 C 开始：结果与完整跑一致', partial?.outputs?.C的结果 === 35, JSON.stringify(partial?.outputs));
+  check('上游被标记为沿用（seeded）', partial?.nodes?.code_a?.seeded === true && partial?.nodes?.code_b?.seeded === true, statuses(partial || { nodes: {} }));
+  check('C 的输入来自历史结果', partial?.nodes?.code_c?.input?.output?.v === 30, JSON.stringify(partial?.nodes?.code_c?.input)?.slice(0, 60));
+  check('平行分支被跳过', partial?.nodes?.code_p?.status === 'skipped', statuses(partial || { nodes: {} }));
+  check('运行记录标记了 from_node', partial?.from_node === 'code_c', partial?.from_node);
+  check('节点输入有落盘（详情面板要用）', partial?.nodes?.code_c?.input !== undefined);
+
+  const fresh = await createWorkflow({ ...definition, name: '测试·从中间节点开始（无历史）' });
+  const denied = await api('POST', `/api/workflows/${fresh.id}/run`, { from_node: 'code_c' });
+  check('无历史运行被拒绝', denied.data.ok === false && /历史运行/.test(denied.data.msg || ''), JSON.stringify(denied.data));
+}
+
 async function testPersistence() {
   console.log('\n[持久化] 坏记录不得堵死后续落盘');
   const { create } = require(path.join(ROOT, 'src', 'workflow', 'store.js'));
@@ -288,6 +329,7 @@ async function waitHealthy(timeoutMs = 20000) {
     await testLoopAndCancel();
     await testSandbox();
     await testImportExportRerun();
+    await testRunFromNode();
     await testPersistence();
     console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
     if (fail) console.log(`失败用例：${failures.join('、')}`);
