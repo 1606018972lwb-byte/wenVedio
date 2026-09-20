@@ -1004,6 +1004,18 @@ function closeVarPickerOnce(event) {
 }
 
 // ---------------- 运行 ----------------
+// 记住每个工作流上次试运行填的输入（只存本机，不随工作流导出）
+function readSavedInputs(workflowId) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(`wenvedio-wf-inputs-${workflowId}`) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) { return {}; }
+}
+
+function writeSavedInputs(workflowId, inputs) {
+  try { localStorage.setItem(`wenvedio-wf-inputs-${workflowId}`, JSON.stringify(inputs || {})); } catch (_) { /* 存不下不影响运行 */ }
+}
+
 function promptRun(workflowId) {
   const wf = state.current && state.current.id === workflowId
     ? state.current
@@ -1016,11 +1028,15 @@ function promptRun(workflowId) {
     : { nodes: wf.nodes || [] };
   const startNode = (liveGraph.nodes || []).find((node) => node.type === 'start');
   const fields = Array.isArray(startNode?.params?.fields) ? startNode.params.fields : [];
+  // 记住上次填的输入：试运行常常是「改一个参数、用同一组输入再跑一次」
+  const savedInputs = readSavedInputs(workflowId);
   const body = fields.length
     ? fields.map((field) => {
+      const prev = savedInputs[field.key];
+      const prevText = prev === undefined || prev === null ? '' : (typeof prev === 'string' ? prev : JSON.stringify(prev));
       const input = field.type === 'json'
-        ? `<textarea data-input="${esc(field.key)}" rows="3" placeholder="JSON"></textarea>`
-        : `<input type="text" data-input="${esc(field.key)}" />`;
+        ? `<textarea data-input="${esc(field.key)}" rows="3" placeholder="JSON">${esc(prevText)}</textarea>`
+        : `<input type="text" data-input="${esc(field.key)}" value="${esc(prevText)}" />`;
       return `<label class="wf-field"><span class="lbl">${esc(field.label || field.key)}${field.required === false ? '' : ' <i class="req">*</i>'}</span>${input}</label>`;
     }).join('')
     : '<p class="wf-insp-empty">这个工作流没有输入参数，直接运行即可。</p>';
@@ -1036,6 +1052,7 @@ function promptRun(workflowId) {
           try { inputs[input.dataset.input] = JSON.parse(value); } catch (_) { inputs[input.dataset.input] = value; }
         } else inputs[input.dataset.input] = value;
       });
+      writeSavedInputs(workflowId, inputs);
       close();
       if (state.current?.id !== workflowId) await openWorkflow(workflowId);
       await startRun(workflowId, inputs);
