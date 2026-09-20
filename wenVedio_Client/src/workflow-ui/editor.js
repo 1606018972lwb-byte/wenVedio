@@ -240,6 +240,43 @@ async function rerunWorkflow(runId) {
   } catch (err) { toast(`重跑失败：${err.message}`, 'error'); }
 }
 
+// 节点卡片空闲时的一行摘要：一眼看出这个节点在干什么
+function nodeSummary(node) {
+  const def = state.meta?.nodes?.[node.type];
+  if (!def) return node.type;
+  const params = node.params || {};
+  if (node.type === 'start') return `${(params.fields || []).length} 个输入项`;
+  if (node.type === 'end') return `${(params.outputs || []).length} 个输出项`;
+  if (node.type === 'condition') {
+    const rows = Array.isArray(params.branches) ? params.branches : [];
+    const first = rows.find((row) => String(row?.expr || '').trim());
+    return first ? `${rows.length} 个出口 · ${first.expr}` : `${rows.length} 个出口`;
+  }
+  for (const key of def.summary_keys || []) {
+    const value = params[key];
+    if (value === undefined || value === null || value === '') continue;
+    if (key === 'model_id') {
+      const model = (state.models || []).find((item) => item.id === value);
+      if (model) return model.name;
+      continue;
+    }
+    if (key === 'workflow_id') {
+      const sub = (state.workflows || []).find((item) => item.id === value);
+      if (sub) return `循环 ${sub.name}`;
+      continue;
+    }
+    const param = (def.params || []).find((item) => item.key === key);
+    if (param?.type === 'select') {
+      const hit = (param.options || []).find((opt) => String(typeof opt === 'string' ? opt : opt.value) === String(value));
+      if (hit) return String(typeof hit === 'string' ? hit : hit.label);
+    }
+    if (Array.isArray(value)) return `${value.length} 项`;
+    if (typeof value === 'string') return value;
+    return String(value);
+  }
+  return node.type;
+}
+
 // ---------------- 编辑器 ----------------
 function renderEditor() {
   const wf = state.current;
@@ -350,6 +387,8 @@ function mountCanvas() {
       if (edgeId) closeInspector();
     },
     onStatus: (message) => toast(message),
+    // 画布上节点卡片的那行摘要
+    describeNode: (node) => nodeSummary(node),
     // 双击节点也打开配置（n8n 习惯）
     onOpenNode: (id) => { state.canvas.selectNode(id); state.selectedNodeId = id; renderInspector(); },
     // 右键节点出小菜单

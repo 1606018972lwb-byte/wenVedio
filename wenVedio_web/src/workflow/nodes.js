@@ -690,6 +690,23 @@ async function collectImages(value, bridge) {
   return out;
 }
 
+// 画布节点卡片空闲时显示哪几个参数（按顺序取第一个有值的），让画布一眼能读懂
+const SUMMARY_KEYS = {
+  start: ['fields'],
+  end: ['outputs'],
+  variable: ['assignments'],
+  llm: ['model_id', 'chat_model'],
+  vision: ['model_id'],
+  image: ['model_id'],
+  video: ['model_id'],
+  condition: ['branches'],
+  merge: ['fields'],
+  loop: ['workflow_id'],
+  http: ['method', 'url'],
+  code: ['language'],
+  text: ['mode'],
+};
+
 // 给前端用的节点元信息（不含执行函数）
 function describeNodes() {
   const meta = {};
@@ -704,6 +721,8 @@ function describeNodes() {
       inputs: def.inputs || [],
       outputs: def.outputs || [],
       params: def.params || [],
+      branches: def.branches === true,
+      summary_keys: SUMMARY_KEYS[type] || [],
     };
   }
   return meta;

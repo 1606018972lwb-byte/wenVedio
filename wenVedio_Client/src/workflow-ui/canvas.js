@@ -238,7 +238,7 @@ export function createCanvas(host, handlers = {}) {
     else if (status === 'success' && state.duration_ms != null) subtitle.textContent = `完成 ${(state.duration_ms / 1000).toFixed(1)}s`;
     else if (status === 'failed') subtitle.textContent = '失败';
     else if (status === 'skipped') subtitle.textContent = '已跳过';
-    else subtitle.textContent = node.type;
+    else subtitle.textContent = truncate(handlers.describeNode ? handlers.describeNode(node) : node.type, 22);
     // 开始节点没有输入口，结束节点没有输出口；结束节点后面不能再接
     g.querySelector('[data-port="in"]').setAttribute('visibility', node.type === 'start' ? 'hidden' : 'visible');
     g.querySelector('[data-port="out"]').setAttribute('visibility', node.type === 'end' ? 'hidden' : 'visible');
