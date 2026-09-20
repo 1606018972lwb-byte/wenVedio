@@ -52,25 +52,59 @@ function create({ configDir, writeLog }) {
   }
 
   function load() {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(WORKFLOWS_FILE, 'utf8'));
-      const list = Array.isArray(parsed) ? parsed : parsed.workflows;
-      if (Array.isArray(list)) list.forEach((item) => { if (item && item.id) workflows.set(item.id, item); });
-    } catch (err) {
-      if (err.code !== 'ENOENT') writeLog('error', `读取工作流失败: ${err.message}`);
-    }
-    try {
-      const parsed = JSON.parse(fs.readFileSync(RUNS_FILE, 'utf8'));
-      const list = Array.isArray(parsed) ? parsed : parsed.runs;
-      if (Array.isArray(list)) list.forEach((item) => { if (item && item.id) runs.set(item.id, item); });
-    } catch (err) {
-      if (err.code !== 'ENOENT') writeLog('error', `读取工作流运行记录失败: ${err.message}`);
-    }
+    // 解析失败不能静默以空状态继续：下一次保存就会把损坏内容永久覆盖，定义全丢。
+    // 先把坏文件改名备份，用户还有救回来的机会。
+    readJsonFile(WORKFLOWS_FILE, (list) => {
+      list.forEach((item) => { if (item && item.id) workflows.set(item.id, item); });
+    }, '工作流');
+    readJsonFile(RUNS_FILE, (list) => {
+      list.forEach((item) => { if (item && item.id) runs.set(item.id, item); });
+    }, '工作流运行记录');
     writeLog('info', `工作流已恢复 ${workflows.size} 个，运行记录 ${runs.size} 条`);
   }
 
+  function readJsonFile(file, onList, label) {
+    let text;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch (err) {
+      if (err.code !== 'ENOENT') writeLog('error', `读取${label}失败: ${err.message}`);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(text);
+      const list = Array.isArray(parsed) ? parsed : parsed[`${label === '工作流' ? 'workflows' : 'runs'}`];
+      if (Array.isArray(list)) { onList(list); return; }
+      writeLog('warn', `${label}文件结构不对（没有数组），按空处理`);
+    } catch (err) {
+      writeLog('error', `解析${label}失败: ${err.message}`);
+    }
+    // 内容不可用 → 另存一份备份，绝不直接丢弃
+    const backup = `${file}.corrupt-${Date.now().toString(36)}.bak`;
+    try {
+      fs.copyFileSync(file, backup);
+      writeLog('warn', `${label}文件已损坏，原文件备份到 ${path.basename(backup)}（${text.length} 字节）`);
+    } catch (copyErr) {
+      writeLog('error', `备份损坏的${label}文件失败: ${copyErr.message}`);
+    }
+  }
+
   const saveWorkflows = () => writeJson(WORKFLOWS_FILE, { version: 1, workflows: [...workflows.values()] });
-  const saveRuns = () => writeJson(RUNS_FILE, { version: 1, runs: [...runs.values()] });
+
+  // 运行记录写得非常频繁（每个节点状态变化一次），逐次同步全表写会把事件循环堵住：
+  // 改成合并写，250ms 内的多次改动只落盘一次；进程退出前补一次，避免丢最后的改动。
+  let runsSaveTimer = null;
+  function saveRunsNow() {
+    if (runsSaveTimer) { clearTimeout(runsSaveTimer); runsSaveTimer = null; }
+    return writeJson(RUNS_FILE, { version: 1, runs: [...runs.values()] });
+  }
+  function saveRuns() {
+    if (runsSaveTimer) return true;
+    runsSaveTimer = setTimeout(() => { runsSaveTimer = null; saveRunsNow(); }, 250);
+    if (runsSaveTimer.unref) runsSaveTimer.unref();
+    return true;
+  }
+  process.once('exit', () => { if (runsSaveTimer) saveRunsNow(); });
 
   // ---------------- 定义 ----------------
 
