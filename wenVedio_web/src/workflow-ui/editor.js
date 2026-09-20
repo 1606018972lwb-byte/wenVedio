@@ -238,6 +238,23 @@ async function importWorkflow(file) {
   finally { const input = $('#wfImportFile'); if (input) input.value = ''; }
 }
 
+// 从选中的节点开始试运行：上游沿用上一次运行的结果（改最后一步不用从头跑）
+async function runFromNode(nodeId) {
+  if (!state.current) return;
+  try {
+    await saveCurrent().catch(() => {});
+    const data = await api(`/api/workflows/${encodeURIComponent(state.current.id)}/run`, {
+      method: 'POST',
+      body: { from_node: nodeId },
+    });
+    state.activeRunId = data.run_id;
+    toast(`已从该节点开始运行（上游沿用 ${String(data.base_run_id).slice(4, 12)} 的结果）`);
+    pollRun(data.run_id);
+  } catch (err) {
+    toast(`从该节点开始运行失败：${err.message}`, 'error');
+  }
+}
+
 // 用这条运行当时的输入，按当前定义再跑一次
 async function rerunWorkflow(runId) {
   try {
@@ -1382,6 +1399,7 @@ function openContextMenu(nodeId, event) {
     { label: '⚙ 配置节点', run: () => { state.selectedNodeId = nodeId; renderInspector(); } },
     { label: '⚡ 测试此节点', run: () => debugNode(node) },
     { label: '⧉ 复制', run: () => { state.canvas.selectNode(nodeId); copyNodeToClipboard(); } },
+    { label: '▶ 从这一步开始试运行', run: () => runFromNode(nodeId) },
     { label: node.disabled ? '▶ 启用此节点' : '⏸ 禁用此节点（跳过并透传）', run: () => {
       const wasDisabled = node.disabled === true;
       state.canvas.updateNode(nodeId, { disabled: !wasDisabled });

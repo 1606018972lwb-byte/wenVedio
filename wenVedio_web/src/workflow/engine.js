@@ -44,7 +44,46 @@ function create({ store, bridge, writeLog }) {
 
   // ---------------- 运行记录 ----------------
 
-  function startRun(workflow, inputs, mode) {
+  // 从中间某个节点开始跑：它上游的节点直接用上次运行的结果填充（不再执行），
+  // 既不是它的上游、也不在它下游的节点（平行分支）直接跳过，避免出现悬空节点。
+  function applyStartFrom(run, graph, fromNodeId, seedOutputs) {
+    const downstream = new Set();
+    const down = [fromNodeId];
+    while (down.length) {
+      const id = down.pop();
+      if (downstream.has(id)) continue;
+      downstream.add(id);
+      for (const edge of graph.outgoing.get(id) || []) down.push(edge.to);
+    }
+    const ancestors = new Set();
+    const up = [fromNodeId];
+    while (up.length) {
+      const id = up.pop();
+      for (const edge of graph.incoming.get(id) || []) {
+        if (ancestors.has(edge.from)) continue;
+        ancestors.add(edge.from);
+        up.push(edge.from);
+      }
+    }
+    for (const node of graph.nodes) {
+      if (node.id === fromNodeId) continue;
+      const state = run.nodes[node.id];
+      if (!state) continue;
+      if (ancestors.has(node.id)) {
+        state.status = 'success';
+        state.output = seedOutputs[node.id] === undefined ? null : seedOutputs[node.id];
+        state.seeded = true;
+        state.finished_at = nowIso();
+        state.note = '沿用上次运行的结果';
+      } else if (!downstream.has(node.id)) {
+        state.status = 'skipped';
+        state.finished_at = nowIso();
+        state.note = '本次从中间节点开始，这条线没跑';
+      }
+    }
+  }
+
+  function startRun(workflow, inputs, mode, options = {}) {
     const startedAt = nowIso();
     const run = {
       id: newRunId(),
@@ -71,6 +110,11 @@ function create({ store, bridge, writeLog }) {
     };
     for (const node of run.snapshot.nodes) {
       run.nodes[node.id] = { id: node.id, type: node.type, title: node.title || node.type, status: 'pending', disabled: node.disabled === true };
+    }
+    // 从中间节点开始：上游沿用上次结果，平行分支直接跳过
+    if (options.fromNode && run.nodes[options.fromNode]) {
+      applyStartFrom(run, buildGraph(run.snapshot), options.fromNode, options.seedOutputs || {});
+      run.from_node = options.fromNode;
     }
     store.saveRun(run);
     store.touchWorkflowRun(workflow.id, startedAt);

@@ -250,6 +250,29 @@ function create({ store, engine, host, python, writeLog, sendJson, readBody, nod
       const payload = await readJson(req);
       const workflow = store.getWorkflow(id);
       if (!workflow) { sendJson(res, 404, { ok: false, msg: '工作流不存在' }); return true; }
+      const fromNode = String(payload.from_node || '').trim();
+      if (fromNode) {
+        // 从中间节点开始：需要一个历史运行来提供上游的输出
+        if (!workflow.nodes.some((node) => node.id === fromNode)) {
+          sendJson(res, 400, { ok: false, msg: `节点不存在：${fromNode}` });
+          return true;
+        }
+        const base = (payload.base_run_id ? store.getRun(String(payload.base_run_id)) : null)
+          || store.listRuns(id, 1)[0] || null;
+        if (!base) {
+          sendJson(res, 400, { ok: false, msg: '从中间节点开始需要一次历史运行提供上游结果，请先完整跑一次' });
+          return true;
+        }
+        const seedOutputs = {};
+        for (const [nodeId, state] of Object.entries(base.nodes || {})) {
+          if (state && state.output !== undefined) seedOutputs[nodeId] = state.output;
+        }
+        const inputs = payload.inputs && Object.keys(payload.inputs).length ? payload.inputs : (base.inputs || {});
+        const started = engine.startRun(workflow, inputs, 'draft', { fromNode, seedOutputs });
+        writeLog('info', `从节点 ${fromNode} 开始运行（沿用 ${base.id} 的上游结果）`);
+        sendJson(res, 200, { ok: true, run_id: started.id, run: started, from_node: fromNode, base_run_id: base.id });
+        return true;
+      }
       try {
         validateInputs(workflow, payload.inputs);
       } catch (err) {
