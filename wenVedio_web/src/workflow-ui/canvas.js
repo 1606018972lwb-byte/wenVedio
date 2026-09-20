@@ -512,9 +512,20 @@ export function createCanvas(host, handlers = {}) {
     return node;
   }
 
-  // 插入节点并自动接线：从「+」进来时用
+  // 插入节点并自动接线：从「+」进来时用。
+  // 和 Coze / n8n 一样，把插入点右侧的节点整体右移腾位置，新节点不会压住别人。
   function insertNode(type, position, meta, wiring = {}) {
-    const node = addNode(type, position, meta);
+    const anchor = wiring.from ? nodes.find((n) => n.id === wiring.from) : null;
+    let pos = { x: Math.round(position?.x ?? 200), y: Math.round(position?.y ?? 160) };
+    if (anchor) {
+      const gap = NODE_W + 72;
+      for (const item of nodes) {
+        if (item.id === anchor.id) continue;
+        if (item.x > anchor.x + 1) item.x += gap;
+      }
+      pos = { x: anchor.x + NODE_W + 72, y: anchor.y };
+    }
+    const node = addNode(type, pos, meta);
     snapshot();
     if (wiring.edgeId) edges = edges.filter((e) => e.id !== wiring.edgeId);
     if (wiring.from && node.type !== 'start') edges.push({ id: nextEdgeId(), from: wiring.from, to: node.id });

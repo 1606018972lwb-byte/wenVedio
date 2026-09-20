@@ -69,15 +69,14 @@
 
 /* Coze 式布局：上=画布 + 右侧节点配置（选中才展开），下=「添加节点」底部面板 */
 .wf-body {
-  flex: 1 1 auto; min-height: calc(100vh - 205px);
+  flex: 0 0 auto; height: calc(100vh - 208px); min-height: 460px;
   display: grid; gap: 12px;
   grid-template-columns: minmax(0, 1fr) var(--wf-right, 0px);
-  grid-template-rows: minmax(240px, 1fr) auto;
+  grid-template-rows: minmax(200px, 1fr) auto;
   --wf-right: 0px;
 }
 .wf-body.has-config { --wf-right: 336px; }
-.wf-body.palette-min { grid-template-rows: minmax(240px, 1fr) auto; }
-.wf-canvas-host { position: relative; min-width: 0; grid-column: 1; grid-row: 1; }
+.wf-canvas-host { position: relative; min-width: 0; min-height: 0; overflow: hidden; grid-column: 1; grid-row: 1; }
 
 /* 下：添加节点面板（Coze 1.0 的节点库位置） */
 .wf-palette {
