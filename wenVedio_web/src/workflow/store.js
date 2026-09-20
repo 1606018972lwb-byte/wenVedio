@@ -24,7 +24,15 @@ function create({ configDir, writeLog }) {
   }
 
   function writeJson(file, payload) {
-    const text = JSON.stringify(payload, null, 2);
+    // 序列化本身也可能抛（循环引用 / 超大对象 / 内存不足），必须兜在里面：
+    // saveRun 在引擎里高频调用，一次抛出就会终止整次运行。
+    let text;
+    try {
+      text = JSON.stringify(payload, null, 2);
+    } catch (err) {
+      writeLog('error', `序列化 ${path.basename(file)} 失败，本次不落盘（数据仍在内存）：${err.message}`);
+      return false;
+    }
     try { fs.mkdirSync(path.dirname(file), { recursive: true }); }
     catch (_) { /* 目录已存在 */ }
     // 临时文件名带进程 + 时间 + 随机数：同一 tick 内两次写也不会撞名
@@ -96,7 +104,26 @@ function create({ configDir, writeLog }) {
   let runsSaveTimer = null;
   function saveRunsNow() {
     if (runsSaveTimer) { clearTimeout(runsSaveTimer); runsSaveTimer = null; }
-    return writeJson(RUNS_FILE, { version: 1, runs: [...runs.values()] });
+    let list = [...runs.values()];
+    try {
+      JSON.stringify(list);
+    } catch (_) {
+      // 只要有一条记录不可序列化（循环引用 / 超大对象），整张表就都写不进去，
+      // 而且那条坏记录会一直留在内存里把后续所有写入都堵死。
+      // 这里逐条筛一遍：能写的照写，写不了的移出内存并大声记日志。
+      const good = [];
+      const bad = [];
+      for (const run of list) {
+        try { JSON.stringify(run); good.push(run); }
+        catch (_) { bad.push(run); }
+      }
+      if (bad.length) {
+        writeLog('error', `有 ${bad.length} 条运行记录无法序列化，已移出内存（磁盘不受影响）：${bad.map((r) => r.id).join(', ')}`);
+        for (const run of bad) runs.delete(run.id);
+      }
+      list = good;
+    }
+    return writeJson(RUNS_FILE, { version: 1, runs: list });
   }
   function saveRuns() {
     if (runsSaveTimer) return true;

@@ -480,38 +480,51 @@ function create({ dataDir, configDir, writeLog }) {
       let stdout = '';
       let stderr = '';
       let finished = false;
-      const kill = () => { if (!finished) { try { child.kill(); } catch (_) { /* 已退出 */ } } };
-      const timer = setTimeout(() => { kill(); reject(new Error(`Python 执行超时（超过 ${Math.round(timeoutMs / 1000)} 秒）`)); }, Math.max(1000, timeoutMs));
-      if (signal) signal.addEventListener('abort', () => { clearTimeout(timer); kill(); reject(new Error('运行已被取消')); }, { once: true });
+      let timer = null;
+      // 所有终止路径（正常退出 / 启动失败 / 超时 / 被取消）都走这里：
+      // 删临时脚本 + 摘掉 abort 监听，临时目录不会随失败次数无界增长
+      const finish = (err, value) => {
+        if (finished) return;
+        finished = true;
+        if (timer) clearTimeout(timer);
+        if (signal) signal.removeEventListener('abort', onAbort);
+        try { fs.unlinkSync(scriptPath); } catch (_) { /* 临时文件清理失败不影响结果 */ }
+        if (err) reject(err); else resolve(value);
+      };
+      const kill = () => { try { child.kill(); } catch (_) { /* 已退出 */ } };
+      const onAbort = () => { kill(); finish(new Error('运行已被取消')); };
+      timer = setTimeout(() => {
+        kill();
+        finish(new Error(`Python 执行超时（超过 ${Math.round(timeoutMs / 1000)} 秒）`));
+      }, Math.max(1000, timeoutMs));
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
 
       child.stdout.on('data', (chunk) => { stdout += chunk; if (stdout.length > 2 * 1024 * 1024) kill(); });
       child.stderr.on('data', (chunk) => { stderr += chunk; if (stderr.length > 512 * 1024) kill(); });
-      child.on('error', (err) => { clearTimeout(timer); finished = true; reject(new Error(`无法启动 Python：${err.message}`)); });
+      child.on('error', (err) => finish(new Error(`无法启动 Python：${err.message}`)));
+      child.stdin.on('error', () => { /* 子进程不读 stdin（EPIPE）不该变成未捕获异常 */ });
       child.on('close', (code) => {
-        clearTimeout(timer);
-        finished = true;
-        try { fs.unlinkSync(scriptPath); } catch (_) { /* 临时文件清理失败不影响结果 */ }
         const markerIndex = stdout.lastIndexOf(MARKER);
         if (markerIndex < 0) {
           const detail = (stderr || stdout || '').trim().split('\n').slice(-6).join('\n');
-          return reject(new Error(`Python 执行失败（退出码 ${code}）：\n${detail}`));
+          return finish(new Error(`Python 执行失败（退出码 ${code}）：\n${detail}`));
         }
         let parsed;
         try {
           parsed = JSON.parse(stdout.slice(markerIndex + MARKER.length).split('\n')[0]);
         } catch (err) {
-          return reject(new Error(`无法解析 Python 返回值：${err.message}`));
+          return finish(new Error(`无法解析 Python 返回值：${err.message}`));
         }
         const printed = stdout.slice(0, markerIndex).trim();
-        if (parsed.ok === false) return reject(new Error(parsed.error || 'Python 代码执行失败'));
-        resolve({ result: parsed.result, printed: printed ? printed.slice(-4000) : '', stderr: stderr.trim().slice(-4000) || '', interpreter: env.python, env_name: env.name });
+        if (parsed.ok === false) return finish(new Error(parsed.error || 'Python 代码执行失败'));
+        return finish(null, { result: parsed.result, printed: printed ? printed.slice(-4000) : '', stderr: stderr.trim().slice(-4000) || '', interpreter: env.python, env_name: env.name });
       });
 
       try {
         child.stdin.write(JSON.stringify(payload || {}));
         child.stdin.end();
       } catch (err) {
-        reject(new Error(`写入 Python 输入失败：${err.message}`));
+        finish(new Error(`写入 Python 输入失败：${err.message}`));
       }
     });
   }
