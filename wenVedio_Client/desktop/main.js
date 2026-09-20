@@ -12,7 +12,21 @@ const http = require('http');
 
 const APP_NAME = 'wenVedio';
 const IS_MAC = process.platform === 'darwin';
-const PREFERRED_PORT = Number(process.env.WENVEDIO_PORT || 8787);
+
+// ---------------- 实例档案（profile）----------------
+// 默认用正式数据目录，单实例锁生效，防止误开第二个窗口。
+// 带 --profile=test（或环境变量 WENVEDIO_PROFILE=test）时改用独立的数据目录：
+// Electron 的单实例锁就放在 userData 里，换了目录就有两把独立的锁，
+// 于是测试实例可以和正式实例同时运行，数据、日志、配置也完全隔离。
+const PROFILE = (() => {
+  const fromArg = process.argv.find((arg) => String(arg).startsWith('--profile='));
+  const raw = fromArg ? String(fromArg).slice('--profile='.length) : (process.env.WENVEDIO_PROFILE || '');
+  return raw.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24);
+})();
+const USER_DATA_NAME = PROFILE ? `${APP_NAME}-${PROFILE}` : APP_NAME;
+const WINDOW_TITLE = PROFILE ? `${APP_NAME}（${PROFILE}）` : APP_NAME;
+// 测试档案默认错开端口，正式实例占着 8787 时不必退到随机端口
+const PREFERRED_PORT = Number(process.env.WENVEDIO_PORT || (PROFILE ? 8788 : 8787));
 // 与前端 CSS 的 --titlebar-h 保持一致：系统窗口按钮的高度必须对得上
 const TITLEBAR_HEIGHT = 46;
 
@@ -20,11 +34,13 @@ const TITLEBAR_HEIGHT = 46;
 // 放到 whenReady 里 setName 已经来不及。
 app.setName(APP_NAME);
 try {
-  app.setPath('userData', path.join(app.getPath('appData'), APP_NAME));
+  app.setPath('userData', path.join(app.getPath('appData'), USER_DATA_NAME));
 } catch (_) { /* 路径不可用时退回 Electron 默认目录 */ }
 // 固定任务栏/托盘身份：安装版、解压版、便携版分别从不同路径启动时，
-// 不再被 Windows 当成多个应用而显示多个图标。
-try { app.setAppUserModelId('com.wenvedio.desktop'); } catch (_) { /* 非 Windows 平台忽略 */ }
+// 不再被 Windows 当成多个应用而显示多个图标。测试档案用不同 id，任务栏上能区分开。
+try {
+  app.setAppUserModelId(PROFILE ? `com.wenvedio.desktop.${PROFILE}` : 'com.wenvedio.desktop');
+} catch (_) { /* 非 Windows 平台忽略 */ }
 
 let mainWindow = null;
 let serverProcess = null;
@@ -105,13 +121,13 @@ function startServer(port) {
   serverProcess.stderr.on('data', (chunk) => process.stderr.write(`[server] ${chunk}`));
   serverProcess.on('error', (err) => {
     appendMainLog(`内置服务启动失败：${err.message}`);
-    dialog.showErrorBox(APP_NAME, `内置服务启动失败：${err.message}`);
+    dialog.showErrorBox(WINDOW_TITLE, `内置服务启动失败：${err.message}`);
   });
   serverProcess.on('exit', (code, signal) => {
     serverProcess = null;
     appendMainLog(`内置服务退出（${code ?? signal}）`);
     if (quitting) return;
-    dialog.showErrorBox(APP_NAME, `内置服务意外退出（${code ?? signal}），请重新启动 ${APP_NAME}。`);
+    dialog.showErrorBox(WINDOW_TITLE, `内置服务意外退出（${code ?? signal}），请重新启动 ${WINDOW_TITLE}。`);
     app.quit();
   });
 }
@@ -137,11 +153,11 @@ function waitForServer(port, timeoutMs = 25000) {
 }
 
 function loadingPage() {
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${APP_NAME}</title>
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${WINDOW_TITLE}</title>
 <style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#f3f5f7;color:#44505d;font-family:"Noto Sans SC",system-ui,sans-serif}
 .box{text-align:center}.mark{width:52px;height:52px;margin:0 auto 18px;border-radius:13px;background:#202b38;color:#fff;display:grid;place-items:center;font-size:24px;font-weight:800}
 p{margin:0;font-size:13px;color:#7b8794}</style></head>
-<body><div class="box"><div class="mark">F</div><p>正在启动视频生成工作台…</p></div></body></html>`;
+<body><div class="box"><div class="mark">W</div><p>正在启动视频生成工作台${PROFILE ? `（${PROFILE}）` : ''}…</p></div></body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
@@ -152,7 +168,7 @@ async function createWindow(port) {
     minWidth: 1040,
     minHeight: 680,
     show: false,
-    title: APP_NAME,
+    title: WINDOW_TITLE,
     backgroundColor: '#f3f5f7',
     autoHideMenuBar: true,
     // 自绘标题栏：Windows/Linux 只保留系统的最小化/最大化/关闭按钮（颜色由前端按主题同步），
@@ -170,6 +186,14 @@ async function createWindow(port) {
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.on('closed', () => { mainWindow = null; });
+  // 页面里的 <title> 会覆盖窗口标题。正式实例保留页面标题不动；
+  // 测试档案在页面标题后追加「（profile）」，否则两个窗口在任务栏上分不出来。
+  mainWindow.webContents.on('page-title-updated', (event, title) => {
+    if (!PROFILE) return;
+    event.preventDefault();
+    const base = String(title || '').trim() || APP_NAME;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setTitle(`${base}（${PROFILE}）`);
+  });
   // 开启“关闭时最小化到托盘”后，点关闭按钮只是隐藏，从托盘图标退出。
   mainWindow.on('close', (event) => {
     if (minimizeToTray && !quitting) {
@@ -243,7 +267,7 @@ function ensureTray() {
   const iconPath = path.join(__dirname, '..', 'build', 'icon.png');
   const icon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 }) : undefined;
   tray = new Tray(icon);
-  tray.setToolTip(`${APP_NAME} · 视频生成工作台`);
+  tray.setToolTip(`${WINDOW_TITLE} · 视频生成工作台`);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示主窗口', click: showMainWindow },
     { type: 'separator' },
@@ -376,13 +400,13 @@ if (!gotLock) {
     buildMenu();
     minimizeToTray = readConfig().minimizeToTray === true;
     if (minimizeToTray) ensureTray();
-    appendMainLog(`客户端启动 v${app.getVersion()}`);
+    appendMainLog(`客户端启动 v${app.getVersion()}${PROFILE ? `（实例档案 ${PROFILE}，数据目录 ${USER_DATA_NAME}，端口 ${PREFERRED_PORT}）` : ''}`);
     try {
       serverPort = await findFreePort(PREFERRED_PORT);
       startServer(serverPort);
       await createWindow(serverPort);
     } catch (err) {
-      dialog.showErrorBox(APP_NAME, `启动失败：${err.message}`);
+      dialog.showErrorBox(WINDOW_TITLE, `启动失败：${err.message}`);
       app.quit();
     }
   });

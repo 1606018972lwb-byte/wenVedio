@@ -45,6 +45,39 @@ npm run desktop     # 启动桌面客户端（开发模式）
 npm start           # 只启动内置服务，用浏览器访问 http://127.0.0.1:8787
 ```
 
+## 同时运行两个实例（测试用）
+
+正式使用时客户端是**单实例**的：再启动一次只会把已有窗口调到前面，避免误开出两个窗口抢同一份数据。
+
+要同时开第二个（典型场景：一边正常用，一边改代码 / 跑测试），给它一个独立的**实例档案（profile）**：
+
+```bash
+# Windows：给安装版一个测试档案
+set WENVEDIO_PROFILE=test
+E:\wenVideo\wenVedio\wenVedio.exe
+
+# 或者直接从源码跑一个测试实例
+cd wenVedio_Client
+set WENVEDIO_PROFILE=test
+npx electron .
+```
+
+也可以传参数代替环境变量：`wenVedio.exe --profile=test`。
+
+隔离程度：
+
+| | 正式实例 | 测试实例（`--profile=test`） |
+| --- | --- | --- |
+| 数据目录 | `%APPDATA%\wenVedio` | `%APPDATA%\wenVedio-test` |
+| 内置服务端口 | 8787 | 8788 |
+| 窗口标题 | `wenVedio · 视频生成工作台` | 同前，末尾追加 `（test）` |
+| 任务栏 / 托盘身份 | `com.wenvedio.desktop` | `com.wenvedio.desktop.test` |
+
+- 之所以能同时跑，是因为 Electron 的单实例锁就放在 userData 目录里；换了目录就有两把独立的锁。**数据、日志、配置、锁全部隔离**，测试实例读写不到正式数据。
+- 测试档案端口默认错开，不会去抢 8787。
+- 想重置测试环境，删掉 `%APPDATA%\wenVedio-test` 即可。
+- 档案名只保留字母、数字、`-`、`_`，长度上限 24。
+
 ## 打包
 
 ```bash
