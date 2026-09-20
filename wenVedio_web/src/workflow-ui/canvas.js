@@ -182,6 +182,9 @@ export function createCanvas(host, handlers = {}) {
         adder.append(el('circle', { r: 10 }), el('text', { y: 4, 'text-anchor': 'middle' }));
         adder.querySelector('text').textContent = '+';
         group.appendChild(adder);
+        // 分支线的名字标在中间，一眼能看出这条走的是哪个出口
+        const label = el('text', { class: 'wf-edge-label', 'text-anchor': 'middle' });
+        group.appendChild(label);
         edgeEls.set(edge.id, group);
         edgesLayer.appendChild(group);
       }
@@ -196,6 +199,17 @@ export function createCanvas(host, handlers = {}) {
       const a = portPos(edge.from, 'out');
       const b = portPos(edge.to, 'in');
       group.querySelector('.wf-add-edge').setAttribute('transform', `translate(${Math.round((a.x + b.x) / 2)},${Math.round((a.y + b.y) / 2)})`);
+      const labelEl = group.querySelector('.wf-edge-label');
+      const fromNode = nodes.find((n) => n.id === edge.from);
+      const branchDef = edge.branch ? (fromNode?.branches || []).find((item) => item.id === edge.branch) : null;
+      if (edge.branch) {
+        labelEl.textContent = branchDef?.label || edge.branch;
+        labelEl.setAttribute('x', Math.round((a.x + b.x) / 2));
+        labelEl.setAttribute('y', Math.round((a.y + b.y) / 2) - 14);
+        labelEl.setAttribute('visibility', 'visible');
+      } else {
+        labelEl.setAttribute('visibility', 'hidden');
+      }
     }
     for (const [id, group] of edgeEls) {
       if (!seen.has(id)) { group.remove(); edgeEls.delete(id); }
@@ -484,9 +498,13 @@ export function createCanvas(host, handlers = {}) {
     if (edges.some((e) => e.from === from && e.to === to)) { handlers.onStatus?.('这两个节点已经连过了'); return; }
     if (reaches(to, from)) { handlers.onStatus?.('这条连线会形成环，已取消'); return; }
     snapshot();
-    edges.push({ id: nextEdgeId(), from, to });
+    // 从条件分支节点连出去时，这条线默认归属第一个出口，之后可以改
+    const branches = Array.isArray(fromNode.branches) ? fromNode.branches : [];
+    const created = { id: nextEdgeId(), from, to, branch: branches.length ? branches[0].id : '' };
+    edges.push(created);
     render();
     emitChange();
+    if (branches.length) handlers.onEdgeCreated?.(created.id);
   }
 
   function addNode(type, position, meta) {
@@ -503,9 +521,18 @@ export function createCanvas(host, handlers = {}) {
       max_retry: 2,
       retry_interval_ms: 2000,
     }
-    // 用节点声明的默认值初始化参数，省得用户每项都填
+    // 用节点声明的默认值初始化参数，省得用户每项都填（深拷贝，避免多个节点共用同一个数组）
     for (const param of meta?.params || []) {
-      if (param.default !== undefined) node.params[param.key] = param.default;
+      if (param.default !== undefined) {
+        node.params[param.key] = param.default && typeof param.default === 'object'
+          ? JSON.parse(JSON.stringify(param.default))
+          : param.default;
+      }
+    }
+    // 条件分支节点：从参数推导出出口列表，画布据此标分支名
+    if (meta?.branches) {
+      const rows = Array.isArray(node.params.branches) ? node.params.branches : [];
+      node.branches = [...rows.filter((row) => row && row.key).map((row) => ({ id: row.key, label: row.key })), { id: 'else', label: '否则' }];
     }
     nodes.push(node);
     selection = new Set([id]);
@@ -760,6 +787,17 @@ export function createCanvas(host, handlers = {}) {
     destroy,
     screenToWorld: toWorld,
     setGraph,
+    // 改某条连线属于哪个分支出口
+    setEdgeBranch: (edgeId, branchId) => {
+      const edge = edges.find((e) => e.id === edgeId);
+      if (!edge) return false;
+      snapshot();
+      edge.branch = String(branchId || '');
+      render();
+      emitChange();
+      return true;
+    },
+    getEdge: (edgeId) => edges.find((e) => e.id === edgeId) || null,
     getGraph: () => ({ nodes, edges }),
     setNodeStates,
     setReadOnly,

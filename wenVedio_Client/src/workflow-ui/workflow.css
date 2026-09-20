@@ -161,6 +161,7 @@
 .wf-edge.selected { stroke: var(--brand); stroke-width: 2.2; }
 .wf-edge.running { stroke: var(--info); stroke-dasharray: 6 4; }
 .wf-edge.success { stroke: var(--ok); }
+.wf-edge-label { fill: var(--brand); font-size: 10.5px; font-weight: 700; pointer-events: none; }
 .wf-marquee { fill: var(--brand-soft); stroke: var(--brand); stroke-width: 1; opacity: .5; }
 .wf-draft-edge { fill: none; stroke: var(--brand); stroke-width: 2; stroke-dasharray: 5 4; }
 

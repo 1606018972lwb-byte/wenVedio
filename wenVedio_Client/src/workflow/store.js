@@ -72,6 +72,12 @@ function create({ configDir, writeLog }) {
         .map((row) => ({ key: str(row.key, 60).trim(), label: str(row.label, 60), from: str(row.from, 120).trim(), type: str(row.type, 20) || 'any' }))
         .filter((row) => row.key)
         .slice(0, 60),
+      // 条件分支节点的出口列表（画布按它渲染多个出口，边上带分支名）
+      branches: (Array.isArray(raw.branches) ? raw.branches : [])
+        .filter((row) => row && typeof row === 'object')
+        .map((row) => ({ id: str(row.id, 40), label: str(row.label, 40) || str(row.id, 40) }))
+        .filter((row) => row.id)
+        .slice(0, 20),
       error_policy: ['stop', 'continue', 'retry'].includes(raw.error_policy) ? raw.error_policy : 'stop',
       max_retry: Math.max(0, Math.min(10, num(raw.max_retry, 2))),
       retry_interval_ms: Math.max(0, Math.min(60000, num(raw.retry_interval_ms, 2000))),
@@ -85,7 +91,7 @@ function create({ configDir, writeLog }) {
     const ids = new Set(nodes.map((node) => node.id));
     const edges = (Array.isArray(source.edges) ? source.edges : [])
       .filter((edge) => edge && ids.has(String(edge.from)) && ids.has(String(edge.to)))
-      .map((edge, index) => ({ id: str(edge.id, 64) || `e${index + 1}`, from: String(edge.from), to: String(edge.to) }))
+      .map((edge, index) => ({ id: str(edge.id, 64) || `e${index + 1}`, from: String(edge.from), to: String(edge.to), branch: str(edge.branch, 40).trim() }))
       .slice(0, MAX_NODES * 2);
     return { nodes, edges };
   }

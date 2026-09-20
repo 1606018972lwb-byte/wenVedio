@@ -308,6 +308,8 @@ function mountCanvas() {
     onAddNode: (target) => openNodePicker(target),
     // 节点右上角的结果角标
     onNodeResult: (id) => openNodeResult(id),
+    // 从条件分支节点连出来的线，立刻让它选属于哪个出口
+    onEdgeCreated: (edgeId) => pickEdgeBranch(edgeId),
   });
   state.canvas.setGraph(state.current.nodes || [], state.current.edges || []);
   host.addEventListener('dragover', (event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; });
@@ -613,9 +615,36 @@ function renderParam(param, values, node) {
         </div>
         <button type="button" class="wf-add-row" data-pair-add="${param.type}">＋ 添加一行</button></div>`;
     }
+    case 'branches':
+      return `<div class="wf-field">${label}<small class="help">${esc(param.help || '')}</small>
+        <div class="wf-rows" data-branches="1">${renderBranchRows(value)}</div>
+        <button type="button" class="wf-add-row" id="wfAddBranch">＋ 添加出口</button>
+        <small class="help">都命中不了会走自动带的「否则」出口</small></div>`;
+    case 'pairs':
+      return `<div class="wf-field">${label}<small class="help">${esc(param.help || '')}</small>
+        <div class="wf-rows" data-pairs2="1">${renderPairRows(value)}</div>
+        <button type="button" class="wf-add-row" data-pair2-add="1">＋ 添加</button></div>`;
     default:
       return `<label class="wf-field">${label}<input type="text" data-param="${key}" value="${esc(value == null ? '' : value)}" placeholder="${esc(param.placeholder || '')}" />${help}</label>`;
   }
+}
+
+// 条件分支的出口行
+function renderBranchRows(list) {
+  return (Array.isArray(list) ? list : []).map((row, index) => `<div class="wf-row" data-branch-row="${index}" style="grid-template-columns:minmax(0,0.8fr) minmax(0,1.6fr) 26px">
+    <input type="text" data-branch="key" value="${esc(row.key || '')}" placeholder="出口名" />
+    <input type="text" data-branch="expr" value="${esc(row.expr || '')}" placeholder="如 Number(input.score) > 80" />
+    <button type="button" class="wf-row-del" data-branch-del="${index}">×</button>
+  </div>`).join('');
+}
+
+// 键值对参数行（判断用的输入 / 聚合字段）
+function renderPairRows(list) {
+  return (Array.isArray(list) ? list : []).map((row, index) => `<div class="wf-row" data-pair2-row="${index}" style="grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) 26px">
+    <input type="text" data-pair2="key" value="${esc(row.key || '')}" placeholder="名称" />
+    <input type="text" data-pair2="value" value="${esc(typeof row.value === 'string' ? row.value : JSON.stringify(row.value ?? ''))}" placeholder="{{节点.字段}}" />
+    <button type="button" class="wf-row-del" data-pair2-del="${index}">×</button>
+  </div>`).join('');
 }
 
 function collectRows(node, def) {
@@ -637,6 +666,16 @@ function collectRows(node, def) {
       })).filter((row) => row.key);
     } else if (type === 'image-list') {
       params[param.key] = $$(`[data-row-value="${param.key}"]`, host).map((input) => input.value.trim()).filter(Boolean);
+    } else if (type === 'branches') {
+      params[param.key] = $$('[data-branch-row]', host).map((row) => ({
+        key: $(`[data-branch="key"]`, row).value.trim(),
+        expr: $(`[data-branch="expr"]`, row).value,
+      })).filter((row) => row.key);
+    } else if (type === 'pairs') {
+      params[param.key] = $$('[data-pair2-row]', host).map((row) => ({
+        key: $(`[data-pair2="key"]`, row).value.trim(),
+        value: $(`[data-pair2="value"]`, row).value,
+      })).filter((row) => row.key);
     }
   }
   return params;
@@ -644,7 +683,17 @@ function collectRows(node, def) {
 
 function bindParamInputs(node, def) {
   const host = $('#wfInspector');
-  const commit = () => state.canvas.updateNodeParams(node.id, collectRows(node, def), { record: false });
+  const commit = () => {
+    const params = collectRows(node, def);
+    state.canvas.updateNodeParams(node.id, params, { record: false });
+    // 条件分支：把出口同步到节点上，画布据此画端口与分支标签
+    if ((def.params || []).some((p) => p.type === 'branches')) {
+      const rows = Array.isArray(params.branches) ? params.branches : [];
+      const branches = rows.map((row) => ({ id: row.key, label: row.key }));
+      branches.push({ id: 'else', label: '否则' });
+      state.canvas.updateNode(node.id, { branches }, { record: false });
+    }
+  };
   $$('[data-param]', host).forEach((input) => {
     const event = input.type === 'checkbox' ? 'change' : (input.tagName === 'SELECT' ? 'change' : 'input');
     input.addEventListener(event, () => {
@@ -707,6 +756,38 @@ function bindParamInputs(node, def) {
     const rows = collectRows(node, def);
     rows.fields = (rows.fields || []).filter((_, index) => index !== Number(button.dataset.fieldDel));
     state.canvas.updateNodeParams(node.id, rows);
+    renderInspector();
+  }));
+
+  // 条件分支出口 / 键值对行
+  $$('[data-branch-row] [data-branch]', host).forEach((input) => input.addEventListener('input', commit));
+  $$('[data-pair2-row] [data-pair2]', host).forEach((input) => input.addEventListener('input', commit));
+  $('#wfAddBranch')?.addEventListener('click', () => {
+    const params = collectRows(node, def);
+    params.branches = [...(params.branches || []), { key: '', expr: '' }];
+    state.canvas.updateNodeParams(node.id, params);
+    renderInspector();
+  });
+  $$('[data-branch-del]', host).forEach((button) => button.addEventListener('click', () => {
+    const params = collectRows(node, def);
+    params.branches = (params.branches || []).filter((_, index) => index !== Number(button.dataset.branchDel));
+    state.canvas.updateNodeParams(node.id, params);
+    renderInspector();
+  }));
+  $$('[data-pair2-add]', host).forEach((button) => button.addEventListener('click', () => {
+    const target = (def.params || []).find((p) => p.type === 'pairs');
+    if (!target) return;
+    const params = collectRows(node, def);
+    params[target.key] = [...(params[target.key] || []), { key: '', value: '' }];
+    state.canvas.updateNodeParams(node.id, params);
+    renderInspector();
+  }));
+  $$('[data-pair2-del]', host).forEach((button) => button.addEventListener('click', () => {
+    const target = (def.params || []).find((p) => p.type === 'pairs');
+    if (!target) return;
+    const params = collectRows(node, def);
+    params[target.key] = (params[target.key] || []).filter((_, index) => index !== Number(button.dataset.pair2Del));
+    state.canvas.updateNodeParams(node.id, params);
     renderInspector();
   }));
 
@@ -1117,6 +1198,7 @@ function openEdgeMenu(edgeId, event) {
       openNodePicker({ x: from.x + 220, y: from.y, clientX: event.clientX, clientY: event.clientY, from: edge.from, to: edge.to, edgeId });
     } },
     { label: '✕ 删除连线', danger: true, run: () => state.canvas.removeEdge?.(edgeId) },
+    { label: '⑂ 改到哪个出口', run: () => pickEdgeBranch(edgeId) },
   ]);
 }
 
@@ -1193,6 +1275,26 @@ function openNodeResult(nodeId) {
       </div>
       ${run ? `<div class="wf-io"><span class="io-title">所属运行</span><pre>${esc(`${run.id} · ${run.status} · ${run.workflow_name}`)}</pre></div>` : ''}
     </div>`);
+}
+
+// 让用户选这条线走哪个分支出口（点连线或从分支节点连出来时用）
+function pickEdgeBranch(edgeId) {
+  const edge = state.canvas.getEdge(edgeId);
+  if (!edge) return;
+  const fromNode = state.canvas.getGraph().nodes.find((n) => n.id === edge.from);
+  const branches = Array.isArray(fromNode?.branches) ? fromNode.branches : [];
+  if (!branches.length) { toast('这个节点没有分支出口'); return; }
+  const anchor = state.canvas.nodeScreenRect(edge.from);
+  openMenuAt(
+    { clientX: (anchor?.right || 200), clientY: (anchor?.top || 200) },
+    branches.map((branch) => ({
+      label: `${edge.branch === branch.id ? '● ' : '○ '}${branch.label}`,
+      run: () => {
+        state.canvas.setEdgeBranch(edgeId, branch.id);
+        toast(`这条线改到「${branch.label}」了`);
+      },
+    })),
+  );
 }
 
 // ---------------- 通用弹层 ----------------

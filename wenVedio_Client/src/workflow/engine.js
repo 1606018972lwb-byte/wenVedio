@@ -102,23 +102,51 @@ function create({ store, bridge, writeLog }) {
     nodes.forEach((node) => { incoming.set(node.id, []); outgoing.set(node.id, []); });
     for (const edge of snapshot.edges || []) {
       if (!incoming.has(edge.to) || !outgoing.has(edge.from)) continue;
-      incoming.get(edge.to).push(edge.from);
-      outgoing.get(edge.from).push(edge.to);
+      // 边上可以带分支名（条件分支节点的每个出口一条），用于判断这条线有没有被走到
+      incoming.get(edge.to).push({ from: edge.from, branch: edge.branch || '' });
+      outgoing.get(edge.from).push({ to: edge.to, branch: edge.branch || '' });
     }
     return { nodes, incoming, outgoing };
   }
 
-  // 下一个可以执行的节点：自己还 pending，且所有上游都已进入终态
+  // 上游节点实际走的是哪条分支：条件分支节点会在输出里带 branch
+  function takenBranch(run, nodeId) {
+    const state = run.nodes[nodeId];
+    const output = state && state.output;
+    if (output && typeof output === 'object' && typeof output.branch === 'string') return output.branch;
+    return '';
+  }
+
+  // 判断一个节点现在能不能跑：
+  //   ready = 至少有一条入边被真正走到
+  //   skip  = 所有入边都已定局、但没有一条被走到（分支没选中它）
+  //   wait  = 还有上游没跑完
+  function evaluateNode(run, node, graph) {
+    const incoming = graph.incoming.get(node.id) || [];
+    if (!incoming.length) return 'ready';
+    let anyActive = false;
+    let allSettled = true;
+    for (const edge of incoming) {
+      const up = run.nodes[edge.from];
+      if (!up || !TERMINAL.has(up.status)) { allSettled = false; continue; }
+      if (up.status !== 'success') continue;
+      const taken = takenBranch(run, edge.from);
+      // 上游不是分支节点（taken 为空）→ 边一定被走到；
+      // 分支节点 → 只有边上的分支名和它实际走的一致才算走到
+      if (!edge.branch || !taken || edge.branch === taken) anyActive = true;
+    }
+    if (anyActive) return 'ready';
+    return allSettled ? 'skip' : 'wait';
+  }
+
   function pickNext(run, graph) {
     for (const node of graph.nodes) {
       const state = run.nodes[node.id];
       if (!state || state.status !== 'pending') continue;
-      const upstream = graph.incoming.get(node.id) || [];
-      const ready = upstream.every((id) => {
-        const up = run.nodes[id];
-        return up && TERMINAL.has(up.status);
-      });
-      if (ready) return node;
+      const verdict = evaluateNode(run, node, graph);
+      if (verdict === 'ready') return { node, verdict };
+      // 分支没选中的节点直接标记跳过，它的下游再下一轮跟着跳过
+      if (verdict === 'skip') return { node, verdict };
     }
     return null;
   }
@@ -134,8 +162,8 @@ function create({ store, bridge, writeLog }) {
       if (run.paused) { store.saveRun(run); return; }
       if (RUN_TERMINAL.has(run.status)) return;
 
-      const next = pickNext(run, graph);
-      if (!next) {
+      const picked = pickNext(run, graph);
+      if (!picked) {
         if (!hasPendingOrRunning(run)) {
           const failed = Object.values(run.nodes).some((state) => state.status === 'failed');
           finalize(run, failed ? 'failed' : 'success', failed ? (run.error || '存在失败节点') : null);
@@ -145,6 +173,16 @@ function create({ store, bridge, writeLog }) {
         }
         return;
       }
+      // 分支没选中：标记跳过，继续找下一个
+      if (picked.verdict === 'skip') {
+        const skippedState = run.nodes[picked.node.id];
+        skippedState.status = 'skipped';
+        skippedState.finished_at = nowIso();
+        skippedState.error = null;
+        store.saveRun(run);
+        continue;
+      }
+      const next = picked.node;
       await executeNode(run, next, graph);
     }
   }
@@ -210,8 +248,8 @@ function create({ store, bridge, writeLog }) {
 
   async function runNode(run, node, graph) {
     const executor = NODE_DEFS[node.type];
-    const incomingIds = graph.incoming.get(node.id) || [];
-    const firstUpstream = incomingIds[0];
+    const incomingEdges = graph.incoming.get(node.id) || [];
+    const firstUpstream = incomingEdges.length ? incomingEdges[0].from : null;
 
     const scope = {};
     for (const item of graph.nodes) {
@@ -246,6 +284,10 @@ function create({ store, bridge, writeLog }) {
       progress: (value) => { state.progress = value; store.saveRun(run); },
       isCancelled: () => run.cancel_requested === true,
       signal: controllers.get(run.id)?.signal || null,
+      // 直接上游里已经成功跑完的节点输出，变量聚合节点用得到
+      upstreams: incomingEdges
+        .map((edge) => ({ id: edge.from, branch: edge.branch, output: run.nodes[edge.from]?.output ?? null }))
+        .filter((item) => item.output !== null && item.output !== undefined && run.nodes[item.id]?.status === 'success'),
       bridge,
     };
     const raw = await executor.run(ctx);

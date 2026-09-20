@@ -4,6 +4,7 @@
 'use strict';
 
 const vm = require('vm');
+const { resolveParam } = require('./vars');
 
 const NODE_DEFS = {
   // ---------------- 基础 ----------------
@@ -60,6 +61,86 @@ const NODE_DEFS = {
         Object.assign(ctx.run.variables, out);
       }
       return out;
+    },
+  },
+
+  // ---------------- 逻辑 ----------------
+  condition: {
+    label: '条件分支', icon: '⑂', group: '逻辑', color: 'violet',
+    description: '按条件把流程分到不同出口，只有命中那条继续跑，其余整条跳过',
+    inputs: ['main'],
+    // branches: true → 画布上按分支渲染多个出口（Coze 的选择器节点）
+    branches: true,
+    outputs: [
+      { key: 'branch', label: '命中的出口名', type: 'string' },
+      { key: 'index', label: '命中序号', type: 'number' },
+    ],
+    params: [
+      { key: 'branches', label: '出口与条件', type: 'branches', required: true,
+        default: [{ key: '条件1', expr: '' }],
+        help: '从上往下判断，命中第一个就停下；都不命中走「否则」出口' },
+      { key: 'input_fields', label: '判断用的输入', type: 'pairs',
+        help: '不填就用上游节点的输出；填了之后表达式里用 input.名称 取' },
+    ],
+    run(ctx) {
+      // 判断用的输入：优先用节点自己声明的映射，否则用上游节点的输出
+      const inputRows = Array.isArray(ctx.params.input_fields) ? ctx.params.input_fields : [];
+      let judgeInput = ctx.input;
+      if (inputRows.length) {
+        const mapped = {};
+        for (const row of inputRows) {
+          const key = String(row?.key || '').trim();
+          if (key) mapped[key] = resolveParam(row?.value, ctx.scope);
+        }
+        judgeInput = mapped;
+      }
+      const rows = Array.isArray(ctx.params.branches) ? ctx.params.branches : [];
+      let hit = null;
+      let hitIndex = -1;
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        const expr = String(row?.expr || '').trim();
+        if (!expr) continue;
+        let value = false;
+        try {
+          value = evaluateExpression(expr, { ...ctx, input: judgeInput });
+        } catch (err) {
+          throw new Error(`分支「${row?.key || index + 1}」的条件求值失败：${err.message}`);
+        }
+        if (value) { hit = String(row.key || `分支${index + 1}`); hitIndex = index + 1; break; }
+      }
+      if (hit === null) { hit = 'else'; hitIndex = 0; }
+      ctx.log(`条件分支命中：${hit}`);
+      return { branch: hit, index: hitIndex, is_else: hit === 'else', judged: judgeInput };
+    },
+  },
+
+  merge: {
+    label: '变量聚合', icon: '⊕', group: '逻辑', color: 'violet',
+    description: '把多个分支的输出合并到一起，哪个分支跑了就聚合哪个',
+    inputs: ['main'],
+    outputs: [{ key: 'output', label: '聚合结果', type: 'object' }],
+    params: [
+      { key: 'fields', label: '聚合哪些字段', type: 'pairs',
+        help: '留空则把上游输出的所有字段合并进来；填了只取这些字段' },
+    ],
+    run(ctx) {
+      const upstreams = Array.isArray(ctx.upstreams) ? ctx.upstreams : [];
+      const merged = {};
+      for (const item of upstreams) {
+        if (item && item.output && typeof item.output === 'object') Object.assign(merged, item.output);
+      }
+      if (!Object.keys(merged).length && ctx.input && typeof ctx.input === 'object') Object.assign(merged, ctx.input);
+      const rows = Array.isArray(ctx.params.fields) ? ctx.params.fields : [];
+      if (rows.length) {
+        const picked = {};
+        for (const row of rows) {
+          const key = String(row?.key || '').trim();
+          if (key) picked[key] = resolveParam(row?.value, ctx.scope);
+        }
+        return { output: picked, ...picked, merged_from: upstreams.map((item) => item.id) };
+      }
+      return { output: merged, ...merged, merged_from: upstreams.map((item) => item.id) };
     },
   },
 
@@ -503,6 +584,25 @@ const NODE_DEFS = {
 // ---------------- 执行期公用 ----------------
 
 const delay = (ms) => new Promise((resolve) => { const timer = setTimeout(resolve, ms); if (timer.unref) timer.unref(); });
+
+// 条件分支用的表达式求值：在受限沙箱里对 input / outputs / vars 求值
+function evaluateExpression(expr, ctx) {
+  const sandbox = {
+    input: ctx.input,
+    outputs: ctx.scope,
+    vars: (ctx.run && ctx.run.variables) || {},
+    JSON, Math, String, Number, Boolean, Array, Object, Date,
+    parseInt, parseFloat, isNaN, isFinite,
+    result: undefined,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    `result = (function(input, outputs, vars){ return (${expr}); })(input, outputs, vars);`,
+    sandbox,
+    { timeout: 1500 },
+  );
+  return Boolean(sandbox.result);
+}
 
 function safeString(value) {
   if (typeof value === 'string') return value;
