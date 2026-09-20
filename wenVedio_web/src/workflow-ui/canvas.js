@@ -774,18 +774,35 @@ export function createCanvas(host, handlers = {}) {
   }
 
   let clipboard = null;
+  const CLIPBOARD_KEY = 'wenvedio-wf-clipboard';
 
   function copySelection() {
-    if (!selection.size) return;
+    if (!selection.size) return false;
     clipboard = {
       nodes: nodes.filter((n) => selection.has(n.id)).map((n) => JSON.parse(JSON.stringify(n))),
       edges: edges.filter((e) => selection.has(e.from) && selection.has(e.to)).map((e) => ({ ...e })),
     };
+    // 同时落到 localStorage：切到别的工作流（或刷新页面）还能粘进去，Coze 的跨画布复制
+    try { localStorage.setItem(CLIPBOARD_KEY, JSON.stringify(clipboard)); } catch (_) { /* 存不下也不影响本次粘贴 */ }
     handlers.onStatus?.(`已复制 ${clipboard.nodes.length} 个节点`);
+    return true;
+  }
+
+  function readClipboard() {
+    if (clipboard && clipboard.nodes && clipboard.nodes.length) return clipboard;
+    try {
+      const saved = JSON.parse(localStorage.getItem(CLIPBOARD_KEY) || 'null');
+      if (saved && Array.isArray(saved.nodes) && saved.nodes.length) {
+        clipboard = saved;
+        return clipboard;
+      }
+    } catch (_) { /* 剪贴板损坏就当空的 */ }
+    return null;
   }
 
   function pasteClipboard() {
-    if (!clipboard || !clipboard.nodes.length) return;
+    const source = readClipboard();
+    if (!source) return;
     snapshot();
     const idMap = new Map();
     const created = [];
