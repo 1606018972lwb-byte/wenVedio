@@ -131,6 +131,8 @@ export function createCanvas(host, handlers = {}) {
       const fill = status === 'success' ? 'var(--ok)' : status === 'failed' ? 'var(--danger)'
         : status === 'running' ? 'var(--info)' : selection.has(node.id) ? 'var(--brand)' : 'var(--border-2)';
       rect.setAttribute('fill', fill);
+      // 禁用节点在主画布上是虚线淡色，缩略图里也得能区分出来
+      rect.setAttribute('opacity', node.disabled === true ? '0.3' : '0.85');
     }
     for (const rect of [...mmNodes.children]) {
       if (!seen.has(rect.getAttribute('data-mm'))) rect.remove();

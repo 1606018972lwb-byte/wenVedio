@@ -247,6 +247,31 @@ async function importWorkflow(file) {
   finally { const input = $('#wfImportFile'); if (input) input.value = ''; }
 }
 
+// 复制一段文本到剪贴板：优先用 clipboard API，不可用时退化到临时 textarea
+function copyTextToClipboard(text, okMessage) {
+  const fallback = () => {
+    try {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand('copy');
+      area.remove();
+      return ok;
+    } catch (_) { return false; }
+  };
+  const value = String(text == null ? '' : text);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(value)
+      .then(() => toast(okMessage || '已复制'))
+      .catch(() => toast(fallback() ? (okMessage || '已复制') : '复制失败', fallback() ? 'ok' : 'error'));
+    return;
+  }
+  toast(fallback() ? (okMessage || '已复制') : '复制失败', fallback() ? 'ok' : 'error');
+}
+
 // 从选中的节点开始试运行：上游沿用上一次运行的结果（改最后一步不用从头跑）
 async function runFromNode(nodeId) {
   if (!state.current) return;
@@ -1412,7 +1437,8 @@ function openContextMenu(nodeId, event) {
   openMenuAt(event, [
     { label: '⚙ 配置节点', run: () => { state.selectedNodeId = nodeId; renderInspector(); } },
     { label: '⚡ 测试此节点', run: () => debugNode(node) },
-    { label: '⧉ 复制', run: () => { state.canvas.selectNode(nodeId); copyNodeToClipboard(); } },
+    { label: '⧉ 复制节点 ID', run: () => copyTextToClipboard(nodeId, `已复制节点 ID：${nodeId}`) },
+    { label: '⧉ 复制节点', run: () => { state.canvas.selectNode(nodeId); copyNodeToClipboard(); } },
     { label: '▶ 从这一步开始试运行', run: () => runFromNode(nodeId) },
     { label: node.disabled ? '▶ 启用此节点' : '⏸ 禁用此节点（跳过并透传）', run: () => {
       const wasDisabled = node.disabled === true;
