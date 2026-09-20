@@ -3,6 +3,12 @@
 
 .wf-view { display: flex; flex-direction: column; min-height: 100%; }
 .wf-view[hidden] { display: none; }
+/* 整个工作流视图禁掉原生选择：从任何空白处拖拽都不会扫出选区色块。
+   输入框与 JSON 输出保留可选中，方便复制。 */
+.wf-view { -webkit-user-select: none; user-select: none; }
+.wf-view input, .wf-view textarea, .wf-view .wf-io pre, .wf-view .wf-io code {
+  -webkit-user-select: text; user-select: text;
+}
 
 /* ---------------- 列表页 ---------------- */
 .wf-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
@@ -65,18 +71,20 @@
 .wf-body { position: relative; flex: 1 1 auto; min-height: calc(100vh - 205px); }
 .wf-canvas-host { position: absolute; inset: 0; }
 
-/* 左：节点库（悬浮，可收起） */
+/* 左：节点库（悬浮，可拖动、可收起；位置由 JS 用 fixed 定位） */
 .wf-palette {
-  position: absolute; left: 14px; bottom: 14px; z-index: 6;
+  position: fixed; left: 14px; top: 120px; z-index: 6;
   width: 198px; max-height: min(48vh, 400px); padding: 10px 10px 8px;
   display: flex; flex-direction: column; gap: 3px;
   border: 1px solid var(--border); border-radius: var(--r-lg);
   background: var(--surface); box-shadow: var(--sh-3);
   overflow-y: auto;
+  -webkit-user-drag: none;
 }
 .wf-palette.collapsed { width: auto; max-height: none; padding: 8px 12px; overflow: visible; }
 .wf-palette.collapsed .wf-palette-body { display: none; }
-.wf-palette-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.wf-palette-head { display: flex; align-items: center; gap: 8px; margin: -2px 0 6px; padding: 2px 0; cursor: grab; }
+.wf-palette-head.dragging { cursor: grabbing; }
 .wf-palette-head b { font-size: 12px; font-weight: 750; color: var(--text); white-space: nowrap; }
 .wf-palette-toggle {
   margin-left: auto; width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center;

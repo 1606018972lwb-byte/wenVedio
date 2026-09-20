@@ -230,6 +230,63 @@ function renderEditor() {
   $('#wfName').addEventListener('input', () => { state.current.name = $('#wfName').value; markDirty(); });
 }
 
+// 节点库是悬浮窗：位置用 fixed 记在本地，可以按住标题栏拖到任意位置
+const PALETTE_POS_KEY = 'wenvedio-wf-palette-pos';
+
+function readPalettePos() {
+  if (state.palettePos) return state.palettePos;
+  try {
+    const saved = JSON.parse(localStorage.getItem(PALETTE_POS_KEY) || 'null');
+    if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) { state.palettePos = saved; return saved; }
+  } catch (_) { /* 读不到就用默认位置 */ }
+  return null;
+}
+
+function placePalette(host) {
+  const rect = host.getBoundingClientRect();
+  const saved = readPalettePos();
+  if (saved) {
+    host.style.left = `${Math.max(8, Math.min(saved.x, window.innerWidth - rect.width - 8))}px`;
+    host.style.top = `${Math.max(8, Math.min(saved.y, window.innerHeight - rect.height - 8))}px`;
+    return;
+  }
+  const canvas = $('#wfCanvasHost')?.getBoundingClientRect();
+  if (!canvas) return;
+  host.style.left = `${Math.round(canvas.left + 14)}px`;
+  host.style.top = `${Math.round(Math.max(8, canvas.bottom - rect.height - 14))}px`;
+}
+
+function bindPaletteDrag(host) {
+  const handle = $('.wf-palette-head', host);
+  if (!handle) return;
+  handle.addEventListener('mousedown', (event) => {
+    if (event.target.closest('.wf-palette-toggle')) return;
+    event.preventDefault();
+    const rect = host.getBoundingClientRect();
+    const start = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
+    const onMove = (moveEvent) => {
+      moveEvent.preventDefault();
+      const width = host.offsetWidth;
+      const height = host.offsetHeight;
+      const x = Math.max(8, Math.min(start.left + (moveEvent.clientX - start.x), window.innerWidth - width - 8));
+      const y = Math.max(8, Math.min(start.top + (moveEvent.clientY - start.y), window.innerHeight - height - 8));
+      host.style.left = `${Math.round(x)}px`;
+      host.style.top = `${Math.round(y)}px`;
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      handle.classList.remove('dragging');
+      const box = host.getBoundingClientRect();
+      state.palettePos = { x: Math.round(box.left), y: Math.round(box.top) };
+      try { localStorage.setItem(PALETTE_POS_KEY, JSON.stringify(state.palettePos)); } catch (_) { /* 忽略 */ }
+    };
+    handle.classList.add('dragging');
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+}
+
 function renderPalette() {
   const host = $('#wfPalette');
   const keyword = (host.dataset.search || '').toLowerCase();
@@ -252,6 +309,8 @@ function renderPalette() {
       `).join('')}
     </div>`;
 
+  placePalette(host);
+  bindPaletteDrag(host);
   $('#wfPaletteToggle')?.addEventListener('click', () => {
     host.dataset.collapsed = collapsed ? '0' : '1';
     renderPalette();
