@@ -401,6 +401,15 @@ function paramVisible(param, values) {
   return true;
 }
 
+// 节点实际对外暴露的输出：用户声明优先，否则用节点类型的默认声明
+function effectiveOutputs(node, def) {
+  if (Array.isArray(node?.output_params) && node.output_params.length) {
+    return node.output_params.map((row) => ({ key: row.key, label: row.label || row.from || '', type: row.type || 'any' }));
+  }
+  const outputs = def?.outputs?.length ? def.outputs : [{ key: 'output', label: '输出' }];
+  return outputs;
+}
+
 function upstreamPaths(nodeId) {
   const { nodes, edges } = state.canvas.getGraph();
   const incoming = new Map(nodes.map((n) => [n.id, []]));
@@ -419,7 +428,7 @@ function upstreamPaths(nodeId) {
     const node = nodes.find((n) => n.id === id);
     const def = state.meta.nodes[node?.type];
     if (!node || !def) continue;
-    const outputs = def.outputs?.length ? def.outputs : [{ key: 'output', label: '输出' }];
+    const outputs = effectiveOutputs(node, def);
     for (const output of outputs) {
       out.push({ path: `${id}.${output.key}`, group: node.title || node.type, label: output.label || output.key });
     }
@@ -429,8 +438,11 @@ function upstreamPaths(nodeId) {
 
 // 节点配置是右侧面板：点选节点出现，取消选择收起（Coze 习惯）
 function closeInspector() {
+  const had = Boolean($('#wfInspector'));
   $('#wfInspector')?.remove();
   $('#wfBody')?.classList.remove('has-config');
+  // 画布变宽了，没手动调过视角就重新适配
+  if (had) setTimeout(() => state.canvas?.autoFit?.(), 40);
 }
 
 function renderInspector() {
@@ -465,8 +477,31 @@ function renderInspector() {
       ${node.error_policy === 'retry' ? `
         <label class="wf-field"><span class="lbl">最大重试次数</span><input type="number" id="wfMaxRetry" min="0" max="10" value="${Number(node.max_retry) || 0}" /></label>
         <label class="wf-field"><span class="lbl">重试间隔(毫秒)</span><input type="number" id="wfRetryInterval" min="0" max="60000" step="100" value="${Number(node.retry_interval_ms) || 2000}" /></label>` : ''}
-      <div class="wf-insp-section">输出字段（可被下游引用）</div>
-      <div class="wf-io"><pre>${esc((def.outputs || []).map((o) => `${node.id}.${o.key}  ${o.label || ''}`).join('\n') || '（无输出）')}</pre></div>
+      <div class="wf-insp-section">输入参数</div>
+      <small class="help" style="display:block;margin-bottom:6px">不填就用上游第一个节点的输出；填了之后代码里用 <code>input.参数名</code> 取。</small>
+      <div class="wf-rows" data-io="input">
+        ${(node.input_params || []).map((row, index) => `<div class="wf-row" data-io-row="input" data-index="${index}" style="grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) 26px">
+          <input type="text" data-io="key" value="${esc(row.key || '')}" placeholder="参数名" />
+          <input type="text" data-io="value" value="${esc(typeof row.value === 'string' ? row.value : JSON.stringify(row.value ?? ''))}" placeholder="{{节点.字段}}" />
+          <button type="button" class="wf-row-del" data-io-del="input" data-index="${index}">×</button>
+        </div>`).join('')}
+      </div>
+      <button type="button" class="wf-add-row" data-io-add="input">＋ 添加输入参数</button>
+
+      <div class="wf-insp-section">输出参数</div>
+      <small class="help" style="display:block;margin-bottom:6px">决定下游能引用到什么，留空则用该节点类型的默认输出。</small>
+      <div class="wf-rows" data-io="output">
+        ${(node.output_params || []).map((row, index) => `<div class="wf-row" data-io-row="output" data-index="${index}" style="grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) 26px">
+          <input type="text" data-io="key" value="${esc(row.key || '')}" placeholder="名称" />
+          <input type="text" data-io="from" value="${esc(row.from || '')}" placeholder="来源路径，留空=同名" />
+          <button type="button" class="wf-row-del" data-io-del="output" data-index="${index}">×</button>
+        </div>`).join('')}
+      </div>
+      <div class="wf-insp-actions" style="margin-top:6px">
+        <button type="button" data-io-add="output">＋ 添加输出参数</button>
+        <button type="button" data-io-reset="1">用默认输出</button>
+      </div>
+      <div class="wf-io" style="margin-top:8px"><span class="io-title">下游可以这样引用</span><pre>${esc(effectiveOutputs(node, def).map((o) => `${node.id}.${o.key}`).join('\n') || '（无输出）')}</pre></div>
       ${runState ? `
         <div class="wf-insp-section">本次运行</div>
         <div class="wf-io ${runState.status === 'failed' ? 'bad' : runState.status === 'success' ? 'ok' : ''}">
@@ -481,6 +516,8 @@ function renderInspector() {
   document.body.appendChild(pop);
   $('#wfBody').insertBefore(pop, $('#wfPalette'));
   $('#wfBody').classList.add('has-config');
+  // 画布变窄了，没手动调过视角就重新适配，避免右侧节点被挤出可视区
+  setTimeout(() => state.canvas?.autoFit?.(), 40);
   // 面板内部的点击不要冒泡到画布，否则会被当成点空白而收起
   pop.addEventListener('mousedown', (event) => event.stopPropagation());
   pop.querySelector('[data-pop-close]').addEventListener('click', () => closeInspector());
@@ -672,6 +709,38 @@ function bindParamInputs(node, def) {
     state.canvas.updateNodeParams(node.id, rows);
     renderInspector();
   }));
+
+  // 输入参数 / 输出参数：用户自己声明（Coze 代码节点那套）
+  const readIoRows = (kind) => $$(`[data-io-row="${kind}"]`, host).map((row) => {
+    const key = ($('[data-io="key"]', row)?.value || '').trim();
+    if (kind === 'input') return { key, value: $('[data-io="value"]', row)?.value || '' };
+    return { key, from: ($('[data-io="from"]', row)?.value || '').trim() };
+  }).filter((row) => row.key);
+
+  const writeIoRows = (kind, rows) => {
+    const patch = kind === 'input' ? { input_params: rows } : { output_params: rows };
+    state.canvas.updateNode(node.id, patch);
+    state.selectedNodeId = node.id;
+    renderInspector();
+  };
+
+  $$('[data-io-add]', host).forEach((button) => button.addEventListener('click', () => {
+    const kind = button.dataset.ioAdd;
+    writeIoRows(kind, [...readIoRows(kind), kind === 'input' ? { key: '', value: '' } : { key: '', from: '' }]);
+  }));
+  $$('[data-io-del]', host).forEach((button) => button.addEventListener('click', () => {
+    const kind = button.dataset.ioDel;
+    writeIoRows(kind, readIoRows(kind).filter((_, index) => index !== Number(button.dataset.index)));
+  }));
+  $$('[data-io-row] [data-io]', host).forEach((input) => input.addEventListener('change', () => {
+    const kind = input.closest('[data-io-row]').dataset.ioRow;
+    writeIoRows(kind, readIoRows(kind));
+  }));
+  $('[data-io-reset]', host)?.addEventListener('click', () => {
+    state.canvas.updateNode(node.id, { output_params: [] });
+    state.selectedNodeId = node.id;
+    renderInspector();
+  });
 
   // 变量选择器
   $$('[data-insert-var]', host).forEach((button) => button.addEventListener('click', (event) => {

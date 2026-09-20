@@ -7,7 +7,7 @@
 
 const crypto = require('crypto');
 const { NODE_DEFS, delay } = require('./nodes');
-const { resolveParam } = require('./vars');
+const { resolveParam, getPath } = require('./vars');
 
 const TICK_MS = 800;
 const TERMINAL = new Set(['success', 'failed', 'skipped']);
@@ -212,7 +212,6 @@ function create({ store, bridge, writeLog }) {
     const executor = NODE_DEFS[node.type];
     const incomingIds = graph.incoming.get(node.id) || [];
     const firstUpstream = incomingIds[0];
-    const input = firstUpstream && run.nodes[firstUpstream] ? (run.nodes[firstUpstream].output ?? null) : null;
 
     const scope = {};
     for (const item of graph.nodes) {
@@ -221,6 +220,18 @@ function create({ store, bridge, writeLog }) {
     }
     const state = run.nodes[node.id];
     const params = resolveParam(node.params || {}, scope);
+    // 输入：节点自己声明了「输入参数」就按映射构造（Coze 代码节点的做法），
+    // 没声明则沿用上游第一个节点的输出，旧工作流行为不变。
+    let input = firstUpstream && run.nodes[firstUpstream] ? (run.nodes[firstUpstream].output ?? null) : null;
+    const inputRows = Array.isArray(node.input_params) ? node.input_params : [];
+    if (inputRows.length) {
+      const mapped = {};
+      for (const row of inputRows) {
+        const key = String(row?.key || '').trim();
+        if (key) mapped[key] = resolveParam(row?.value, scope);
+      }
+      input = mapped;
+    }
     const ctx = {
       node,
       run,
@@ -237,7 +248,29 @@ function create({ store, bridge, writeLog }) {
       signal: controllers.get(run.id)?.signal || null,
       bridge,
     };
-    return executor.run(ctx);
+    const raw = await executor.run(ctx);
+    return projectOutput(raw, node);
+  }
+
+  // 输出：节点声明了「输出参数」就按声明投影（可以改名字、可以取嵌套字段），
+  // 没声明就原样返回。这样下游能引用的字段完全由用户决定。
+  function projectOutput(raw, node) {
+    const rows = Array.isArray(node.output_params) ? node.output_params : [];
+    if (!rows.length) return raw;
+    const out = {};
+    for (const row of rows) {
+      const key = String(row?.key || '').trim();
+      if (!key) continue;
+      const from = String(row?.from || '').trim() || key;
+      out[key] = getPath(raw, from);
+    }
+    // 运行记录与下游还要用的内部字段，避免被投影掉
+    if (raw && typeof raw === 'object') {
+      for (const keep of ['printed', 'interpreter', 'env_name', 'total_tokens', 'model', 'task_id', 'cost', 'cost_currency']) {
+        if (raw[keep] !== undefined && out[keep] === undefined) out[keep] = raw[keep];
+      }
+    }
+    return out;
   }
 
   function kick(runId) {

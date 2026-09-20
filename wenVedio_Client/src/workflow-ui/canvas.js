@@ -64,6 +64,7 @@ export function createCanvas(host, handlers = {}) {
   let panX = 40;
   let panY = 30;
   let readOnly = false;
+  let userAdjusted = false;
   let edgeSeq = 0;
 
   const nodeEls = new Map();
@@ -324,6 +325,7 @@ export function createCanvas(host, handlers = {}) {
     if (mode === 'pan') {
       panX = drag.panX + (event.clientX - drag.startX);
       panY = drag.panY + (event.clientY - drag.startY);
+      userAdjusted = true;
       applyTransform();
       return;
     }
@@ -406,6 +408,7 @@ export function createCanvas(host, handlers = {}) {
     panX = cx - ((cx - panX) / scale) * next;
     panY = cy - ((cy - panY) / scale) * next;
     scale = next;
+    userAdjusted = true;
     applyTransform();
   }, { passive: false });
 
@@ -622,10 +625,12 @@ export function createCanvas(host, handlers = {}) {
     panX = cx - ((cx - panX) / scale) * next;
     panY = cy - ((cy - panY) / scale) * next;
     scale = next;
+    userAdjusted = true;
     applyTransform();
   }
 
   function fit() {
+    userAdjusted = false;
     if (!nodes.length) { scale = 1; panX = 40; panY = 30; applyTransform(); return; }
     const rect = svg.getBoundingClientRect();
     const minX = Math.min(...nodes.map((n) => n.x));
@@ -639,6 +644,12 @@ export function createCanvas(host, handlers = {}) {
     panX = (rect.width - (maxX - minX) * scale) / 2 - minX * scale;
     panY = (rect.height - (maxY - minY) * scale) / 2 - minY * scale;
     applyTransform();
+  }
+
+  // 布局变化（例如右侧配置面板开合导致画布变窄）后重新适配，
+  // 但用户自己缩放/平移过就不打扰他。
+  function autoFit() {
+    if (!userAdjusted) fit();
   }
 
   // 简易分层自动布局：按入度拓扑分层，同层纵向排列
@@ -778,6 +789,7 @@ export function createCanvas(host, handlers = {}) {
     undo,
     redo,
     fit,
+    autoFit,
     autoLayout,
     zoomBy,
     getSelection: () => [...selection],

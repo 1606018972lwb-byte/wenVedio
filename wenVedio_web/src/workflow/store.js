@@ -61,6 +61,17 @@ function create({ configDir, writeLog }) {
       x: num(raw.x, 0),
       y: num(raw.y, 0),
       params: raw.params && typeof raw.params === 'object' && !Array.isArray(raw.params) ? raw.params : {},
+      // 输入映射与输出声明都由用户自定义（Coze 代码节点那套）：留空则用节点类型的默认值
+      input_params: (Array.isArray(raw.input_params) ? raw.input_params : [])
+        .filter((row) => row && typeof row === 'object')
+        .map((row) => ({ key: str(row.key, 60).trim(), value: row.value === undefined ? '' : row.value, type: str(row.type, 20) || 'any' }))
+        .filter((row) => row.key)
+        .slice(0, 60),
+      output_params: (Array.isArray(raw.output_params) ? raw.output_params : [])
+        .filter((row) => row && typeof row === 'object')
+        .map((row) => ({ key: str(row.key, 60).trim(), label: str(row.label, 60), from: str(row.from, 120).trim(), type: str(row.type, 20) || 'any' }))
+        .filter((row) => row.key)
+        .slice(0, 60),
       error_policy: ['stop', 'continue', 'retry'].includes(raw.error_policy) ? raw.error_policy : 'stop',
       max_retry: Math.max(0, Math.min(10, num(raw.max_retry, 2))),
       retry_interval_ms: Math.max(0, Math.min(60000, num(raw.retry_interval_ms, 2000))),
