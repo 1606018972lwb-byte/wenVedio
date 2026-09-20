@@ -3817,6 +3817,7 @@ function showView(view) {
   const isSettings = view === 'settings';
   const isTokens = view === 'tokens';
   const isPrompts = view === 'prompts';
+  const isWorkflow = view === 'workflow';
   const imageView = $('#imageView');
   const workspaceView = $('#workspaceView');
   const recordsView = $('#recordsView');
@@ -3824,18 +3825,27 @@ function showView(view) {
   const settingsView = $('#settingsView');
   const tokensView = $('#tokensView');
   const promptsView = $('#promptsView');
+  const workflowView = $('#workflowView');
   const pageEyebrow = $('#pageEyebrow');
-  workspaceView.hidden = isQuery || isRecords || isSettings || isTokens || isPrompts || isImage;
+  workspaceView.hidden = isQuery || isRecords || isSettings || isTokens || isPrompts || isImage || isWorkflow;
   imageView.hidden = !isImage;
   recordsView.hidden = !isRecords;
   queryView.hidden = !isQuery;
   settingsView.hidden = !isSettings;
   tokensView.hidden = !isTokens;
   promptsView.hidden = !isPrompts;
+  if (workflowView) workflowView.hidden = !isWorkflow;
+  // 工作流编辑器在工作区首次可见时挂载（独立 ES 模块，按需初始化）
+  if (isWorkflow) {
+    try { window.wenvedioWorkflow?.mount?.(); } catch (err) { console.error('工作流模块挂载失败', err); }
+  } else {
+    try { window.wenvedioWorkflow?.unmount?.(); } catch (_) { /* 忽略 */ }
+  }
   // 页面标题由各视图内的 h2 承担，顶栏只留一行面包屑，避免同一句话出现两三次
   const crumbs = {
     image: 'AI 工具 / 图片生成',
     workspace: 'AI 工具 / 视频生成',
+    workflow: '工作流',
     tasks: '任务记录',
     query: '查询入口',
     settings: '后台管理 / 模型管理',
@@ -3844,14 +3854,16 @@ function showView(view) {
   };
   if (pageEyebrow) pageEyebrow.textContent = crumbs[view] || crumbs.workspace;
   $$('.main-nav .nav-item, .main-nav .nav-sub-item').forEach((item) => item.classList.remove('active'));
-  const activeId = isImage ? 'navImage' : isQuery ? 'navQuery' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : isPrompts ? 'openPrompts' : isRecords ? '' : 'navWorkspace';
+  const activeId = isImage ? 'navImage' : isQuery ? 'navQuery' : isSettings ? 'openSettings' : isTokens ? 'openTokens' : isPrompts ? 'openPrompts' : isWorkflow ? 'navWorkflow' : isRecords ? '' : 'navWorkspace';
   const activeEl = activeId ? $(`#${activeId}`) : null;
   if (activeEl) activeEl.classList.add('active');
   if (isRecords) { expandGroup('tasks'); syncRecordsKindHighlight(); }
-  if (isImage || (!isQuery && !isRecords && !isSettings && !isTokens && !isImage)) expandGroup('ai');
+  if (isImage || (!isQuery && !isRecords && !isSettings && !isTokens && !isPrompts && !isWorkflow && !isImage)) expandGroup('ai');
   if (isSettings || isTokens) expandGroup('admin');
   $$('.mobile-nav button').forEach((item) => item.classList.remove('active'));
-  $(`#${isImage ? 'mobileImage' : isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace'}`).classList.add('active');
+  const mobileId = isWorkflow ? '' : (isImage ? 'mobileImage' : isQuery ? 'mobileQuery' : isRecords ? 'mobileTasks' : (isSettings || isTokens) ? 'mobileApi' : 'mobileWorkspace');
+  const mobileEl = mobileId ? $(`#${mobileId}`) : null;
+  if (mobileEl) mobileEl.classList.add('active');
   // 内容区是独立滚动容器（标题栏固定），所以滚它而不是 window
   const scroller = document.querySelector('.main-content');
   if (scroller) scroller.scrollTo({ top: 0, behavior: 'smooth' });
@@ -3974,6 +3986,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   startServiceWatch();
+  // 工作流模块是独立作用域，把前端的提示条暴露给它复用
+  window.wenvedioToast = showToast;
   loadGenValues();
   loadTasks();
   initializeSidebar();
@@ -4182,6 +4196,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#navTasksImage').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('image'); });
   $('#navTasksVideo').addEventListener('click', (event) => { event.preventDefault(); setRecordsKind('video'); });
   $('#navQuery').addEventListener('click', (event) => { event.preventDefault(); showView('query'); });
+  $('#navWorkflow').addEventListener('click', (event) => { event.preventDefault(); showView('workflow'); });
   $('#gotoImageRecords').addEventListener('click', () => { setRecordsKind('image'); showView('tasks'); });
   $('#gotoVideoRecords').addEventListener('click', () => { setRecordsKind('video'); showView('tasks'); });
   $('#mobileImage').addEventListener('click', () => showView('image'));

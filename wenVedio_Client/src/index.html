@@ -9,6 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="ui-overrides.css" />
+    <link rel="stylesheet" href="workflow-ui/workflow.css" />
     <script>
       // 首帧前定好主题，避免浅色闪一下再变深色
       (function () {
@@ -46,6 +47,7 @@
             <a class="nav-sub-item active" id="navImage" href="#image"><span class="nav-icon">▣</span><span class="nav-label">图片生成</span></a>
             <a class="nav-sub-item" id="navWorkspace" href="#workspace"><span class="nav-icon">✦</span><span class="nav-label">视频生成</span></a>
           </div>
+          <a class="nav-item" id="navWorkflow" href="#workflow"><span class="nav-icon">⇢</span><span class="nav-label">工作流</span></a>
           <a class="nav-item nav-group" id="navTasks" href="#tasks"><span class="nav-icon">◫</span><span class="nav-label">任务记录</span><span class="nav-chevron">⌃</span></a>
           <div class="nav-sub" id="tasksGroup">
             <a class="nav-sub-item" id="navTasksAll" href="#tasks-summary"><span class="nav-icon">▤</span><span class="nav-label">汇总任务</span></a>
@@ -199,6 +201,8 @@
             <div id="tcEmpty" class="empty-state" hidden><span>📭</span><b>还没有任务记录</b><p>提交任务后，记录会出现在这里</p></div>
           </section>
         </section>
+
+        <section class="wf-view" id="workflowView" hidden></section>
 
         <section class="query-view" id="queryView" hidden>
           <div class="query-intro"><span class="section-kicker">03 / ACCESS</span><h2>AutoDL ComfyUI 查询入口</h2><p>前往 AutoDL ComfyUI 查看工作流、任务状态和生成结果。</p></div>
@@ -587,5 +591,7 @@
     </div>
     <div id="toastWrap" aria-live="polite"></div>
     <script src="app.js"></script>
+    <!-- 工作流编辑器是独立的 ES 模块，浏览器原生加载，无需构建步骤 -->
+    <script type="module" src="workflow-ui/editor.js"></script>
   </body>
 </html>

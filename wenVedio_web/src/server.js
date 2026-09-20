@@ -9,6 +9,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { Readable } = require('stream');
 const { URL } = require('url');
+// 工作流模块：存储 / 引擎 / 接口 / 节点注册表，单独放在 workflow/ 下，不写进本文件
+const workflowRuntimeFactory = require('./workflow');
 
 const ROOT = __dirname;
 const PROJECT_ROOT = path.resolve(ROOT, '..');
@@ -17,6 +19,10 @@ const PUBLIC_FILES = new Map([
   ['/app.js', 'text/javascript; charset=utf-8'],
   ['/styles.css', 'text/css; charset=utf-8'],
   ['/ui-overrides.css', 'text/css; charset=utf-8'],
+  // 工作流前端是独立的 ES 模块，不引入构建步骤，由浏览器原生加载
+  ['/workflow-ui/editor.js', 'text/javascript; charset=utf-8'],
+  ['/workflow-ui/canvas.js', 'text/javascript; charset=utf-8'],
+  ['/workflow-ui/workflow.css', 'text/css; charset=utf-8'],
 ]);
 
 // ---------------- 配置读取 ----------------
@@ -77,6 +83,28 @@ const MAX_SEED = 999999999999999;
 const TASK_EXPIRE_MS = 24 * 60 * 60 * 1000; // 距开始生成超过 24 小时仍未完成 → 判定过期
 let scheduledBusy = false;
 let lastScheduledSubmissionAt = 0;
+
+// 把工作流运行时所需的宿主能力集中注入：引擎与节点只通过这个 bridge 触达模型、令牌与生成能力
+const workflowRuntime = workflowRuntimeFactory.create({
+  configDir: CONFIG_DIR,
+  dataDir: DATA_DIR,
+  writeLog,
+  sendJson,
+  readBody,
+  config,
+  models,
+  tokens,
+  tasks: store,
+  imagesDir: IMAGES_DIR,
+  tokenValueFor,
+  helpers: {
+    newLocalId,
+    saveStore,
+    runImageGeneration,
+    performSubmission,
+    syncTaskFromProvider,
+  },
+});
 
 const DEFAULT_MODELS = [
   {
@@ -385,6 +413,8 @@ rebindModelTokens();
 loadStore();
 loadAppSettings();
 cleanExpiredLogs();
+// 工作流引擎在配置目录就绪后启动：会载入定义并把上次没跑完的运行接回来
+workflowRuntime.start();
 
 function randomSeed() {
   while (true) {
@@ -576,6 +606,23 @@ function findResultUrl(remote) {
   if (video?.url) return video.url;
   const first = remote.results.find((item) => typeof item === 'string' || item?.url);
   return typeof first === 'string' ? first : (first?.url || '');
+}
+
+// 把一条任务记录与平台状态同步一次。
+// 工作流的图片/视频节点靠它推进（引擎在等待期间反复调用），因此单独抽出来复用。
+async function syncTaskFromProvider(rec) {
+  if (!rec || config.mock || !rec.provider_task_id) return rec;
+  const remote = await queryTask(rec.provider_task_id, rec.model_id);
+  const remoteStatus = remote?.status ?? remote?.state ?? remote?.task_status;
+  if (remoteStatus) rec.status = normalizeProviderStatus(remoteStatus) || rec.status;
+  const videoUrl = findResultUrl(remote);
+  if (videoUrl) rec.video_url = videoUrl;
+  if (remote && remote.progress != null) rec.progress = remote.progress;
+  const platformMessage = String(remote?.msg || remote?.message || remote?.error || remote?.reason || '').trim();
+  if (['failed', 'timeout'].includes(rec.status) && platformMessage) rec.error = platformMessage;
+  if (rec.status === 'completed' && !rec.error) rec.error = null;
+  saveStore();
+  return rec;
 }
 
 function getRequestUrl() {
@@ -1349,6 +1396,9 @@ function sanitizeAiDraft(raw, modelName, kindHint) {
 // ---------------- 路由 ----------------
 async function handleApi(req, res, url) {
   const route = url.pathname;
+
+  // 工作流接口单独一个模块，命中就交出去，没命中继续走下面的路由
+  if (await workflowRuntime.handleApi(req, res, url)) return;
 
   // 健康检查
   if (route === '/api/health') {

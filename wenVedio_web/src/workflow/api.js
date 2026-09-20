@@ -1,0 +1,220 @@
+// 工作流 · HTTP 接口
+// 挂到现有 server.js 的 /api 路由前面：命中就处理，没命中返回 false 交回给原路由。
+'use strict';
+
+function create({ store, engine, host, python, writeLog, sendJson, readBody, nodeMeta }) {
+  const readJson = async (req) => {
+    try {
+      const text = await readBody(req);
+      return text ? JSON.parse(text) : {};
+    } catch (_) {
+      return {};
+    }
+  };
+
+  // 运行前检查开始节点的必填输入
+  function validateInputs(workflow, inputs) {
+    const startNode = (workflow.nodes || []).find((node) => node.type === 'start');
+    if (!startNode) throw new Error('工作流缺少「开始」节点，无法确定输入');
+    const fields = Array.isArray(startNode.params?.fields) ? startNode.params.fields : [];
+    const missing = [];
+    for (const field of fields) {
+      const key = String(field?.key || '').trim();
+      if (!key || field.required === false) continue;
+      const value = inputs?.[key];
+      if (value === undefined || value === null || value === '') missing.push(key);
+    }
+    if (missing.length) throw new Error(`缺少必填输入：${missing.join('、')}`);
+  }
+
+  async function handle(req, res, url) {
+    const route = url.pathname;
+    if (!route.startsWith('/api/workflows') && !route.startsWith('/api/workflow-runs')) return false;
+    const method = req.method;
+
+    // 节点元信息（前端节点库与参数面板都靠它自动渲染）
+    if (route === '/api/workflows/meta' && method === 'GET') {
+      sendJson(res, 200, { ok: true, nodes: nodeMeta, chat_ready: host.hasChatToken(), engine_ready: true });
+      return true;
+    }
+
+    // ---------------- Python 运行环境 ----------------
+    if (route === '/api/workflows/python/envs' && method === 'GET') {
+      const envs = await python.listEnvs();
+      const fallback = python.pickDefault(envs);
+      sendJson(res, 200, {
+        ok: true,
+        envs: envs.map((env) => ({
+          id: env.id, kind: env.kind, name: env.name, prefix: env.prefix, python: env.python,
+          version: env.version, pip: env.pip, pip_version: env.pip_version || '', error: env.error || '',
+        })),
+        selected: python.getSelected(),
+        default_env: fallback ? fallback.id : '',
+        install: python.installStatus(),
+        root: python.pythonRoot,
+      });
+      return true;
+    }
+
+    if (route === '/api/workflows/python/select' && method === 'POST') {
+      const payload = await readJson(req);
+      const id = python.selectEnv(payload.env_id);
+      sendJson(res, 200, { ok: true, selected: id });
+      return true;
+    }
+
+    // pip 缺失时补装（ensurepip → 各镜像的 get-pip.py）
+    if (route === '/api/workflows/python/pip' && method === 'POST') {
+      const payload = await readJson(req);
+      try {
+        const env = await python.resolveEnv(payload.env_id);
+        if (!env) { sendJson(res, 400, { ok: false, msg: '没有可用的 Python 环境' }); return true; }
+        const result = await python.ensurePip(env, (message) => writeLog('info', `pip：${message}`));
+        sendJson(res, 200, { ok: true, ...result, env_id: env.id });
+      } catch (err) {
+        sendJson(res, 200, { ok: false, msg: err.message });
+      }
+      return true;
+    }
+
+    // 一个 Python 都没有时，按多条镜像线路下载安装 3.12 并建好隔离环境
+    if (route === '/api/workflows/python/install' && method === 'POST') {
+      const status = await python.installPython();
+      sendJson(res, 200, { ok: true, install: status });
+      return true;
+    }
+
+    if (route === '/api/workflows/python/status' && method === 'GET') {
+      sendJson(res, 200, { ok: true, install: python.installStatus() });
+      return true;
+    }
+
+    if (route === '/api/workflows' && method === 'GET') {
+      sendJson(res, 200, { ok: true, workflows: store.listWorkflows() });
+      return true;
+    }
+
+    if (route === '/api/workflows' && method === 'POST') {
+      const payload = await readJson(req);
+      const record = store.saveWorkflow(payload || {});
+      sendJson(res, 200, { ok: true, workflow: record });
+      return true;
+    }
+
+    if (route === '/api/workflow-runs' && method === 'GET') {
+      const workflowId = url.searchParams.get('workflow_id') || '';
+      const limit = Number(url.searchParams.get('limit')) || 50;
+      sendJson(res, 200, { ok: true, runs: store.listRuns(workflowId, limit) });
+      return true;
+    }
+
+    let match = route.match(/^\/api\/workflow-runs\/([^/]+)(?:\/(cancel|pause|resume))?$/);
+    if (match) {
+      const runId = decodeURIComponent(match[1]);
+      const action = match[2];
+      if (!action && method === 'GET') {
+        const run = store.getRun(runId);
+        if (!run) { sendJson(res, 404, { ok: false, msg: '运行记录不存在' }); return true; }
+        sendJson(res, 200, { ok: true, run, advancing: engine.isAdvancing(runId) });
+        return true;
+      }
+      if (action && method === 'POST') {
+        const run = action === 'cancel' ? engine.cancelRun(runId)
+          : action === 'pause' ? engine.pauseRun(runId)
+            : engine.resumeRun(runId);
+        if (!run) { sendJson(res, 404, { ok: false, msg: '运行记录不存在' }); return true; }
+        sendJson(res, 200, { ok: true, run });
+        return true;
+      }
+    }
+
+    // 恢复历史版本：/api/workflows/:id/versions/:version/restore（三段路径，要在通用规则之前匹配）
+    const restoreMatch = route.match(/^\/api\/workflows\/([^/]+)\/versions\/([^/]+)\/restore$/);
+    if (restoreMatch && method === 'POST') {
+      const workflow = store.restoreVersion(decodeURIComponent(restoreMatch[1]), decodeURIComponent(restoreMatch[2]));
+      if (!workflow) { sendJson(res, 404, { ok: false, msg: '版本不存在' }); return true; }
+      sendJson(res, 200, { ok: true, workflow });
+      return true;
+    }
+
+    match = route.match(/^\/api\/workflows\/([^/]+)(?:\/([a-z-]+)(?:\/([^/]+))?)?$/);
+    if (!match) return false;
+    const id = decodeURIComponent(match[1]);
+    const action = match[2];
+    const param = match[3];
+
+    if (!action && method === 'GET') {
+      const workflow = store.getWorkflow(id);
+      if (!workflow) { sendJson(res, 404, { ok: false, msg: '工作流不存在' }); return true; }
+      sendJson(res, 200, { ok: true, workflow });
+      return true;
+    }
+
+    if (!action && method === 'DELETE') {
+      const ok = store.deleteWorkflow(id);
+      sendJson(res, ok ? 200 : 404, ok ? { ok: true, deleted: id } : { ok: false, msg: '工作流不存在' });
+      return true;
+    }
+
+    if (action === 'publish' && method === 'POST') {
+      const workflow = store.publishWorkflow(id);
+      if (!workflow) { sendJson(res, 404, { ok: false, msg: '工作流不存在' }); return true; }
+      sendJson(res, 200, { ok: true, workflow });
+      return true;
+    }
+
+    if (action === 'duplicate' && method === 'POST') {
+      const workflow = store.duplicateWorkflow(id);
+      sendJson(res, workflow ? 200 : 404, workflow ? { ok: true, workflow } : { ok: false, msg: '工作流不存在' });
+      return true;
+    }
+
+    if (action === 'versions' && method === 'GET') {
+      sendJson(res, 200, { ok: true, versions: store.listVersions(id) });
+      return true;
+    }
+
+    if (action === 'restore' && method === 'POST') {
+      const workflow = store.restoreVersion(id, param);
+      if (!workflow) { sendJson(res, 404, { ok: false, msg: '版本不存在' }); return true; }
+      sendJson(res, 200, { ok: true, workflow });
+      return true;
+    }
+
+    if (action === 'run' && method === 'POST') {
+      const payload = await readJson(req);
+      const workflow = store.getWorkflow(id);
+      if (!workflow) { sendJson(res, 404, { ok: false, msg: '工作流不存在' }); return true; }
+      try {
+        validateInputs(workflow, payload.inputs);
+      } catch (err) {
+        sendJson(res, 400, { ok: false, msg: err.message });
+        return true;
+      }
+      const run = engine.startRun(workflow, payload.inputs, payload.mode === 'published' ? 'published' : 'draft');
+      sendJson(res, 200, { ok: true, run_id: run.id, run });
+      return true;
+    }
+
+    // 单节点调试：只跑这一个节点，inputs 当作上游输出喂进去
+    if (action === 'test-node' && method === 'POST') {
+      const payload = await readJson(req);
+      const node = payload.node;
+      if (!node || !node.type) { sendJson(res, 400, { ok: false, msg: '缺少节点定义' }); return true; }
+      try {
+        const result = await engine.testNode(node, payload.inputs || {});
+        sendJson(res, 200, { ok: true, output: result.output, duration_ms: result.duration_ms });
+      } catch (err) {
+        writeLog('warn', `工作流单节点调试失败：${err.message}`);
+        sendJson(res, 200, { ok: false, msg: err.message });
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  return { handle };
+}
+
+module.exports = { create };
