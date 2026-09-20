@@ -242,3 +242,29 @@ ELECTRON_MIRROR="https://cdn.npmmirror.com/binaries/electron/" \
 ELECTRON_BUILDER_BINARIES_MIRROR="https://cdn.npmmirror.com/binaries/electron-builder-binaries/" \
 npm run dist:win
 ```
+
+
+## 回归测试
+
+工作流后端有一份自包含的回归测试，覆盖那些「改动容易悄悄破坏」的不变量：
+
+```bash
+cd wenVedio_Client
+node test/workflow.test.js          # 默认用 8795 端口
+WF_TEST_PORT=8796 node test/workflow.test.js   # 端口被占用时换一个
+```
+
+它会自己拉起一个服务端（独立端口 + 临时数据目录），跑完自动关掉并清理，不需要事先准备环境。
+用例覆盖：
+
+- **分支路由**：条件分支命中/跳过、节点声明的输出参数不会吃掉路由信息、
+  普通节点输出里叫 `branch` 的字段不会劫持路由
+- **禁用节点**：被禁用的节点不执行（代码没跑）但把输入透传给下游
+- **自定义输入输出**：输入映射生效、输出按声明投影（未声明字段被挡在下游之外）
+- **循环与取消**：子工作流重复执行、结果按输入顺序对齐、子运行不进运行记录列表
+- **沙箱**：`Object.constructor('return process')()` 与 `eval` 被挡，正常代码照常
+- **导入导出与重跑**：导出带 kind 标记、导入生成新工作流、空内容被拒、重跑沿用同样输入
+- **持久化**：损坏的定义文件被备份而不是被覆盖、循环引用不会抛异常、
+  一条坏记录不会堵死后续落盘
+
+改动工作流相关代码后建议先跑一遍（当前 31 项断言）。
