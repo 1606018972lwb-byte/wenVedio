@@ -500,7 +500,9 @@ const NODE_DEFS = {
       const controller = new AbortController();
       const timeoutMs = Math.max(1, Number(ctx.params.timeout) || 60) * 1000;
       const timer = setTimeout(() => controller.abort(), timeoutMs);
-      if (ctx.signal) ctx.signal.addEventListener('abort', () => controller.abort(), { once: true });
+      // 用完要摘掉：否则循环 / 多次执行会往 run 级 signal 上线性累积监听
+      const onAbort = () => controller.abort();
+      if (ctx.signal) ctx.signal.addEventListener('abort', onAbort, { once: true });
       const init = {
         method,
         headers: { ...headers },
@@ -517,7 +519,10 @@ const NODE_DEFS = {
           if (controller.signal.aborted && !ctx.isCancelled()) throw new Error(`请求超时（超过 ${ctx.params.timeout || 60} 秒）`);
           throw err;
         })
-        .finally(() => clearTimeout(timer));
+        .finally(() => {
+          clearTimeout(timer);
+          if (ctx.signal) ctx.signal.removeEventListener('abort', onAbort);
+        });
       const text = await res.text();
       let json = null;
       try { json = JSON.parse(text); } catch (_) { /* 不是 JSON 就只留文本 */ }

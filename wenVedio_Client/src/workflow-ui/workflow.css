@@ -175,6 +175,7 @@
 .wf-edge-label { fill: var(--brand); font-size: 10.5px; font-weight: 700; pointer-events: none; }
 .wf-marquee { fill: var(--brand-soft); stroke: var(--brand); stroke-width: 1; opacity: .5; }
 .wf-draft-edge { fill: none; stroke: var(--brand); stroke-width: 2; stroke-dasharray: 5 4; }
+.wf-guide { stroke: var(--brand); stroke-width: 1; stroke-dasharray: 4 3; opacity: .85; pointer-events: none; }
 
 /* 右：节点配置面板（点选节点后出现，Coze 习惯） */
 .wf-inspector {

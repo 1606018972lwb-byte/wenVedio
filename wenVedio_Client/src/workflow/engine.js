@@ -126,11 +126,14 @@ function create({ store, bridge, writeLog }) {
       incoming.get(edge.to).push({ from: edge.from, branch: edge.branch || '' });
       outgoing.get(edge.from).push({ to: edge.to, branch: edge.branch || '' });
     }
-    return { nodes, incoming, outgoing };
+    return { nodes, incoming, outgoing, types: new Map(nodes.map((node) => [node.id, node.type])) };
   }
 
-  // 上游节点实际走的是哪条分支：条件分支节点会在输出里带 branch
-  function takenBranch(run, nodeId) {
+  // 上游节点实际走的是哪条分支：只有「条件分支」节点才有这个语义。
+  // 原先只看输出里有没有 branch 字符串，于是 merge / code 把用户字段展开到顶层后，
+  // 任意一个叫 branch 的字段都会劫持路由（该跑的跳过、不该跑的放行），这里按类型收紧。
+  function takenBranch(run, nodeId, graph) {
+    if (graph && graph.types && graph.types.get(nodeId) !== 'condition') return '';
     const state = run.nodes[nodeId];
     const output = state && state.output;
     if (output && typeof output === 'object' && typeof output.branch === 'string') return output.branch;
@@ -150,7 +153,7 @@ function create({ store, bridge, writeLog }) {
       const up = run.nodes[edge.from];
       if (!up || !TERMINAL.has(up.status)) { allSettled = false; continue; }
       if (up.status !== 'success') continue;
-      const taken = takenBranch(run, edge.from);
+      const taken = takenBranch(run, edge.from, graph);
       // 上游不是分支节点（taken 为空）→ 边一定被走到；
       // 分支节点 → 只有边上的分支名和它实际走的一致才算走到
       if (!edge.branch || !taken || edge.branch === taken) anyActive = true;
@@ -330,7 +333,7 @@ function create({ store, bridge, writeLog }) {
     }
     // 运行记录与下游还要用的内部字段，避免被投影掉
     if (raw && typeof raw === 'object') {
-      for (const keep of ['printed', 'interpreter', 'env_name', 'total_tokens', 'model', 'task_id', 'cost', 'cost_currency']) {
+      for (const keep of ['branch', 'index', 'is_else', 'printed', 'interpreter', 'env_name', 'total_tokens', 'model', 'task_id', 'cost', 'cost_currency']) {
         if (raw[keep] !== undefined && out[keep] === undefined) out[keep] = raw[keep];
       }
     }
@@ -396,17 +399,38 @@ function create({ store, bridge, writeLog }) {
     timer = null;
   }
 
+  // 一个运行连它派生出来的子运行（循环体）一起收出来
+  function collectRunTree(rootId) {
+    const out = [];
+    const seen = new Set();
+    const walk = (id) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      const item = store.getRun(id);
+      if (!item) return;
+      out.push(item);
+      for (const other of store.allRuns()) {
+        if (other.parent_run_id === id) walk(other.id);
+      }
+    };
+    walk(rootId);
+    return out;
+  }
+
   function cancelRun(id) {
     const run = store.getRun(id);
     if (!run) return null;
     if (RUN_TERMINAL.has(run.status)) return run;
-    run.cancel_requested = true;
-    run.paused = false;
-    store.saveRun(run);
-    // 立刻打断这个运行正在等待的请求，否则要等它自己超时
-    const controller = controllers.get(run.id);
-    if (controller) controller.abort();
-    kick(run.id);
+    // 取消必须连循环体里的子运行一起停，否则用户以为停了、后台还在继续跑（烧模型配额）
+    for (const item of collectRunTree(id)) {
+      if (RUN_TERMINAL.has(item.status)) continue;
+      item.cancel_requested = true;
+      item.paused = false;
+      store.saveRun(item);
+      const controller = controllers.get(item.id);
+      if (controller) controller.abort();
+      kick(item.id);
+    }
     return run;
   }
 
@@ -465,6 +489,14 @@ function create({ store, bridge, writeLog }) {
     const deadline = Date.now() + Math.max(1000, timeoutMs);
     for (;;) {
       const current = store.getRun(run.id) || run;
+      // 父运行被取消/超时后，子运行也要跟着停（取消传播的兜底）
+      if (parentRunId) {
+        const parent = store.getRun(parentRunId);
+        if (parent && parent.cancel_requested && !current.cancel_requested) {
+          current.cancel_requested = true;
+          store.saveRun(current);
+        }
+      }
       if (RUN_TERMINAL.has(current.status)) {
         if (current.status !== 'success') {
           throw new Error(`子工作流「${workflow.name}」${current.status === 'cancelled' ? '被取消' : '失败'}：${current.error || '未知原因'}`);

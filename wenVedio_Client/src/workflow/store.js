@@ -27,8 +27,8 @@ function create({ configDir, writeLog }) {
     const text = JSON.stringify(payload, null, 2);
     try { fs.mkdirSync(path.dirname(file), { recursive: true }); }
     catch (_) { /* 目录已存在 */ }
-    // 临时文件名带上进程与时间，避免并发写同一个 tmp
-    const temporary = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
+    // 临时文件名带进程 + 时间 + 随机数：同一 tick 内两次写也不会撞名
+    const temporary = `${file}.${process.pid}.${Date.now().toString(36)}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     try {
       fs.writeFileSync(temporary, text);
       for (let attempt = 0; attempt < 5; attempt += 1) {

@@ -36,8 +36,13 @@ export function createCanvas(host, handlers = {}) {
   marquee.setAttribute('visibility', 'hidden');
   const draftEdge = el('path', { class: 'wf-draft-edge' });
   draftEdge.setAttribute('visibility', 'hidden');
+  // 拖拽时的对齐引导线（左右/上下对齐到别的节点时出现）
+  const guidesLayer = el('g', { class: 'wf-guides' });
+  const guideV = el('line', { class: 'wf-guide', visibility: 'hidden' });
+  const guideH = el('line', { class: 'wf-guide', visibility: 'hidden' });
+  guidesLayer.append(guideV, guideH);
 
-  viewport.append(edgesLayer, nodesLayer, marquee, draftEdge);
+  viewport.append(edgesLayer, guidesLayer, nodesLayer, marquee, draftEdge);
   svg.append(bg, viewport);
 
   const toolbar = document.createElement('div');
@@ -439,16 +444,25 @@ export function createCanvas(host, handlers = {}) {
       const dy = (event.clientY - drag.startY) / scale;
       if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 2) return;
       if (!drag.moved) { snapshot(); drag.moved = true; }
-      // 只更新被拖动的节点与连线，不整块重绘：节点多时拖动才跟得住手
+      // 对齐吸附：以主节点为参考，靠近别的节点的左/中/右或上/中/下时吸附并画引导线
+      const draggingSet = new Set(drag.origin.map((item) => item.id));
+      const moving = [];
       for (const origin of drag.origin) {
         const node = nodes.find((n) => n.id === origin.id);
-        if (!node) continue;
-        node.x = Math.round(origin.x + dx);
-        node.y = Math.round(origin.y + dy);
+        if (node) moving.push({ node, origin });
+      }
+      // 吸附要以「拖拽起点坐标」为基准算，不能用已经被移动过的当前坐标（否则越拖越偏）
+      const base = moving[0] ? { x: moving[0].origin.x, y: moving[0].origin.y } : null;
+      const snap = computeSnap(base, draggingSet, dx, dy);
+      for (const item of moving) {
+        const node = item.node;
+        node.x = Math.round(item.origin.x + dx + snap.dx);
+        node.y = Math.round(item.origin.y + dy + snap.dy);
         const group = nodeEls.get(node.id);
         if (group) group.setAttribute('transform', `translate(${node.x},${node.y})`);
       }
       renderEdges();
+      showGuides(snap.guideX, snap.guideY);
       return;
     }
     if (mode === 'marquee') {
@@ -469,6 +483,7 @@ export function createCanvas(host, handlers = {}) {
     // 无论哪种模式，收尾时都把临时图形收干净，避免留下「卡住」的框
     marquee.setAttribute('visibility', 'hidden');
     draftEdge.setAttribute('visibility', 'hidden');
+    hideGuides();
     svg.classList.remove('panning');
     if (mode === 'node' && drag?.moved) emitChange();
     if (mode === 'marquee') {
@@ -500,6 +515,7 @@ export function createCanvas(host, handlers = {}) {
     drag = null;
     marquee.setAttribute('visibility', 'hidden');
     draftEdge.setAttribute('visibility', 'hidden');
+    hideGuides();
     svg.classList.remove('panning');
   }
 
@@ -566,6 +582,71 @@ export function createCanvas(host, handlers = {}) {
     if (meta && key === 'a') { event.preventDefault(); selection = new Set(nodes.map((n) => n.id)); render(); emitSelect(); return; }
     if (key === 'delete' || key === 'backspace') { event.preventDefault(); removeSelected(); }
   });
+
+  // ---------------- 对齐吸附与引导线 ----------------
+  const SNAP_DISTANCE = 6;
+
+  // 以主节点的 左/中/右 与 上/中/下 去对齐别的节点，返回吸附量与引导线位置
+  function computeSnap(primary, draggingSet, dx, dy) {
+    const result = { dx: 0, dy: 0, guideX: null, guideY: null };
+    if (!primary) return result;
+    const x = primary.x + dx;
+    const y = primary.y + dy;
+    const mineX = [x, x + NODE_W / 2, x + NODE_W];
+    const mineY = [y, y + NODE_H / 2, y + NODE_H];
+    let bestX = SNAP_DISTANCE + 1;
+    let bestY = SNAP_DISTANCE + 1;
+    for (const other of nodes) {
+      if (draggingSet.has(other.id)) continue;
+      const theirsX = [other.x, other.x + NODE_W / 2, other.x + NODE_W];
+      const theirsY = [other.y, other.y + NODE_H / 2, other.y + NODE_H];
+      for (const mx of mineX) {
+        for (const tx of theirsX) {
+          const delta = tx - mx;
+          if (Math.abs(delta) <= SNAP_DISTANCE && Math.abs(delta) < Math.abs(bestX)) { bestX = delta; result.guideX = tx; }
+        }
+      }
+      for (const my of mineY) {
+        for (const ty of theirsY) {
+          const delta = ty - my;
+          if (Math.abs(delta) <= SNAP_DISTANCE && Math.abs(delta) < Math.abs(bestY)) { bestY = delta; result.guideY = ty; }
+        }
+      }
+    }
+    result.dx = Math.abs(bestX) <= SNAP_DISTANCE ? bestX : 0;
+    result.dy = Math.abs(bestY) <= SNAP_DISTANCE ? bestY : 0;
+    return result;
+  }
+
+  function showGuides(x, y) {
+    if (x == null && y == null) { hideGuides(); return; }
+    const pad = 240;
+    const minX = Math.min(...nodes.map((n) => n.x)) - pad;
+    const maxX = Math.max(...nodes.map((n) => n.x + NODE_W)) + pad;
+    const minY = Math.min(...nodes.map((n) => n.y)) - pad;
+    const maxY = Math.max(...nodes.map((n) => n.y + NODE_H)) + pad;
+    if (x == null) guideV.setAttribute('visibility', 'hidden');
+    else {
+      guideV.setAttribute('x1', x);
+      guideV.setAttribute('x2', x);
+      guideV.setAttribute('y1', minY);
+      guideV.setAttribute('y2', maxY);
+      guideV.setAttribute('visibility', 'visible');
+    }
+    if (y == null) guideH.setAttribute('visibility', 'hidden');
+    else {
+      guideH.setAttribute('y1', y);
+      guideH.setAttribute('y2', y);
+      guideH.setAttribute('x1', minX);
+      guideH.setAttribute('x2', maxX);
+      guideH.setAttribute('visibility', 'visible');
+    }
+  }
+
+  function hideGuides() {
+    guideV.setAttribute('visibility', 'hidden');
+    guideH.setAttribute('visibility', 'hidden');
+  }
 
   // ---------------- 图操作 ----------------
   function reaches(startId, targetId, visited = new Set()) {
