@@ -8,6 +8,7 @@ const crypto = require('crypto');
 
 const MAX_VERSIONS = 20;
 const MAX_RUNS = 200;
+const MAX_SUB_RUNS = 30;
 const MAX_NODES = 200;
 
 function create({ configDir, writeLog }) {
@@ -328,13 +329,28 @@ function create({ configDir, writeLog }) {
 
   // 记录会一直增长，超出上限时丢掉最旧的已结束记录
   function pruneRuns() {
-    // 循环产生的子运行没有单独查看的价值，超限时优先丢它们
-    const subs = [...runs.values()].filter((run) => run.finished_at && run.mode === 'sub');
+    let removed = 0;
+    // 循环产生的子运行只是过程记录，单独设一个更紧的上限：
+    // 不加这条的话，100 项的循环会让运行记录表涨到 100+ 条，
+    // 而每次合并写都要序列化整张表（审计 #8 的写放大）。
+    const subs = [...runs.values()]
+      .filter((run) => run.finished_at && run.mode === 'sub')
+      .sort((a, b) => String(a.finished_at).localeCompare(String(b.finished_at)));
+    let subOverflow = subs.length - MAX_SUB_RUNS;
     for (const run of subs) {
-      if (runs.size <= MAX_RUNS) break;
+      if (subOverflow <= 0) break;
       runs.delete(run.id);
+      subOverflow -= 1;
+      removed += 1;
     }
-    if (runs.size <= MAX_RUNS) { if (subs.length) saveRuns(); return; }
+    // 总量仍超限时，继续优先丢子运行
+    if (runs.size > MAX_RUNS) {
+      for (const run of [...runs.values()].filter((item) => item.finished_at && item.mode === 'sub')) {
+        if (runs.size <= MAX_RUNS) break;
+        runs.delete(run.id);
+        removed += 1;
+      }
+    }
     const finished = [...runs.values()]
       .filter((run) => run.finished_at)
       .sort((a, b) => String(a.finished_at).localeCompare(String(b.finished_at)));
@@ -343,8 +359,10 @@ function create({ configDir, writeLog }) {
       if (remove <= 0) break;
       runs.delete(run.id);
       remove -= 1;
+      removed += 1;
     }
-    saveRuns();
+    if (removed) saveRuns();
+    return removed;
   }
 
   // 运行记录默认不列子运行（循环体内的），否则会把真正的记录挤掉
