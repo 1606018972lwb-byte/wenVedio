@@ -205,20 +205,20 @@ function renderEditor() {
       <div class="wf-head-actions">
         <button type="button" id="wfUndo" title="撤销 Ctrl+Z">↶</button>
         <button type="button" id="wfRedo" title="重做 Ctrl+Y">↷</button>
-        <button type="button" id="wfDebugNode" title="测试选中的节点">⚡ 测试节点</button>
+        <button type="button" id="wfDebugNode" title="只运行选中的这一个节点">⚡ 测试节点</button>
         <button type="button" id="wfRuns">运行记录</button>
         <button type="button" id="wfPublish">发布</button>
-        <button type="button" class="primary" id="wfRun">▶ 运行</button>
+        <button type="button" class="primary" id="wfRun" title="试运行整个工作流">▶ 试运行</button>
       </div>
     </div>
-    <div class="wf-body">
+    <div class="wf-body" id="wfBody">
       <div class="wf-canvas-host" id="wfCanvasHost"></div>
       <aside class="wf-palette" id="wfPalette"></aside>
     </div>`;
 
   renderPalette();
   mountCanvas();
-  closeNodePop();
+  renderInspector();
 
   $('#wfBack').addEventListener('click', backToList);
   $('#wfUndo').addEventListener('click', () => state.canvas.undo());
@@ -230,63 +230,7 @@ function renderEditor() {
   $('#wfName').addEventListener('input', () => { state.current.name = $('#wfName').value; markDirty(); });
 }
 
-// 节点库是悬浮窗：位置用 fixed 记在本地，可以按住标题栏拖到任意位置
-const PALETTE_POS_KEY = 'wenvedio-wf-palette-pos';
-
-function readPalettePos() {
-  if (state.palettePos) return state.palettePos;
-  try {
-    const saved = JSON.parse(localStorage.getItem(PALETTE_POS_KEY) || 'null');
-    if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) { state.palettePos = saved; return saved; }
-  } catch (_) { /* 读不到就用默认位置 */ }
-  return null;
-}
-
-function placePalette(host) {
-  const rect = host.getBoundingClientRect();
-  const saved = readPalettePos();
-  if (saved) {
-    host.style.left = `${Math.max(8, Math.min(saved.x, window.innerWidth - rect.width - 8))}px`;
-    host.style.top = `${Math.max(8, Math.min(saved.y, window.innerHeight - rect.height - 8))}px`;
-    return;
-  }
-  const canvas = $('#wfCanvasHost')?.getBoundingClientRect();
-  if (!canvas) return;
-  host.style.left = `${Math.round(canvas.left + 14)}px`;
-  host.style.top = `${Math.round(Math.max(8, canvas.bottom - rect.height - 14))}px`;
-}
-
-function bindPaletteDrag(host) {
-  const handle = $('.wf-palette-head', host);
-  if (!handle) return;
-  handle.addEventListener('mousedown', (event) => {
-    if (event.target.closest('.wf-palette-toggle')) return;
-    event.preventDefault();
-    const rect = host.getBoundingClientRect();
-    const start = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
-    const onMove = (moveEvent) => {
-      moveEvent.preventDefault();
-      const width = host.offsetWidth;
-      const height = host.offsetHeight;
-      const x = Math.max(8, Math.min(start.left + (moveEvent.clientX - start.x), window.innerWidth - width - 8));
-      const y = Math.max(8, Math.min(start.top + (moveEvent.clientY - start.y), window.innerHeight - height - 8));
-      host.style.left = `${Math.round(x)}px`;
-      host.style.top = `${Math.round(y)}px`;
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      handle.classList.remove('dragging');
-      const box = host.getBoundingClientRect();
-      state.palettePos = { x: Math.round(box.left), y: Math.round(box.top) };
-      try { localStorage.setItem(PALETTE_POS_KEY, JSON.stringify(state.palettePos)); } catch (_) { /* 忽略 */ }
-    };
-    handle.classList.add('dragging');
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  });
-}
-
+// 节点库放在画布下方的「添加节点」面板（Coze 1.0 的位置）
 function renderPalette() {
   const host = $('#wfPalette');
   const keyword = (host.dataset.search || '').toLowerCase();
@@ -298,37 +242,38 @@ function renderPalette() {
     if (!groups.has(def.group)) groups.set(def.group, []);
     groups.get(def.group).push(def);
   }
+  const columns = [...groups.entries()].map(([group, list]) => `
+    <div class="wf-palette-col">
+      <div class="wf-palette-group">${esc(group)}</div>
+      ${list.map((def) => `<button type="button" class="wf-node-btn" draggable="true" data-type="${esc(def.type)}" title="${esc(def.description || '')}">
+        <span class="ico">${esc(def.icon || '●')}</span><span>${esc(def.label)}</span></button>`).join('')}
+    </div>`).join('');
   host.innerHTML = `
-    <div class="wf-palette-head"><b>节点库</b><button type="button" class="wf-palette-toggle" id="wfPaletteToggle" title="${collapsed ? '展开' : '收起'}">${collapsed ? '＋' : '－'}</button></div>
-    <div class="wf-palette-body">
+    <div class="wf-palette-head">
+      <b>添加节点</b>
       <input class="wf-palette-search" id="wfPaletteSearch" placeholder="搜索节点…" value="${esc(host.dataset.search || '')}" />
-      ${[...groups.entries()].map(([group, list]) => `
-        <div class="wf-palette-group">${esc(group)}</div>
-        ${list.map((def) => `<button type="button" class="wf-node-btn" draggable="true" data-type="${esc(def.type)}" title="${esc(def.description || '')}">
-          <span class="ico">${esc(def.icon || '●')}</span><span>${esc(def.label)}</span></button>`).join('')}
-      `).join('')}
-    </div>`;
+      <span class="wf-palette-tip">点一下加进画布，或拖到画布上的位置</span>
+      <button type="button" class="wf-palette-toggle" id="wfPaletteToggle" title="${collapsed ? '展开' : '收起'}">${collapsed ? '＋' : '－'}</button>
+    </div>
+    <div class="wf-palette-body">${columns || '<div class="wf-palette-tip">没有匹配的节点</div>'}</div>`;
 
-  placePalette(host);
-  bindPaletteDrag(host);
   $('#wfPaletteToggle')?.addEventListener('click', () => {
     host.dataset.collapsed = collapsed ? '0' : '1';
     renderPalette();
   });
   const search = $('#wfPaletteSearch');
-  search?.addEventListener('input', () => { host.dataset.search = search.value; renderPalette(); search.focus(); });
+  search?.addEventListener('input', () => { host.dataset.search = search.value; renderPalette(); $('#wfPaletteSearch')?.focus(); });
   $$('.wf-node-btn', host).forEach((button) => {
     button.addEventListener('click', () => {
-      const graph = state.canvas.getGraph();
       // 落在当前视口可见位置，避免新增节点跑到画布外面
       const hostRect = $('#wfCanvasHost').getBoundingClientRect();
       const center = state.canvas.screenToWorld(hostRect.left + hostRect.width / 2, hostRect.top + hostRect.height / 2);
-      const offset = graph.nodes.length % 6;
+      const offset = state.canvas.getGraph().nodes.length % 6;
       const node = state.canvas.addNode(button.dataset.type,
         { x: Math.round(center.x - NODE_W / 2 + offset * 18), y: Math.round(center.y - NODE_H / 2 + offset * 14) },
         state.meta.nodes[button.dataset.type]);
       state.selectedNodeId = node.id;
-      renderNodePop();
+      renderInspector();
     });
     button.addEventListener('dragstart', (event) => {
       event.dataTransfer.setData('text/wf-node', button.dataset.type);
@@ -345,12 +290,24 @@ function mountCanvas() {
   host.innerHTML = '';
   state.canvas = createCanvas(host, {
     onChange: () => { markDirty(); syncSelectionLabel(); },
-    onSelect: (ids) => { state.selectedNodeId = ids[0] || null; if (!ids.length) closeNodePop(); },
+    // Coze：点选节点，右侧出现它的配置
+    onSelect: (ids, edgeId) => {
+      state.selectedNodeId = ids[0] || null;
+      if (!state.selectedNodeId) closeInspector();
+      else renderInspector();
+      if (edgeId) closeInspector();
+    },
     onStatus: (message) => toast(message),
-    // 详细设置由右键节点弹出
-    onNodeMenu: (id) => { state.selectedNodeId = id; renderNodePop(); },
-    onCanvasMenu: () => closeNodePop(),
-    onEdgeMenu: () => toast('右键连线可删除：先点这条线，再按 Delete'),
+    // 双击节点也打开配置（n8n 习惯）
+    onOpenNode: (id) => { state.canvas.selectNode(id); state.selectedNodeId = id; renderInspector(); },
+    // 右键节点出小菜单
+    onNodeMenu: (id, event) => { state.canvas.selectNode(id); state.selectedNodeId = id; renderInspector(); openContextMenu(id, event); },
+    onCanvasMenu: () => { closeInspector(); closeContextMenu(); },
+    onEdgeMenu: (id, event) => openEdgeMenu(id, event),
+    // 连线/节点上的「+」：先选节点类型，再插进去并自动接线
+    onAddNode: (target) => openNodePicker(target),
+    // 节点右上角的结果角标
+    onNodeResult: (id) => openNodeResult(id),
   });
   state.canvas.setGraph(state.current.nodes || [], state.current.edges || []);
   host.addEventListener('dragover', (event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; });
@@ -362,7 +319,7 @@ function mountCanvas() {
     const point = state.canvas.screenToWorld(event.clientX, event.clientY);
     const node = state.canvas.addNode(type, { x: point.x - NODE_W / 2, y: point.y - NODE_H / 2 }, state.meta.nodes[type]);
     state.selectedNodeId = node.id;
-    renderNodePop();
+    renderInspector();
   });
   setTimeout(() => state.canvas?.fit(), 60);
 }
@@ -470,47 +427,31 @@ function upstreamPaths(nodeId) {
   return out;
 }
 
-// 节点设置改成右键节点弹出的浮层，不再占用画布宽度
-function closeNodePop() {
-  $('#wfNodePop')?.remove();
+// 节点配置是右侧面板：点选节点出现，取消选择收起（Coze 习惯）
+function closeInspector() {
+  $('#wfInspector')?.remove();
+  $('#wfBody')?.classList.remove('has-config');
 }
 
-function positionNodePop(pop, nodeId) {
-  const anchor = state.canvas?.nodeScreenRect?.(nodeId);
-  const margin = 12;
-  const rect = pop.getBoundingClientRect();
-  let left = margin;
-  let top = margin;
-  if (anchor) {
-    left = anchor.right + margin;
-    if (left + rect.width > window.innerWidth - margin) left = anchor.left - rect.width - margin;
-    top = anchor.top - 8;
-  }
-  left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
-  top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
-  pop.style.left = `${Math.round(left)}px`;
-  pop.style.top = `${Math.round(top)}px`;
-}
-
-function renderNodePop() {
+function renderInspector() {
   const id = state.selectedNodeId;
   const node = id ? state.canvas.getGraph().nodes.find((n) => n.id === id) : null;
-  if (!node) { closeNodePop(); return; }
+  if (!node) { closeInspector(); return; }
   const def = state.meta.nodes[node.type] || { label: node.type, params: [], outputs: [] };
   const values = node.params || {};
   const runState = state.runNodeStates?.[node.id];
 
-  closeNodePop();
-  const pop = document.createElement('div');
-  pop.className = 'wf-node-pop';
-  pop.id = 'wfNodePop';
+  closeInspector();
+  const pop = document.createElement('aside');
+  pop.className = 'wf-inspector';
+  pop.id = 'wfInspector';
   pop.innerHTML = `
-    <div class="wf-node-pop-head">
+    <div class="wf-inspector-head">
       <span class="ico">${esc(def.icon || '●')}</span><b>${esc(node.title || def.label)}</b>
       <span class="type">${esc(node.type)}</span>
-      <button type="button" class="wf-node-pop-close" data-pop-close aria-label="关闭">×</button>
+      <button type="button" class="wf-inspector-close" data-pop-close aria-label="收起">×</button>
     </div>
-    <div class="wf-node-pop-body">
+    <div class="wf-inspector-body">
       <label class="wf-field"><span class="lbl">节点名称</span><input type="text" id="wfNodeTitle" value="${esc(node.title || '')}" maxlength="60" /></label>
       ${def.params.map((param) => renderParam(param, values, node)).join('')}
       <div class="wf-insp-section">错误处理</div>
@@ -538,21 +479,22 @@ function renderNodePop() {
       </div>
     </div>`;
   document.body.appendChild(pop);
-  positionNodePop(pop, node.id);
-  // 浮层内部的点击不要冒泡到画布，否则会被当成点空白而关掉
+  $('#wfBody').insertBefore(pop, $('#wfPalette'));
+  $('#wfBody').classList.add('has-config');
+  // 面板内部的点击不要冒泡到画布，否则会被当成点空白而收起
   pop.addEventListener('mousedown', (event) => event.stopPropagation());
-  pop.querySelector('[data-pop-close]').addEventListener('click', () => closeNodePop());
+  pop.querySelector('[data-pop-close]').addEventListener('click', () => closeInspector());
 
   bindParamInputs(node, def);
   $('#wfNodeTitle').addEventListener('input', (event) => {
     state.canvas.updateNode(node.id, { title: event.target.value }, { record: false });
-    const head = pop.querySelector('.wf-node-pop-head b');
+    const head = pop.querySelector('.wf-inspector-head b');
     if (head) head.textContent = event.target.value;
   });
-  $('#wfPolicy').addEventListener('change', (event) => { state.canvas.updateNode(node.id, { error_policy: event.target.value }); renderNodePop(); });
+  $('#wfPolicy').addEventListener('change', (event) => { state.canvas.updateNode(node.id, { error_policy: event.target.value }); renderInspector(); });
   $('#wfMaxRetry')?.addEventListener('change', (event) => state.canvas.updateNode(node.id, { max_retry: Number(event.target.value) || 0 }));
   $('#wfRetryInterval')?.addEventListener('change', (event) => state.canvas.updateNode(node.id, { retry_interval_ms: Number(event.target.value) || 0 }));
-  $('#wfDeleteNode').addEventListener('click', () => { state.canvas.selectNode(node.id); state.canvas.removeSelected(); state.selectedNodeId = null; closeNodePop(); });
+  $('#wfDeleteNode').addEventListener('click', () => { state.canvas.selectNode(node.id); state.canvas.removeSelected(); state.selectedNodeId = null; closeInspector(); });
   $('#wfTestNode').addEventListener('click', () => debugNode(node));
 }
 
@@ -641,7 +583,7 @@ function renderParam(param, values, node) {
 
 function collectRows(node, def) {
   const params = { ...(node.params || {}) };
-  const host = $('#wfNodePop');
+  const host = $('#wfInspector');
   for (const param of def.params || []) {
     const type = param.type;
     if (type === 'fields') {
@@ -664,7 +606,7 @@ function collectRows(node, def) {
 }
 
 function bindParamInputs(node, def) {
-  const host = $('#wfNodePop');
+  const host = $('#wfInspector');
   const commit = () => state.canvas.updateNodeParams(node.id, collectRows(node, def), { record: false });
   $$('[data-param]', host).forEach((input) => {
     const event = input.type === 'checkbox' ? 'change' : (input.tagName === 'SELECT' ? 'change' : 'input');
@@ -680,9 +622,9 @@ function bindParamInputs(node, def) {
       } else value = input.value;
       const next = { ...(node.params || {}), [key]: value };
       state.canvas.updateNodeParams(node.id, next, { record: false });
-      if (param.showWhen) renderNodePop();
+      if (param.showWhen) renderInspector();
     });
-    if (input.tagName === 'SELECT') input.addEventListener('change', () => renderNodePop());
+    if (input.tagName === 'SELECT') input.addEventListener('change', () => renderInspector());
   });
 
   // 行编辑（输入项 / 输出映射 / 图片列表）
@@ -693,21 +635,21 @@ function bindParamInputs(node, def) {
     const rows = collectRows(node, def);
     rows[button.dataset.pairAdd] = [...(rows[button.dataset.pairAdd] || []), { key: '', value: '' }];
     state.canvas.updateNodeParams(node.id, rows);
-    renderNodePop();
+    renderInspector();
   }));
   $$('[data-pair-del]', host).forEach((button) => button.addEventListener('click', () => {
     const type = button.closest('[data-pairs]').dataset.pairs;
     const rows = collectRows(node, def);
     rows[type] = (rows[type] || []).filter((_, index) => index !== Number(button.dataset.pairDel));
     state.canvas.updateNodeParams(node.id, rows);
-    renderNodePop();
+    renderInspector();
   }));
   $$('[data-row-add]', host).forEach((button) => button.addEventListener('click', () => {
     const key = button.dataset.rowAdd;
     const rows = collectRows(node, def);
     rows[key] = [...(rows[key] || []), ''];
     state.canvas.updateNodeParams(node.id, rows);
-    renderNodePop();
+    renderInspector();
   }));
   $$('[data-row-del]', host).forEach((button) => button.addEventListener('click', () => {
     const key = button.dataset.rowDel;
@@ -716,19 +658,19 @@ function bindParamInputs(node, def) {
     const rows = collectRows(node, def);
     rows[key] = (rows[key] || []).filter((_, i) => i !== index);
     state.canvas.updateNodeParams(node.id, rows);
-    renderNodePop();
+    renderInspector();
   }));
   $('#wfAddField')?.addEventListener('click', () => {
     const rows = collectRows(node, def);
     rows.fields = [...(rows.fields || []), { key: '', label: '', type: 'text' }];
     state.canvas.updateNodeParams(node.id, rows);
-    renderNodePop();
+    renderInspector();
   });
   $$('[data-field-del]', host).forEach((button) => button.addEventListener('click', () => {
     const rows = collectRows(node, def);
     rows.fields = (rows.fields || []).filter((_, index) => index !== Number(button.dataset.fieldDel));
     state.canvas.updateNodeParams(node.id, rows);
-    renderNodePop();
+    renderInspector();
   }));
 
   // 变量选择器
@@ -754,7 +696,7 @@ function bindParamInputs(node, def) {
       const data = await api('/api/workflows/python/pip', { method: 'POST', body: { env_id: envId } });
       toast(data.ok ? (data.installed ? `pip 已${data.via === 'ensurepip' ? '用 ensurepip' : '用 get-pip.py'}安装完成` : 'pip 已存在') : `失败：${data.msg}`, data.ok ? 'ok' : 'error');
       await ensurePythonEnvs(true);
-      renderNodePop();
+      renderInspector();
     } catch (err) { toast(`pip 检查失败：${err.message}`, 'error'); }
   });
   $('#wfOpenEnvPanel')?.addEventListener('click', () => openPythonPanel());
@@ -845,9 +787,10 @@ function pollRun(runId) {
     try {
       const data = await api(`/api/workflow-runs/${encodeURIComponent(runId)}`);
       const run = data.run;
+      state.lastRun = run;
       state.runNodeStates = run.nodes;
       state.canvas?.setNodeStates(run.nodes);
-      if (state.selectedNodeId) renderNodePop();
+      if (state.selectedNodeId) renderInspector();
       updateRunIndicator(run);
       if (['success', 'failed', 'cancelled'].includes(run.status)) {
         stopRunPolling();
@@ -1013,7 +956,7 @@ async function openPythonPanel() {
           toast('已切换 Python 环境');
           root.querySelector('.model-drawer-body').innerHTML = render();
           bind();
-          renderNodePop();
+          renderInspector();
         } catch (err) { toast(`切换失败：${err.message}`, 'error'); }
       }));
       $('#wfInstallPy', root)?.addEventListener('click', async () => {
@@ -1052,6 +995,135 @@ function startInstallPolling(root, data) {
       }
     } catch (_) { /* 下次再试 */ }
   }, 1500);
+}
+
+// ---------------- Coze 式交互：右键菜单 / 加号选节点 / 节点结果 ----------------
+function closeContextMenu() { $$('.wf-ctx').forEach((el) => el.remove()); }
+
+function openMenuAt(event, items) {
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'wf-ctx';
+  menu.innerHTML = items.map((item, index) => `<button type="button" class="${item.danger ? 'danger' : ''}" data-item="${index}">${esc(item.label)}</button>`).join('');
+  document.body.appendChild(menu);
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - rect.width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - rect.height - 8))}px`;
+  menu.addEventListener('mousedown', (e) => e.stopPropagation());
+  menu.addEventListener('click', (e) => {
+    const button = e.target.closest('[data-item]');
+    if (!button) return;
+    closeContextMenu();
+    items[Number(button.dataset.item)].run();
+  });
+  setTimeout(() => document.addEventListener('mousedown', closeContextMenu, { once: true }), 0);
+  return menu;
+}
+
+function openContextMenu(nodeId, event) {
+  const node = state.canvas.getGraph().nodes.find((n) => n.id === nodeId);
+  if (!node) return;
+  openMenuAt(event, [
+    { label: '⚙ 配置节点', run: () => { state.selectedNodeId = nodeId; renderInspector(); } },
+    { label: '⚡ 测试此节点', run: () => debugNode(node) },
+    { label: '⧉ 复制', run: () => { state.canvas.selectNode(nodeId); copyNodeToClipboard(); } },
+    { label: '⟳ 重命名', run: () => { state.selectedNodeId = nodeId; renderInspector(); setTimeout(() => $('#wfNodeTitle')?.select(), 60); } },
+    { label: '✕ 删除', danger: true, run: () => { state.canvas.selectNode(nodeId); state.canvas.removeSelected(); state.selectedNodeId = null; closeInspector(); } },
+  ]);
+}
+
+function copyNodeToClipboard() {
+  // 借用画布自己的复制：先选中再触发 Ctrl+C 的等价操作
+  const ok = state.canvas.copySelection?.();
+  toast(ok === false ? '请先选中节点' : '已复制节点，可切到别的画布 Ctrl+V 粘贴');
+}
+
+function openEdgeMenu(edgeId, event) {
+  openMenuAt(event, [
+    { label: '＋ 在这条线上插入节点', run: () => {
+      const edge = state.canvas.getGraph().edges.find((e) => e.id === edgeId);
+      if (!edge) return;
+      const nodes = state.canvas.getGraph().nodes;
+      const from = nodes.find((n) => n.id === edge.from) || { x: 0, y: 0 };
+      openNodePicker({ x: from.x + 220, y: from.y, clientX: event.clientX, clientY: event.clientY, from: edge.from, to: edge.to, edgeId });
+    } },
+    { label: '✕ 删除连线', danger: true, run: () => state.canvas.removeEdge?.(edgeId) },
+  ]);
+}
+
+// 「+」打开的节点选择器（Coze 点加号后的那个列表）
+function closeNodePicker() { $('#wfNodePicker')?.remove(); }
+
+function openNodePicker(target) {
+  closeNodePicker();
+  const picker = document.createElement('div');
+  picker.className = 'wf-ctx';
+  picker.id = 'wfNodePicker';
+  picker.style.minWidth = '220px';
+  picker.style.maxHeight = '360px';
+  picker.style.overflowY = 'auto';
+  const groups = new Map();
+  for (const def of Object.values(state.meta?.nodes || {})) {
+    if (!groups.has(def.group)) groups.set(def.group, []);
+    groups.get(def.group).push(def);
+  }
+  picker.innerHTML = `
+    <input class="wf-palette-search" id="wfPickerSearch" placeholder="搜索节点…" style="max-width:none;margin:2px 0 6px" />
+    <div id="wfPickerList">
+      ${[...groups.entries()].map(([group, list]) => `
+        <div class="wf-palette-group">${esc(group)}</div>
+        ${list.map((def) => `<button type="button" data-pick="${esc(def.type)}">${esc(def.icon || '●')} ${esc(def.label)}</button>`).join('')}
+      `).join('')}
+    </div>`;
+  document.body.appendChild(picker);
+  const rect = picker.getBoundingClientRect();
+  picker.style.left = `${Math.max(8, Math.min(target.clientX ?? 200, window.innerWidth - rect.width - 8))}px`;
+  picker.style.top = `${Math.max(8, Math.min(target.clientY ?? 200, window.innerHeight - rect.height - 8))}px`;
+  picker.addEventListener('mousedown', (event) => event.stopPropagation());
+
+  const pick = (type) => {
+    closeNodePicker();
+    const def = state.meta.nodes[type];
+    if (!def) return;
+    const position = { x: target.x ?? 200, y: target.y ?? 160 };
+    const node = target.edgeId || target.from
+      ? state.canvas.insertNode(type, position, def, { edgeId: target.edgeId, from: target.from, to: target.to })
+      : state.canvas.addNode(type, position, def);
+    state.selectedNodeId = node.id;
+    renderInspector();
+    setTimeout(() => state.canvas.fit(), 30);
+  };
+  picker.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-pick]');
+    if (button) pick(button.dataset.pick);
+  });
+  const search = $('#wfPickerSearch');
+  search.addEventListener('input', () => {
+    const keyword = search.value.trim().toLowerCase();
+    $$('#wfPickerList [data-pick]', picker).forEach((button) => {
+      const def = state.meta.nodes[button.dataset.pick];
+      const hit = !keyword || `${def.label} ${def.type} ${def.description}`.toLowerCase().includes(keyword);
+      button.style.display = hit ? '' : 'none';
+    });
+  });
+  search.focus();
+  setTimeout(() => document.addEventListener('mousedown', closeNodePicker, { once: true }), 0);
+}
+
+// 节点右上角角标：看这个节点最近的输入输出
+function openNodeResult(nodeId) {
+  const run = state.lastRun;
+  const nodeState = state.runNodeStates?.[nodeId];
+  const node = state.canvas.getGraph().nodes.find((n) => n.id === nodeId);
+  if (!nodeState) { toast('这个节点还没有运行结果，先点「试运行」'); return; }
+  openDrawer(`节点结果 · ${node?.title || nodeId}`, `
+    <div class="wf-run-detail">
+      <div class="wf-io ${nodeState.status === 'failed' ? 'bad' : nodeState.status === 'success' ? 'ok' : ''}">
+        <span class="io-title">${esc(nodeState.status)}${nodeState.duration_ms != null ? ` · ${(nodeState.duration_ms / 1000).toFixed(1)}s` : ''}</span>
+        <pre>${esc(JSON.stringify({ 输入: nodeState.input ?? null, 输出: nodeState.output ?? null, 错误: nodeState.error || null, 尝试次数: nodeState.attempts || 1 }, null, 2)).slice(0, 6000)}</pre>
+      </div>
+      ${run ? `<div class="wf-io"><span class="io-title">所属运行</span><pre>${esc(`${run.id} · ${run.status} · ${run.workflow_name}`)}</pre></div>` : ''}
+    </div>`);
 }
 
 // ---------------- 通用弹层 ----------------
@@ -1159,19 +1231,17 @@ export async function mount() {
 export function unmount() {
   stopRunPolling();
   closeVarPicker();
-  closeNodePop();
+  closeInspector();
+  closeContextMenu();
+  closeNodePicker();
 }
 
-// 右键节点的浮层：Esc 关闭、点画布空白关闭
+// Esc 关掉临时浮层；右侧配置面板不在这里关（它跟随选中状态）
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') closeNodePop();
-});
-document.addEventListener('mousedown', (event) => {
-  const pop = $('#wfNodePop');
-  if (!pop) return;
-  if (pop.contains(event.target)) return;
-  if (event.target.closest && event.target.closest('.wf-canvas')) return; // 交给画布自己处理
-  closeNodePop();
+  if (event.key !== 'Escape') return;
+  if ($('#wfNodePicker')) { closeNodePicker(); return; }
+  if ($('.wf-ctx')) { closeContextMenu(); return; }
+  closeVarPicker();
 });
 
 if (typeof window !== 'undefined') {

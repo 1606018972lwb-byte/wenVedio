@@ -116,6 +116,19 @@ export function createCanvas(host, handlers = {}) {
       el('circle', { class: 'port', 'data-port': 'in', 'data-node': node.id, cx: 0, cy: 27, r: 5.5 }),
       el('circle', { class: 'port', 'data-port': 'out', 'data-node': node.id, cx: NODE_W, cy: 27, r: 5.5 }),
     );
+    // 悬停节点时右侧出现的「+」：点它直接接一个新节点（Coze 的习惯）
+    const next = el('g', { class: 'wf-add wf-add-next', 'data-add': 'next', 'data-node': node.id, transform: `translate(${NODE_W + 26},${NODE_H / 2})` });
+    next.append(el('circle', { r: 10 }), el('text', { y: 4, 'text-anchor': 'middle' }));
+    next.querySelector('text').textContent = '+';
+    g.appendChild(next);
+    // 右上角结果角标：运行过之后出现，点它看这个节点的输入输出（Coze 习惯）
+    const result = el('g', { class: 'wf-node-result', 'data-result': node.id, transform: `translate(${NODE_W - 13},11)` });
+    result.append(el('circle', { r: 8 }), el('text', { y: 3.5, 'text-anchor': 'middle' }));
+    result.querySelector('text').textContent = 'i';
+    const tip = el('title');
+    tip.textContent = '查看这个节点的输入与输出';
+    result.appendChild(tip);
+    g.appendChild(result);
     return g;
   }
 
@@ -135,9 +148,10 @@ export function createCanvas(host, handlers = {}) {
     else if (status === 'failed') subtitle.textContent = '失败';
     else if (status === 'skipped') subtitle.textContent = '已跳过';
     else subtitle.textContent = node.type;
-    // 开始节点没有输入口，结束节点没有输出口
+    // 开始节点没有输入口，结束节点没有输出口；结束节点后面不能再接
     g.querySelector('[data-port="in"]').setAttribute('visibility', node.type === 'start' ? 'hidden' : 'visible');
     g.querySelector('[data-port="out"]').setAttribute('visibility', node.type === 'end' ? 'hidden' : 'visible');
+    g.querySelector('.wf-add-next').setAttribute('visibility', node.type === 'end' ? 'hidden' : 'visible');
   }
 
   function portPos(id, side) {
@@ -162,6 +176,11 @@ export function createCanvas(host, handlers = {}) {
         group = el('g');
         group.append(el('path', { class: 'wf-edge-hit' }), el('path', { class: 'wf-edge' }));
         group.setAttribute('data-edge', edge.id);
+        // 连线中间的「+」：点它在两个节点之间插入新节点（Coze 的习惯）
+        const adder = el('g', { class: 'wf-add wf-add-edge', 'data-add': 'edge', 'data-edge': edge.id });
+        adder.append(el('circle', { r: 10 }), el('text', { y: 4, 'text-anchor': 'middle' }));
+        adder.querySelector('text').textContent = '+';
+        group.appendChild(adder);
         edgeEls.set(edge.id, group);
         edgesLayer.appendChild(group);
       }
@@ -173,6 +192,9 @@ export function createCanvas(host, handlers = {}) {
       const fromState = nodeStateOf(edge.from).status;
       visible.setAttribute('class', `wf-edge${selectedEdge === edge.id ? ' selected' : ''}${fromState && fromState !== 'idle' ? ` ${fromState}` : ''}`);
       hit.setAttribute('d', d);
+      const a = portPos(edge.from, 'out');
+      const b = portPos(edge.to, 'in');
+      group.querySelector('.wf-add-edge').setAttribute('transform', `translate(${Math.round((a.x + b.x) / 2)},${Math.round((a.y + b.y) / 2)})`);
     }
     for (const [id, group] of edgeEls) {
       if (!seen.has(id)) { group.remove(); edgeEls.delete(id); }
@@ -204,6 +226,34 @@ export function createCanvas(host, handlers = {}) {
     wrap.focus({ preventScroll: true });
     const target = event.target;
 
+    // 连线中间 / 节点右侧的「+」：打开节点选择器，选中后自动接上
+    const addTarget = target.closest ? target.closest('.wf-add') : null;
+    if (addTarget && !readOnly) {
+      event.preventDefault();
+      const point = toWorld(event.clientX, event.clientY);
+      const payload = {
+        x: point.x - NODE_W / 2,
+        y: point.y - NODE_H / 2,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      };
+      if (addTarget.dataset.add === 'edge') {
+        const edge = edges.find((e) => e.id === addTarget.dataset.edge);
+        if (edge) handlers.onAddNode?.({ ...payload, from: edge.from, to: edge.to, edgeId: edge.id });
+      } else {
+        handlers.onAddNode?.({ ...payload, from: addTarget.dataset.node });
+      }
+      return;
+    }
+
+    // 节点右上角的结果角标
+    const resultTarget = target.closest ? target.closest('.wf-node-result') : null;
+    if (resultTarget) {
+      event.preventDefault();
+      handlers.onNodeResult?.(resultTarget.dataset.result, event);
+      return;
+    }
+
     if (target.dataset && target.dataset.port === 'out') {
       if (readOnly) return;
       mode = 'connect';
@@ -215,7 +265,7 @@ export function createCanvas(host, handlers = {}) {
     }
 
     const nodeGroup = target.closest ? target.closest('.wf-node') : null;
-    if (nodeGroup) {
+    if (nodeGroup && !target.closest('.wf-add') && !target.closest('.wf-node-result')) {
       const id = nodeGroup.dataset.node;
       if (!event.shiftKey && !selection.has(id)) { selection = new Set([id]); selectedEdge = null; }
       else if (event.shiftKey && selection.has(id)) selection.delete(id);
@@ -359,6 +409,13 @@ export function createCanvas(host, handlers = {}) {
     applyTransform();
   }, { passive: false });
 
+  svg.addEventListener('dblclick', (event) => {
+    const nodeGroup = event.target.closest ? event.target.closest('.wf-node') : null;
+    if (!nodeGroup || event.target.closest('.wf-add')) return;
+    event.preventDefault();
+    handlers.onOpenNode?.(nodeGroup.dataset.node);
+  });
+
   svg.addEventListener('contextmenu', (event) => {
     const target = event.target;
     const edgeGroup = target.closest ? target.closest('[data-edge]') : null;
@@ -452,6 +509,18 @@ export function createCanvas(host, handlers = {}) {
     render();
     emitChange();
     emitSelect();
+    return node;
+  }
+
+  // 插入节点并自动接线：从「+」进来时用
+  function insertNode(type, position, meta, wiring = {}) {
+    const node = addNode(type, position, meta);
+    snapshot();
+    if (wiring.edgeId) edges = edges.filter((e) => e.id !== wiring.edgeId);
+    if (wiring.from && node.type !== 'start') edges.push({ id: nextEdgeId(), from: wiring.from, to: node.id });
+    if (wiring.to && node.type !== 'end') edges.push({ id: nextEdgeId(), from: node.id, to: wiring.to });
+    render();
+    emitChange();
     return node;
   }
 
@@ -676,6 +745,22 @@ export function createCanvas(host, handlers = {}) {
     centerOn,
     nodeScreenRect,
     addNode,
+    insertNode,
+    removeEdge: (edgeId) => {
+      const before = edges.length;
+      snapshot();
+      edges = edges.filter((e) => e.id !== edgeId);
+      if (edges.length === before) return false;
+      selectedEdge = null;
+      render();
+      emitChange();
+      return true;
+    },
+    copySelection: () => {
+      if (!selection.size) return false;
+      copySelection();
+      return true;
+    },
     updateNode,
     updateNodeParams,
     removeSelected,

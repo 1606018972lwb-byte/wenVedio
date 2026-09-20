@@ -67,37 +67,44 @@
 .wf-head-actions button.primary:hover { background: var(--brand-hover); color: var(--brand-ink); }
 .wf-head-actions button:disabled { opacity: .5; cursor: not-allowed; }
 
-/* 画布占满整个区域；节点库与节点设置都是浮层，不再占用画布宽度 */
-.wf-body { position: relative; flex: 1 1 auto; min-height: calc(100vh - 205px); }
-.wf-canvas-host { position: absolute; inset: 0; }
-
-/* 左：节点库（悬浮，可拖动、可收起；位置由 JS 用 fixed 定位） */
-.wf-palette {
-  position: fixed; left: 14px; top: 120px; z-index: 6;
-  width: 198px; max-height: min(48vh, 400px); padding: 10px 10px 8px;
-  display: flex; flex-direction: column; gap: 3px;
-  border: 1px solid var(--border); border-radius: var(--r-lg);
-  background: var(--surface); box-shadow: var(--sh-3);
-  overflow-y: auto;
-  -webkit-user-drag: none;
+/* Coze 式布局：上=画布 + 右侧节点配置（选中才展开），下=「添加节点」底部面板 */
+.wf-body {
+  flex: 1 1 auto; min-height: calc(100vh - 205px);
+  display: grid; gap: 12px;
+  grid-template-columns: minmax(0, 1fr) var(--wf-right, 0px);
+  grid-template-rows: minmax(240px, 1fr) auto;
+  --wf-right: 0px;
 }
-.wf-palette.collapsed { width: auto; max-height: none; padding: 8px 12px; overflow: visible; }
+.wf-body.has-config { --wf-right: 336px; }
+.wf-body.palette-min { grid-template-rows: minmax(240px, 1fr) auto; }
+.wf-canvas-host { position: relative; min-width: 0; grid-column: 1; grid-row: 1; }
+
+/* 下：添加节点面板（Coze 1.0 的节点库位置） */
+.wf-palette {
+  grid-column: 1 / -1; grid-row: 2;
+  display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  max-height: 208px; padding: 10px 12px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--surface);
+}
+.wf-palette.collapsed { max-height: none; padding: 8px 12px; }
 .wf-palette.collapsed .wf-palette-body { display: none; }
-.wf-palette-head { display: flex; align-items: center; gap: 8px; margin: -2px 0 6px; padding: 2px 0; cursor: grab; }
-.wf-palette-head.dragging { cursor: grabbing; }
+.wf-palette-head { display: flex; align-items: center; gap: 8px; }
 .wf-palette-head b { font-size: 12px; font-weight: 750; color: var(--text); white-space: nowrap; }
+.wf-palette-tip { color: var(--text-3); font-size: 11px; }
 .wf-palette-toggle {
   margin-left: auto; width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center;
   border: 1px solid var(--border); border-radius: var(--r-xs); background: var(--surface);
   color: var(--text-3); font-size: 12px; line-height: 1; cursor: pointer;
 }
 .wf-palette-toggle:hover { border-color: var(--brand); color: var(--brand); }
-.wf-palette-body { display: flex; flex-direction: column; gap: 3px; }
-.wf-palette-search { width: 100%; margin-bottom: 6px; padding: 7px 10px; border: 1px solid var(--border);
+.wf-palette-body { display: flex; gap: 16px; overflow-x: auto; padding-bottom: 2px; }
+.wf-palette-col { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; min-width: 132px; }
+.wf-palette-search { width: 100%; max-width: 260px; margin-bottom: 2px; padding: 6px 10px; border: 1px solid var(--border);
   border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font-size: 12px; outline: none; }
-.wf-palette-group { margin: 8px 0 2px; padding-left: 4px; color: var(--text-3); font-size: 10.5px; font-weight: 700; letter-spacing: .04em; }
+.wf-palette-group { margin: 2px 0; padding-left: 2px; color: var(--text-3); font-size: 10.5px; font-weight: 700; letter-spacing: .04em; }
 .wf-node-btn {
-  display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 10px;
+  display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 10px;
   border: 1px solid transparent; border-radius: var(--r-sm); background: transparent;
   color: var(--text-2); font-size: 12.5px; font-weight: 600; text-align: left; cursor: grab;
 }
@@ -158,23 +165,46 @@
 .wf-marquee { fill: var(--brand-soft); stroke: var(--brand); stroke-width: 1; opacity: .5; }
 .wf-draft-edge { fill: none; stroke: var(--brand); stroke-width: 2; stroke-dasharray: 5 4; }
 
-/* 节点设置：右键节点弹出的浮层 */
-.wf-node-pop {
-  position: fixed; z-index: 40; width: 336px; max-height: min(80vh, 640px);
-  display: flex; flex-direction: column;
-  border: 1px solid var(--border); border-radius: var(--r-lg);
-  background: var(--surface); box-shadow: var(--sh-3);
+/* 右：节点配置面板（点选节点后出现，Coze 习惯） */
+.wf-inspector {
+  grid-column: 2; grid-row: 1;
+  display: flex; flex-direction: column; min-width: 0;
+  border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface);
+  overflow: hidden;
 }
-.wf-node-pop-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-.wf-node-pop-head .ico { font-size: 14px; }
-.wf-node-pop-head b { font-size: 13px; font-weight: 750; color: var(--text); }
-.wf-node-pop-head .type { color: var(--text-3); font: 10.5px var(--mono); }
-.wf-node-pop-close {
+.wf-inspector-head { display: flex; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+.wf-inspector-head .ico { font-size: 14px; }
+.wf-inspector-head b { font-size: 13px; font-weight: 750; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-inspector-head .type { color: var(--text-3); font: 10.5px var(--mono); flex: 0 0 auto; }
+.wf-inspector-close {
   margin-left: auto; width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center;
   border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text-3); font-size: 16px; line-height: 1; cursor: pointer;
 }
-.wf-node-pop-close:hover { background: var(--surface-3); color: var(--text); }
-.wf-node-pop-body { padding: 12px 14px 14px; overflow-y: auto; }
+.wf-inspector-close:hover { background: var(--surface-3); color: var(--text); }
+.wf-inspector-body { padding: 12px 14px 16px; overflow-y: auto; }
+
+/* 节点库 / 节点上的「+」与结果角标 */
+.wf-add { opacity: 0; cursor: pointer; }
+.wf-add circle { fill: var(--surface); stroke: var(--brand); stroke-width: 1.4; }
+.wf-add text { fill: var(--brand); font-size: 14px; font-weight: 700; }
+.wf-node:hover .wf-add-next, [data-edge]:hover .wf-add-edge { opacity: 1; }
+.wf-add:hover circle { fill: var(--brand); }
+.wf-add:hover text { fill: var(--brand-inverse, #fff); }
+.wf-node-result { opacity: 0; cursor: pointer; }
+.wf-node-result circle { fill: var(--surface); stroke: var(--border-2); stroke-width: 1.2; }
+.wf-node-result text { fill: var(--text-2); font-size: 9px; font-weight: 700; }
+.wf-node.success .wf-node-result, .wf-node.failed .wf-node-result { opacity: 1; }
+.wf-node-result:hover circle { fill: var(--brand); stroke: var(--brand); }
+.wf-node-result:hover text { fill: #fff; }
+
+/* 右键节点的小菜单 */
+.wf-ctx {
+  position: fixed; z-index: 50; min-width: 150px; padding: 5px;
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--sh-3);
+}
+.wf-ctx button { display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text-2); font-size: 12.5px; text-align: left; cursor: pointer; }
+.wf-ctx button:hover { background: var(--brand-soft); color: var(--brand); }
+.wf-ctx button.danger:hover { background: var(--danger-soft); color: var(--danger); }
 
 .wf-insp-empty { color: var(--text-3); font-size: 12.5px; line-height: 1.7; }
 .wf-insp-title { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 14px; font-weight: 750; color: var(--text); }
