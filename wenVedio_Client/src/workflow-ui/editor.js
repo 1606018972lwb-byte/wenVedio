@@ -99,7 +99,11 @@ const TEMPLATES = [
 function renderList() {
   const host = $('#wfListMode');
   const keyword = ($('#wfSearch')?.value || '').trim().toLowerCase();
-  const list = state.workflows.filter((wf) => !keyword || `${wf.name} ${wf.description || ''}`.toLowerCase().includes(keyword));
+  const onlyFailed = host.dataset.onlyFailed === '1';
+  const failedCount = state.workflows.filter((wf) => wf.last_run_status === 'failed').length;
+  const list = state.workflows
+    .filter((wf) => !onlyFailed || wf.last_run_status === 'failed')
+    .filter((wf) => !keyword || `${wf.name} ${wf.description || ''}`.toLowerCase().includes(keyword));
   const cards = list.map((wf) => `
     <article class="wf-card" data-open="${esc(wf.id)}">
       <div class="wf-card-head">
@@ -137,6 +141,7 @@ function renderList() {
   host.innerHTML = `
     <div class="wf-toolbar">
       <input id="wfSearch" type="search" placeholder="搜索工作流…" value="${esc($('#wfSearch')?.value || '')}" />
+      <button class="outline-button${onlyFailed ? ' accent' : ''}" id="wfOnlyFailed" type="button"${failedCount ? '' : ' disabled'}>${onlyFailed ? '✓ ' : ''}只看上次失败的${failedCount ? ` (${failedCount})` : ''}</button>
       <span class="grow"></span>
       <button class="outline-button" id="wfImport" type="button">导入</button>
       <input type="file" id="wfImportFile" accept=".json,application/json" hidden />
@@ -147,6 +152,10 @@ function renderList() {
     ${state.workflows.length ? '' : '<div class="wf-empty">还没有工作流。点「新建工作流」从空白开始，或直接用下面的模板。</div>'}`;
 
   $('#wfSearch')?.addEventListener('input', () => renderList());
+  $('#wfOnlyFailed')?.addEventListener('click', () => {
+    host.dataset.onlyFailed = host.dataset.onlyFailed === '1' ? '0' : '1';
+    renderList();
+  });
   $('#wfNew')?.addEventListener('click', () => createWorkflow());
   $('#wfPythonEnv')?.addEventListener('click', () => openPythonPanel());
   $$('[data-open]', host).forEach((el) => el.addEventListener('click', (event) => {
