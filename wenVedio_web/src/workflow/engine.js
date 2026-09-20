@@ -10,6 +10,26 @@ const { NODE_DEFS, delay } = require('./nodes');
 const { resolveParam, getPath } = require('./vars');
 
 const TICK_MS = 800;
+// 运行记录里保存的输入/输出：超长字符串（图片 data URL 之类）截断，避免记录文件膨胀
+const MAX_RUN_STRING = 2000;
+
+function shrinkForRun(value, depth = 0) {
+  if (value == null) return value;
+  if (typeof value === 'string') {
+    return value.length > MAX_RUN_STRING ? `${value.slice(0, MAX_RUN_STRING)}…（共 ${value.length} 字，已截断）` : value;
+  }
+  if (typeof value !== 'object') return value;
+  if (depth > 8) return '（层级过深，已省略）';
+  if (Array.isArray(value)) return value.slice(0, 200).map((item) => shrinkForRun(item, depth + 1));
+  const out = {};
+  let count = 0;
+  for (const [key, item] of Object.entries(value)) {
+    if (count >= 200) { out.__truncated__ = '（字段过多，已省略）'; break; }
+    out[key] = shrinkForRun(item, depth + 1);
+    count += 1;
+  }
+  return out;
+}
 const TERMINAL = new Set(['success', 'failed', 'skipped']);
 const RUN_TERMINAL = new Set(['success', 'failed', 'cancelled']);
 
@@ -270,6 +290,8 @@ function create({ store, bridge, writeLog }) {
       }
       input = mapped;
     }
+    // 存档一份这个节点实际拿到的输入，调试面板要显示（大字段截断，别把运行记录撑爆）
+    state.input = shrinkForRun(input);
     const ctx = {
       node,
       run,

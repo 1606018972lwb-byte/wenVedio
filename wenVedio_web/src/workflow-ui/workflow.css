@@ -217,6 +217,20 @@
 .wf-ctx button:hover { background: var(--brand-soft); color: var(--brand); }
 .wf-ctx button.danger:hover { background: var(--danger-soft); color: var(--danger); }
 
+/* 节点内联试运行结果：贴在节点旁边的小卡片（Coze 习惯） */
+.wf-result-pop {
+  position: fixed; z-index: 42; width: 330px; max-height: min(66vh, 540px);
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--surface); box-shadow: var(--sh-3);
+}
+.wf-result-pop-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.wf-result-pop-head b { font-size: 12.5px; font-weight: 750; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-result-pop-head .meta { color: var(--text-3); font: 10.5px var(--mono); flex: 0 0 auto; }
+.wf-result-pop-body { padding: 10px 12px 12px; overflow-y: auto; }
+.wf-result-pop-body .wf-io { margin-top: 8px; }
+.wf-result-pop-body .wf-io:first-child { margin-top: 0; }
+
 .wf-insp-empty { color: var(--text-3); font-size: 12.5px; line-height: 1.7; }
 .wf-insp-title { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 14px; font-weight: 750; color: var(--text); }
 .wf-insp-type { color: var(--text-3); font-size: 11px; font-family: var(--mono); margin-bottom: 12px; }

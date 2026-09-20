@@ -16,11 +16,39 @@ function create({ configDir, writeLog }) {
   const workflows = new Map();
   const runs = new Map();
 
+  // Windows 上目标文件可能被索引器 / 杀软短暂占用，rename 会 EPERM；
+  // 所以这里重试几次，仍失败就直接覆盖写（宁可非原子，也不能丢数据或抛异常）。
+  function sleepSync(ms) {
+    try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+    catch (_) { const end = Date.now() + ms; while (Date.now() < end) { /* 忙等兜底 */ } }
+  }
+
   function writeJson(file, payload) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const temporary = `${file}.tmp`;
-    fs.writeFileSync(temporary, JSON.stringify(payload, null, 2));
-    fs.renameSync(temporary, file);
+    const text = JSON.stringify(payload, null, 2);
+    try { fs.mkdirSync(path.dirname(file), { recursive: true }); }
+    catch (_) { /* 目录已存在 */ }
+    // 临时文件名带上进程与时间，避免并发写同一个 tmp
+    const temporary = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
+    try {
+      fs.writeFileSync(temporary, text);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try { fs.renameSync(temporary, file); return true; }
+        catch (err) {
+          if (attempt === 4) throw err;
+          sleepSync(25 * (attempt + 1));
+        }
+      }
+    } catch (err) {
+      try { fs.unlinkSync(temporary); } catch (_) { /* 清理失败无所谓 */ }
+      writeLog('warn', `原子写失败，改为直接覆盖 ${path.basename(file)}：${err.message}`);
+    }
+    try {
+      fs.writeFileSync(file, text);
+      return true;
+    } catch (err) {
+      writeLog('error', `写入 ${path.basename(file)} 失败（数据只保留在内存里）：${err.message}`);
+      return false;
+    }
   }
 
   function load() {

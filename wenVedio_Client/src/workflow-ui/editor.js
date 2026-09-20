@@ -1269,19 +1269,74 @@ function openNodePicker(target) {
 }
 
 // 节点右上角角标：看这个节点最近的输入输出
+// 节点内联试运行结果：贴在节点旁边的小卡片，再点一次收起（Coze 习惯）
+function closeResultPop() { $('#wfResultPop')?.remove(); }
+
+function positionResultPop(pop, nodeId) {
+  const anchor = state.canvas?.nodeScreenRect?.(nodeId);
+  const margin = 12;
+  const rect = pop.getBoundingClientRect();
+  let left = margin;
+  let top = margin;
+  if (anchor) {
+    left = anchor.right + margin;
+    if (left + rect.width > window.innerWidth - margin) left = anchor.left - rect.width - margin;
+    top = anchor.top - 8;
+  }
+  left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
+  top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.top = `${Math.round(top)}px`;
+}
+
 function openNodeResult(nodeId) {
-  const run = state.lastRun;
   const nodeState = state.runNodeStates?.[nodeId];
   const node = state.canvas.getGraph().nodes.find((n) => n.id === nodeId);
   if (!nodeState) { toast('这个节点还没有运行结果，先点「试运行」'); return; }
-  openDrawer(`节点结果 · ${node?.title || nodeId}`, `
-    <div class="wf-run-detail">
-      <div class="wf-io ${nodeState.status === 'failed' ? 'bad' : nodeState.status === 'success' ? 'ok' : ''}">
-        <span class="io-title">${esc(nodeState.status)}${nodeState.duration_ms != null ? ` · ${(nodeState.duration_ms / 1000).toFixed(1)}s` : ''}</span>
-        <pre>${esc(JSON.stringify({ 输入: nodeState.input ?? null, 输出: nodeState.output ?? null, 错误: nodeState.error || null, 尝试次数: nodeState.attempts || 1 }, null, 2)).slice(0, 6000)}</pre>
+  const existing = $('#wfResultPop');
+  const same = existing && existing.dataset.node === nodeId;
+  closeResultPop();
+  if (same) return;
+  const status = nodeState.status || 'pending';
+  const meta = [
+    nodeState.duration_ms != null ? `${(nodeState.duration_ms / 1000).toFixed(1)}s` : '',
+    nodeState.attempts > 1 ? `第 ${nodeState.attempts} 次` : '',
+  ].filter(Boolean).join(' · ');
+  const pop = document.createElement('div');
+  pop.className = 'wf-result-pop';
+  pop.id = 'wfResultPop';
+  pop.dataset.node = nodeId;
+  pop.innerHTML = `
+    <div class="wf-result-pop-head">
+      <span class="wf-state ${esc(status)}">${esc(status)}</span>
+      <b>${esc(node?.title || nodeId)}</b>
+      <span class="meta">${esc(meta)}</span>
+      <button type="button" class="wf-inspector-close" data-result-close aria-label="收起">×</button>
+    </div>
+    <div class="wf-result-pop-body">
+      ${nodeState.error ? `<div class="wf-io bad"><span class="io-title">错误</span><pre>${esc(nodeState.error)}</pre></div>` : ''}
+      <div class="wf-io"><span class="io-title">输入</span><pre>${esc(JSON.stringify(nodeState.input ?? null, null, 2)).slice(0, 2600)}</pre></div>
+      <div class="wf-io ${status === 'success' ? 'ok' : ''}"><span class="io-title">输出</span><pre>${esc(JSON.stringify(nodeState.output ?? null, null, 2)).slice(0, 3600)}</pre></div>
+      <div class="wf-insp-actions" style="margin-top:10px">
+        <button type="button" data-result-full>完整运行记录</button>
+        <button type="button" data-result-close2>收起</button>
       </div>
-      ${run ? `<div class="wf-io"><span class="io-title">所属运行</span><pre>${esc(`${run.id} · ${run.status} · ${run.workflow_name}`)}</pre></div>` : ''}
-    </div>`);
+    </div>`;
+  document.body.appendChild(pop);
+  positionResultPop(pop, nodeId);
+  pop.addEventListener('mousedown', (event) => event.stopPropagation());
+  pop.querySelector('[data-result-close]').addEventListener('click', () => closeResultPop());
+  pop.querySelector('[data-result-close2]').addEventListener('click', () => closeResultPop());
+  pop.querySelector('[data-result-full]').addEventListener('click', () => {
+    closeResultPop();
+    if (state.lastRun) openRunDetail(state.lastRun.id);
+  });
+  setTimeout(() => document.addEventListener('mousedown', closeResultPopOnce, { once: true }), 0);
+}
+
+function closeResultPopOnce(event) {
+  if (event.target.closest('.wf-result-pop') || event.target.closest('.wf-node-result')) return;
+  closeResultPop();
 }
 
 // 让用户选这条线走哪个分支出口（点连线或从分支节点连出来时用）
@@ -1412,6 +1467,7 @@ export function unmount() {
   closeInspector();
   closeContextMenu();
   closeNodePicker();
+  closeResultPop();
 }
 
 // Esc 关掉临时浮层；右侧配置面板不在这里关（它跟随选中状态）
@@ -1419,6 +1475,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if ($('#wfNodePicker')) { closeNodePicker(); return; }
   if ($('.wf-ctx')) { closeContextMenu(); return; }
+  if ($('#wfResultPop')) { closeResultPop(); return; }
   closeVarPicker();
 });
 
