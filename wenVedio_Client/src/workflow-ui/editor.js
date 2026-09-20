@@ -111,6 +111,7 @@ function renderList() {
         <span>${(wf.nodes || []).length} 个节点</span>
         <span>运行 ${wf.run_count || 0} 次</span>
         ${wf.last_run_status ? `<span class="wf-state ${esc(wf.last_run_status)}">上次${wf.last_run_status === 'success' ? '成功' : wf.last_run_status === 'failed' ? '失败' : '已取消'}</span>` : ''}
+        ${wf.last_run_finished_at ? `<span>${new Date(wf.last_run_finished_at).toLocaleString('zh-CN', { hour12: false }).slice(5, 16)}</span>` : ''}
         <span>${wf.updated_at ? new Date(wf.updated_at).toLocaleString('zh-CN', { hour12: false }).slice(5, 16) : ''}</span>
       </div>
       <div class="wf-card-actions">
@@ -1048,9 +1049,15 @@ function promptRun(workflowId) {
       $$('[data-input]').forEach((input) => {
         const value = input.value.trim();
         if (!value) return;
+        const key = input.dataset.input;
+        const field = fields.find((item) => item.key === key);
         if (input.tagName === 'TEXTAREA') {
-          try { inputs[input.dataset.input] = JSON.parse(value); } catch (_) { inputs[input.dataset.input] = value; }
-        } else inputs[input.dataset.input] = value;
+          try { inputs[key] = JSON.parse(value); } catch (_) { inputs[key] = value; }
+        } else if (field && field.type === 'number') {
+          // number 类型存成数字，免得下游拿到字符串还要自己转
+          const numeric = Number(value);
+          inputs[key] = Number.isFinite(numeric) ? numeric : value;
+        } else inputs[key] = value;
       });
       writeSavedInputs(workflowId, inputs);
       close();
