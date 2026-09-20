@@ -51,7 +51,14 @@ export function createCanvas(host, handlers = {}) {
   const hint = document.createElement('div');
   hint.className = 'wf-canvas-hint';
   hint.textContent = '右键节点改设置 · 拖动空白平移 · 滚轮缩放 · Shift+框选 · Delete 删除';
-  wrap.append(svg, toolbar, hint);
+  // 右下角缩略图（Coze / n8n 都有）：看全貌，点哪跳哪
+  const mini = document.createElement('div');
+  mini.className = 'wf-minimap';
+  mini.innerHTML = '<svg class="wf-minimap-svg"><g class="mm-nodes"></g><rect class="mm-view" rx="2" /></svg>';
+  const mmSvg = mini.querySelector('svg');
+  const mmNodes = mini.querySelector('.mm-nodes');
+  const mmView = mini.querySelector('.mm-view');
+  wrap.append(svg, toolbar, hint, mini);
   host.appendChild(wrap);
 
   // ---------------- 状态 ----------------
@@ -75,7 +82,90 @@ export function createCanvas(host, handlers = {}) {
   const applyTransform = () => {
     viewport.setAttribute('transform', `translate(${panX},${panY}) scale(${scale})`);
     toolbar.querySelector('.zoom-label').textContent = `${Math.round(scale * 100)}%`;
+    renderMinimap();
   };
+
+  // ---------------- 缩略图 ----------------
+  const MM_W = 176;
+  const MM_H = 112;
+  let mmScale = 1;
+  let mmOffset = { x: 0, y: 0 };
+
+  function renderMinimap() {
+    if (!mmNodes) return;
+    if (!nodes.length) {
+      mini.style.display = 'none';
+      return;
+    }
+    mini.style.display = '';
+    const minX = Math.min(...nodes.map((n) => n.x)) - 40;
+    const minY = Math.min(...nodes.map((n) => n.y)) - 40;
+    const maxX = Math.max(...nodes.map((n) => n.x + NODE_W)) + 40;
+    const maxY = Math.max(...nodes.map((n) => n.y + NODE_H)) + 40;
+    const width = Math.max(1, maxX - minX);
+    const height = Math.max(1, maxY - minY);
+    mmScale = Math.min((MM_W - 14) / width, (MM_H - 14) / height);
+    mmOffset = {
+      x: (MM_W - width * mmScale) / 2 - minX * mmScale,
+      y: (MM_H - height * mmScale) / 2 - minY * mmScale,
+    };
+    // 缩略图里的节点方块：按运行状态上色，和画布一致
+    const seen = new Set();
+    for (const node of nodes) {
+      seen.add(node.id);
+      let rect = mmNodes.querySelector(`[data-mm="${node.id}"]`);
+      if (!rect) {
+        rect = el('rect', { 'data-mm': node.id, rx: 2 });
+        mmNodes.appendChild(rect);
+      }
+      rect.setAttribute('x', mmOffset.x + node.x * mmScale);
+      rect.setAttribute('y', mmOffset.y + node.y * mmScale);
+      rect.setAttribute('width', Math.max(2, NODE_W * mmScale));
+      rect.setAttribute('height', Math.max(2, NODE_H * mmScale));
+      const status = nodeStateOf(node.id).status || 'idle';
+      const fill = status === 'success' ? 'var(--ok)' : status === 'failed' ? 'var(--danger)'
+        : status === 'running' ? 'var(--info)' : selection.has(node.id) ? 'var(--brand)' : 'var(--border-2)';
+      rect.setAttribute('fill', fill);
+    }
+    for (const rect of [...mmNodes.children]) {
+      if (!seen.has(rect.getAttribute('data-mm'))) rect.remove();
+    }
+    // 视口框：当前画布看到的那一块
+    const box = svg.getBoundingClientRect();
+    if (!box.width || !box.height) return;
+    mmView.setAttribute('x', mmOffset.x + (-panX / scale) * mmScale);
+    mmView.setAttribute('y', mmOffset.y + (-panY / scale) * mmScale);
+    mmView.setAttribute('width', Math.max(4, (box.width / scale) * mmScale));
+    mmView.setAttribute('height', Math.max(4, (box.height / scale) * mmScale));
+  }
+
+  function minimapJump(clientX, clientY) {
+    const box = mmSvg.getBoundingClientRect();
+    const world = { x: (clientX - box.left - mmOffset.x) / mmScale, y: (clientY - box.top - mmOffset.y) / mmScale };
+    const rect = svg.getBoundingClientRect();
+    panX = rect.width / 2 - world.x * scale;
+    panY = rect.height / 2 - world.y * scale;
+    userAdjusted = true;
+    applyTransform();
+  }
+
+  mini.addEventListener('mousedown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    minimapJump(event.clientX, event.clientY);
+    const onMove = (moveEvent) => {
+      moveEvent.preventDefault();
+      minimapJump(moveEvent.clientX, moveEvent.clientY);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+  mini.addEventListener('contextmenu', (event) => event.preventDefault());
 
   const toWorld = (clientX, clientY) => {
     const rect = svg.getBoundingClientRect();
@@ -228,6 +318,7 @@ export function createCanvas(host, handlers = {}) {
       if (!seen.has(id)) { g.remove(); nodeEls.delete(id); }
     }
     renderEdges();
+    renderMinimap();
   }
 
   // ---------------- 交互 ----------------
