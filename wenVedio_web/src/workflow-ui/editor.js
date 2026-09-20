@@ -1526,6 +1526,51 @@ function pickEdgeBranch(edgeId) {
   );
 }
 
+// ---------------- 快捷键帮助 ----------------
+const SHORTCUTS = [
+  ['拖动空白', '平移画布'],
+  ['滚轮', '以光标为中心缩放'],
+  ['Shift + 拖动空白', '框选多个节点'],
+  ['点击节点', '右侧打开它的配置'],
+  ['双击节点', '同上（n8n 习惯）'],
+  ['拖动节点', '移动；靠近其它节点会自动对齐吸附'],
+  ['从右侧圆点拖到左侧圆点', '连线'],
+  ['连线中间的 ＋', '在这条线上插入一个新节点'],
+  ['节点右侧的 ＋', '给这个节点接下一个节点'],
+  ['右键节点', '配置 / 测试此节点 / 复制 / 重命名 / 删除'],
+  ['右键连线', '插入节点 / 改到哪个出口 / 删除'],
+  ['Delete / Backspace', '删除选中的节点或连线'],
+  ['Ctrl + Z / Ctrl + Y', '撤销 / 重做（改参数也能撤）'],
+  ['Ctrl + C / Ctrl + V', '复制 / 粘贴选中的节点'],
+  ['Ctrl + A', '全选节点'],
+  ['点击节点右上角的 i', '看这个节点本次运行的输入与输出'],
+  ['?', '显示 / 关闭这个帮助'],
+];
+
+function closeHelp() { $('#wfHelp')?.remove(); }
+
+function toggleHelp() {
+  if ($('#wfHelp')) { closeHelp(); return; }
+  const panel = document.createElement('div');
+  panel.className = 'wf-help';
+  panel.id = 'wfHelp';
+  panel.innerHTML = `
+    <div class="wf-help-head">
+      <h3>画布操作与快捷键</h3>
+      <button type="button" class="wf-inspector-close" data-help-close aria-label="关闭">×</button>
+    </div>
+    <dl>${SHORTCUTS.map(([key, what]) => `<dt>${esc(key)}</dt><dd>${esc(what)}</dd>`).join('')}</dl>`;
+  document.body.appendChild(panel);
+  panel.addEventListener('mousedown', (event) => event.stopPropagation());
+  panel.querySelector('[data-help-close]').addEventListener('click', () => closeHelp());
+  setTimeout(() => document.addEventListener('mousedown', closeHelpOnce, { once: true }), 0);
+}
+
+function closeHelpOnce(event) {
+  if (event.target.closest('.wf-help')) return;
+  closeHelp();
+}
+
 // ---------------- 通用弹层 ----------------
 function openDrawer(title, html, onMount) {
   closeDrawer();
@@ -1639,7 +1684,17 @@ export function unmount() {
 
 // Esc 关掉临时浮层；右侧配置面板不在这里关（它跟随选中状态）
 document.addEventListener('keydown', (event) => {
+  if (event.key === '?' || (event.key === '/' && event.shiftKey)) {
+    // 正在输入框里打字就按字面处理
+    const tag = (event.target && event.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (!$('#workflowView') || $('#workflowView').hidden) return;
+    event.preventDefault();
+    toggleHelp();
+    return;
+  }
   if (event.key !== 'Escape') return;
+  if ($('#wfHelp')) { closeHelp(); return; }
   if ($('#wfNodePicker')) { closeNodePicker(); return; }
   if ($('.wf-ctx')) { closeContextMenu(); return; }
   if ($('#wfResultPop')) { closeResultPop(); return; }
