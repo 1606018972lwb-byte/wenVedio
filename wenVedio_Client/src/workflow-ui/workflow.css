@@ -318,6 +318,8 @@
 }
 .wf-run-row:hover { border-color: var(--brand); background: var(--surface-hover); }
 .wf-run-row .mono { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+.wf-run-again { margin-left: 6px; padding: 1px 6px; border: 1px solid var(--border-2); border-radius: var(--r-xs); background: var(--surface); color: var(--text-2); font-size: 11px; cursor: pointer; }
+.wf-run-again:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
 .wf-run-row .dur { font-family: var(--mono); font-size: 11px; color: var(--text-2); text-align: right; }
 
 .wf-state { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; white-space: nowrap; }

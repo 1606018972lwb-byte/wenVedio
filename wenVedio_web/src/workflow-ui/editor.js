@@ -1138,7 +1138,7 @@ async function openRunList(workflowId) {
             <span class="mono">${esc((run.id || '').slice(4, 14))}</span>
             <span>${esc(run.workflow_name || '')}${run.workflow_version ? ` <code>v${run.workflow_version}</code>` : ''}</span>
             <span class="mono">${run.total_tokens ? `${run.total_tokens} tok` : ''}</span>
-            <span class="dur">${run.duration_ms != null ? `${(run.duration_ms / 1000).toFixed(1)}s` : '—'}</span>
+            <span class="dur">${run.duration_ms != null ? `${(run.duration_ms / 1000).toFixed(1)}s` : '—'}<button type="button" class="wf-run-again" data-rerun-row="${esc(run.id)}" title="用同样输入重跑">↻</button></span>
           </div>`).join('');
         body.innerHTML = `
           <div class="wf-toolbar" style="margin-bottom:10px">
@@ -1148,6 +1148,11 @@ async function openRunList(workflowId) {
           </div>
           <div class="wf-runs">${rows || '<div class="wf-empty">没有符合条件的运行记录</div>'}</div>`;
         $$('[data-run]', body).forEach((el) => el.addEventListener('click', () => openRunDetail(el.dataset.run)));
+        // 列表里直接重跑，不用点进详情
+        $$('[data-rerun-row]', body).forEach((el) => el.addEventListener('click', (event) => {
+          event.stopPropagation();
+          rerunWorkflow(el.dataset.rerunRow);
+        }));
         $$('[data-filter]', body).forEach((el) => el.addEventListener('click', () => { filter = el.dataset.filter; draw(); }));
         $('#wfClearRuns', body)?.addEventListener('click', async () => {
           const finished = data.runs.filter((run) => run.finished_at || ['success', 'failed', 'cancelled'].includes(run.status)).length;
