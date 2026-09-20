@@ -91,6 +91,10 @@
 }
 .wf-canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 .wf-canvas.panning { cursor: grabbing; }
+/* 画布与节点库禁用原生文字选择：拖动时不会出现选择方块，也不会拖到一半被浏览器抢走 */
+.wf-canvas-wrap, .wf-canvas, .wf-node, .wf-palette, .wf-node-btn {
+  -webkit-user-select: none; user-select: none;
+}
 .wf-canvas-toolbar {
   position: absolute; left: 12px; bottom: 12px; display: flex; align-items: center; gap: 4px;
   padding: 4px; border: 1px solid var(--border); border-radius: var(--r-md);

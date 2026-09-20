@@ -1,7 +1,7 @@
 // 工作流 · 视图
 // 原生 ES 模块，浏览器直接加载（<script type="module">），没有构建步骤。
 // 结构：列表页 ⇄ 编辑器（左节点库 / 中画布 / 右配置面板）+ 运行记录 + Python 环境面板。
-import { createCanvas } from './canvas.js';
+import { createCanvas, NODE_W, NODE_H } from './canvas.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -264,6 +264,9 @@ function renderPalette() {
 
 function mountCanvas() {
   const host = $('#wfCanvasHost');
+  // 旧的画布在 window 上挂了事件监听，重建前必须先销毁，否则监听会越积越多
+  try { state.canvas?.destroy?.(); } catch (_) { /* 忽略 */ }
+  state.canvas = null;
   host.innerHTML = '';
   state.canvas = createCanvas(host, {
     onChange: () => { markDirty(); syncSelectionLabel(); },
@@ -276,11 +279,9 @@ function mountCanvas() {
     event.preventDefault();
     const type = event.dataTransfer.getData('text/wf-node');
     if (!type || !state.meta.nodes[type]) return;
-    const rect = host.getBoundingClientRect();
-    const point = state.canvas.screenToWorld
-      ? state.canvas.screenToWorld(event.clientX, event.clientY)
-      : { x: event.clientX - rect.left, y: event.clientY - rect.top };
-    const node = state.canvas.addNode(type, point, state.meta.nodes[type]);
+    // 换算到画布坐标系，落点对准光标（此前忽略了平移与缩放，拖进来的节点会跑偏）
+    const point = state.canvas.screenToWorld(event.clientX, event.clientY);
+    const node = state.canvas.addNode(type, { x: point.x - NODE_W / 2, y: point.y - NODE_H / 2 }, state.meta.nodes[type]);
     state.selectedNodeId = node.id;
     renderInspector();
   });

@@ -263,8 +263,14 @@ export function createCanvas(host, handlers = {}) {
     draftEdge.setAttribute('d', `M ${from.x} ${from.y} C ${from.x + dx} ${from.y}, ${to.x - dx} ${to.y}, ${to.x} ${to.y}`);
   }
 
-  window.addEventListener('mousemove', (event) => {
+  window.addEventListener('mousemove', onWindowMouseMove);
+  window.addEventListener('mouseup', onWindowMouseUp);
+  window.addEventListener('blur', cancelDrag);
+
+  function onWindowMouseMove(event) {
     if (!mode || !drag) return;
+    // 拖动期间阻止默认行为，否则会触发原生文字选择（Windows 上表现为一块强调色方块）
+    event.preventDefault();
     if (mode === 'pan') {
       panX = drag.panX + (event.clientX - drag.startX);
       panY = drag.panY + (event.clientY - drag.startY);
@@ -276,13 +282,16 @@ export function createCanvas(host, handlers = {}) {
       const dy = (event.clientY - drag.startY) / scale;
       if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 2) return;
       if (!drag.moved) { snapshot(); drag.moved = true; }
+      // 只更新被拖动的节点与连线，不整块重绘：节点多时拖动才跟得住手
       for (const origin of drag.origin) {
         const node = nodes.find((n) => n.id === origin.id);
         if (!node) continue;
         node.x = Math.round(origin.x + dx);
         node.y = Math.round(origin.y + dy);
+        const group = nodeEls.get(node.id);
+        if (group) group.setAttribute('transform', `translate(${node.x},${node.y})`);
       }
-      render();
+      renderEdges();
       return;
     }
     if (mode === 'marquee') {
@@ -296,10 +305,14 @@ export function createCanvas(host, handlers = {}) {
       return;
     }
     if (mode === 'connect') updateDraftEdge(event);
-  });
+  }
 
-  window.addEventListener('mouseup', (event) => {
+  function onWindowMouseUp(event) {
     if (!mode) return;
+    // 无论哪种模式，收尾时都把临时图形收干净，避免留下「卡住」的框
+    marquee.setAttribute('visibility', 'hidden');
+    draftEdge.setAttribute('visibility', 'hidden');
+    svg.classList.remove('panning');
     if (mode === 'node' && drag?.moved) emitChange();
     if (mode === 'marquee') {
       const box = {
@@ -312,10 +325,8 @@ export function createCanvas(host, handlers = {}) {
         render();
         emitSelect();
       }
-      marquee.setAttribute('visibility', 'hidden');
     }
     if (mode === 'connect') {
-      draftEdge.setAttribute('visibility', 'hidden');
       const under = document.elementFromPoint(event.clientX, event.clientY);
       const port = under && under.dataset ? under.dataset.port : null;
       const toId = under && under.dataset ? under.dataset.node : null;
@@ -323,8 +334,17 @@ export function createCanvas(host, handlers = {}) {
     }
     mode = null;
     drag = null;
+  }
+
+  // 拖到窗口外松手会收不到 mouseup，失焦时兜底取消，避免留下半截状态
+  function cancelDrag() {
+    if (!mode) return;
+    mode = null;
+    drag = null;
+    marquee.setAttribute('visibility', 'hidden');
+    draftEdge.setAttribute('visibility', 'hidden');
     svg.classList.remove('panning');
-  });
+  }
 
   svg.addEventListener('wheel', (event) => {
     event.preventDefault();
@@ -595,10 +615,19 @@ export function createCanvas(host, handlers = {}) {
     applyTransform();
   }
 
+  function destroy() {
+    window.removeEventListener('mousemove', onWindowMouseMove);
+    window.removeEventListener('mouseup', onWindowMouseUp);
+    window.removeEventListener('blur', cancelDrag);
+    wrap.remove();
+  }
+
   applyTransform();
 
   return {
     el: wrap,
+    destroy,
+    screenToWorld: toWorld,
     setGraph,
     getGraph: () => ({ nodes, edges }),
     setNodeStates,
