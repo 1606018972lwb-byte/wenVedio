@@ -242,7 +242,7 @@ export function createCanvas(host, handlers = {}) {
     g.querySelector('.title').textContent = truncate(node.title || node.type);
     const subtitle = g.querySelector('.subtitle');
     if (state.error) subtitle.textContent = truncate(String(state.error).split('\n')[0], 18);
-    else if (status === 'running') subtitle.textContent = state.progress != null ? `运行中 ${state.progress}%` : '运行中…';
+    else if (status === 'running') subtitle.textContent = state.note ? truncate(state.note, 22) : (state.progress != null ? `运行中 ${state.progress}%` : '运行中…');
     else if (status === 'success' && state.duration_ms != null) subtitle.textContent = `完成 ${(state.duration_ms / 1000).toFixed(1)}s`;
     else if (status === 'failed') subtitle.textContent = '失败';
     else if (status === 'skipped') subtitle.textContent = '已跳过';

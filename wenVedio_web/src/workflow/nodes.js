@@ -203,6 +203,7 @@ const NODE_DEFS = {
           }
           done += 1;
           ctx.progress(Math.round((done / list.length) * 100));
+          ctx.note(`${done}/${list.length} 项`);
         }
       };
 

@@ -309,6 +309,8 @@ function create({ store, bridge, writeLog }) {
       clearPending: () => { state.pending = null; store.saveRun(run); },
       log: (message) => writeLog('info', `[${run.id}/${node.id}] ${message}`),
       progress: (value) => { state.progress = value; store.saveRun(run); },
+      // 给节点一句人话进度（例如循环的「3/10 项」），画布上直接显示
+      note: (text) => { state.note = text ? String(text).slice(0, 60) : null; store.saveRun(run); },
       isCancelled: () => run.cancel_requested === true,
       signal: controllers.get(run.id)?.signal || null,
       // 直接上游里已经成功跑完的节点输出，变量聚合节点用得到
