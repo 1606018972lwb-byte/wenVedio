@@ -1219,7 +1219,12 @@ async function openRunDetail(runId) {
           <pre>${esc(JSON.stringify({
             状态: run.status, 版本: run.workflow_version, 模式: run.mode,
             耗时毫秒: run.duration_ms, Token: run.total_tokens, 错误: run.error || null,
+            ...(run.from_node ? { 从节点: run.from_node } : {}),
           }, null, 2))}</pre>
+        </div>
+        <div class="wf-io">
+          <span class="io-title">本次输入${run.from_node ? '（从中间节点开始，上游沿用历史结果）' : ''}</span>
+          <pre>${esc(JSON.stringify(run.inputs || {}, null, 2)).slice(0, 2000)}</pre>
         </div>
         <div class="wf-insp-actions" style="margin-top:10px">
         <button type="button" data-rerun="${esc(run.id)}">↻ 用同样输入重跑</button>
