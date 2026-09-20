@@ -70,7 +70,7 @@ function create({ store, bridge, writeLog }) {
       },
     };
     for (const node of run.snapshot.nodes) {
-      run.nodes[node.id] = { id: node.id, type: node.type, title: node.title || node.type, status: 'pending' };
+      run.nodes[node.id] = { id: node.id, type: node.type, title: node.title || node.type, status: 'pending', disabled: node.disabled === true };
     }
     store.saveRun(run);
     store.touchWorkflowRun(workflow.id, startedAt);
@@ -147,6 +147,8 @@ function create({ store, bridge, writeLog }) {
   //   skip  = 所有入边都已定局、但没有一条被走到（分支没选中它）
   //   wait  = 还有上游没跑完
   function evaluateNode(run, node, graph) {
+    // 被禁用的节点：直接跳过，但它的输入原样透传给下游（下游照常能跑）
+    if (node.disabled === true) return 'skip';
     const incoming = graph.incoming.get(node.id) || [];
     if (!incoming.length) return 'ready';
     let anyActive = false;
@@ -154,7 +156,9 @@ function create({ store, bridge, writeLog }) {
     for (const edge of incoming) {
       const up = run.nodes[edge.from];
       if (!up || !TERMINAL.has(up.status)) { allSettled = false; continue; }
-      if (up.status !== 'success') continue;
+      // 被禁用的上游算「已放行」：它只是透传，不该把下游一起掐掉
+      if (up.status !== 'success' && up.disabled !== true) continue;
+      if (up.disabled === true) { anyActive = true; continue; }
       const taken = takenBranch(run, edge.from, graph);
       // 上游不是分支节点（taken 为空）→ 边一定被走到；
       // 分支节点 → 只有边上的分支名和它实际走的一致才算走到
@@ -204,6 +208,13 @@ function create({ store, bridge, writeLog }) {
         skippedState.status = 'skipped';
         skippedState.finished_at = nowIso();
         skippedState.error = null;
+        // 被禁用的节点把上游输出原样透传，下游才能照常跑
+        if (skippedState.disabled === true) {
+          const ups = graph.incoming.get(picked.node.id) || [];
+          const first = ups.length ? run.nodes[ups[0].from] : null;
+          skippedState.output = first ? (first.output ?? null) : null;
+          skippedState.note = '已禁用，输入已透传';
+        }
         store.saveRun(run);
         continue;
       }

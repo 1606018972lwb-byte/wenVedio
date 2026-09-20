@@ -175,6 +175,8 @@ function create({ configDir, writeLog }) {
         .map((row) => ({ id: str(row.id, 40), label: str(row.label, 40) || str(row.id, 40) }))
         .filter((row) => row.id)
         .slice(0, 20),
+      // 禁用后运行时会跳过这个节点、把输入直接透传给下游
+      disabled: raw.disabled === true,
       error_policy: ['stop', 'continue', 'retry'].includes(raw.error_policy) ? raw.error_policy : 'stop',
       max_retry: Math.max(0, Math.min(10, num(raw.max_retry, 2))),
       retry_interval_ms: Math.max(0, Math.min(60000, num(raw.retry_interval_ms, 2000))),

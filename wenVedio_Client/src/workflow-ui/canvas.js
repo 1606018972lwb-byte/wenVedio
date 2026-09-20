@@ -236,6 +236,7 @@ export function createCanvas(host, handlers = {}) {
     const status = state.status || 'idle';
     const classes = ['wf-node'];
     if (selection.has(node.id)) classes.push('selected');
+    if (node.disabled === true) classes.push('disabled');
     if (status && status !== 'idle') classes.push(status);
     g.setAttribute('class', classes.join(' '));
     g.setAttribute('transform', `translate(${Math.round(node.x)},${Math.round(node.y)})`);
@@ -245,7 +246,8 @@ export function createCanvas(host, handlers = {}) {
     else if (status === 'running') subtitle.textContent = state.note ? truncate(state.note, 22) : (state.progress != null ? `运行中 ${state.progress}%` : '运行中…');
     else if (status === 'success' && state.duration_ms != null) subtitle.textContent = `完成 ${(state.duration_ms / 1000).toFixed(1)}s`;
     else if (status === 'failed') subtitle.textContent = '失败';
-    else if (status === 'skipped') subtitle.textContent = '已跳过';
+    else if (status === 'skipped') subtitle.textContent = node.disabled === true ? '已禁用（透传）' : '已跳过';
+    else if (node.disabled === true) subtitle.textContent = '已禁用（运行时跳过）';
     else subtitle.textContent = truncate(handlers.describeNode ? handlers.describeNode(node) : node.type, 22);
     // 开始节点没有输入口，结束节点没有输出口；结束节点后面不能再接
     g.querySelector('[data-port="in"]').setAttribute('visibility', node.type === 'start' ? 'hidden' : 'visible');

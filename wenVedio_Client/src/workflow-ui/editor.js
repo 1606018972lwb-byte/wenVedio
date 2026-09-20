@@ -1351,6 +1351,13 @@ function openContextMenu(nodeId, event) {
     { label: '⚙ 配置节点', run: () => { state.selectedNodeId = nodeId; renderInspector(); } },
     { label: '⚡ 测试此节点', run: () => debugNode(node) },
     { label: '⧉ 复制', run: () => { state.canvas.selectNode(nodeId); copyNodeToClipboard(); } },
+    { label: node.disabled ? '▶ 启用此节点' : '⏸ 禁用此节点（跳过并透传）', run: () => {
+      const wasDisabled = node.disabled === true;
+      state.canvas.updateNode(nodeId, { disabled: !wasDisabled });
+      state.selectedNodeId = nodeId;
+      renderInspector();
+      toast(wasDisabled ? '已启用' : '已禁用：运行时跳过它，输入直接透传给下游');
+    } },
     { label: '⟳ 重命名', run: () => { state.selectedNodeId = nodeId; renderInspector(); setTimeout(() => $('#wfNodeTitle')?.select(), 60); } },
     { label: '✕ 删除', danger: true, run: () => { state.canvas.selectNode(nodeId); state.canvas.removeSelected(); state.selectedNodeId = null; closeInspector(); } },
   ]);
