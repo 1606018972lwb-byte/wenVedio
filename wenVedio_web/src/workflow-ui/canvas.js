@@ -181,7 +181,10 @@ export function createCanvas(host, handlers = {}) {
   const emitSelect = () => handlers.onSelect?.([...selection], selectedEdge);
 
   function snapshot() {
-    history.past.push(JSON.stringify({ nodes, edges }));
+    const current = JSON.stringify({ nodes, edges });
+    // 状态没变就不压栈：焦点反复进出、空拖动都不会塞一堆重复历史
+    if (history.past.length && history.past[history.past.length - 1] === current) return;
+    history.past.push(current);
     if (history.past.length > MAX_HISTORY) history.past.shift();
     history.future.length = 0;
   }
@@ -997,6 +1000,9 @@ export function createCanvas(host, handlers = {}) {
     updateNodeParams,
     removeSelected,
     undo,
+    // 参数面板在输入框获得焦点时先压一次快照（此时还是改动前的状态），
+    // 这样改参数也能 Ctrl+Z 撤销，而编辑过程中的每次按键不会塞历史
+    pushHistory: () => { snapshot(); },
     redo,
     fit,
     autoFit,

@@ -110,6 +110,7 @@ function renderList() {
       <div class="wf-card-meta">
         <span>${(wf.nodes || []).length} 个节点</span>
         <span>运行 ${wf.run_count || 0} 次</span>
+        ${wf.last_run_status ? `<span class="wf-state ${esc(wf.last_run_status)}">上次${wf.last_run_status === 'success' ? '成功' : wf.last_run_status === 'failed' ? '失败' : '已取消'}</span>` : ''}
         <span>${wf.updated_at ? new Date(wf.updated_at).toLocaleString('zh-CN', { hour12: false }).slice(5, 16) : ''}</span>
       </div>
       <div class="wf-card-actions">
@@ -789,6 +790,12 @@ function collectRows(node, def) {
 
 function bindParamInputs(node, def) {
   const host = $('#wfInspector');
+  // 改参数也要能撤销：进入输入框时先压一次「改动前」的快照，
+  // 编辑过程中的按键不压栈，所以 Ctrl+Z 一步回到改动前
+  host.addEventListener('focusin', (event) => {
+    if (!event.target.closest('input, textarea, select')) return;
+    state.canvas?.pushHistory?.();
+  });
   const commit = () => {
     const params = collectRows(node, def);
     state.canvas.updateNodeParams(node.id, params, { record: false });

@@ -276,11 +276,17 @@ function create({ configDir, writeLog }) {
     return copy;
   }
 
-  function touchWorkflowRun(id, at) {
+  function touchWorkflowRun(id, at, status) {
     const record = workflows.get(String(id));
     if (!record) return;
-    record.run_count = (record.run_count || 0) + 1;
-    record.last_run_at = at;
+    if (!status) {
+      // 开始一次运行：只加计数与时间，状态等结束时再落
+      record.run_count = (record.run_count || 0) + 1;
+      record.last_run_at = at;
+    } else {
+      record.last_run_status = status;
+      record.last_run_finished_at = at;
+    }
     workflows.set(record.id, record);
     saveWorkflows();
   }

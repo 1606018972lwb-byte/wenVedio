@@ -108,6 +108,8 @@ function create({ store, bridge, writeLog }) {
       }
     }
     store.saveRun(run);
+    // 把结果回写到工作流上：列表页一眼能看出上次是成功还是失败
+    store.touchWorkflowRun(run.workflow_id, run.finished_at, status);
     store.pruneRuns();
     writeLog(status === 'success' ? 'info' : 'warn', `工作流运行结束 ${run.id} → ${status}${run.error ? `（${run.error}）` : ''}`);
     return run;
