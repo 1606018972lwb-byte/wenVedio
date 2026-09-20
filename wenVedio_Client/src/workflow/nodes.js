@@ -523,14 +523,42 @@ const NODE_DEFS = {
           clearTimeout(timer);
           if (ctx.signal) ctx.signal.removeEventListener('abort', onAbort);
         });
-      const text = await res.text();
+      // 边读边计数：URL 可能由变量拼出来，指向大文件或无限流时
+      // 先 res.text() 再截断会把整个响应读进内存，这里读到上限就掐断流。
+      const MAX_BYTES = 2 * 1024 * 1024;
+      const KEEP_CHARS = 200000;
+      let text = '';
+      let truncated = false;
+      if (res.body && typeof res.body.getReader === 'function') {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let bytes = 0;
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          bytes += chunk.value.length;
+          if (bytes > MAX_BYTES) {
+            truncated = true;
+            const keep = Math.max(0, chunk.value.length - (bytes - MAX_BYTES));
+            if (keep > 0) text += decoder.decode(chunk.value.subarray(0, keep), { stream: true });
+            try { await reader.cancel(); } catch (_) { /* 流已断不影响结果 */ }
+            break;
+          }
+          text += decoder.decode(chunk.value, { stream: true });
+        }
+        text += decoder.decode();
+      } else {
+        text = await res.text();
+      }
       let json = null;
       try { json = JSON.parse(text); } catch (_) { /* 不是 JSON 就只留文本 */ }
       return {
         status: res.status,
         ok: res.ok,
         headers: Object.fromEntries(res.headers.entries()),
-        body: text.slice(0, 200000),
+        body: text.slice(0, KEEP_CHARS),
+        body_bytes: Buffer.byteLength(text),
+        truncated,
         json,
       };
     },
