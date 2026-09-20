@@ -359,11 +359,21 @@ function create({ configDir, writeLog }) {
   const getRun = (id) => runs.get(String(id)) || null;
   const allRuns = () => [...runs.values()];
 
+  // 清掉所有已结束的运行（含循环产生的子运行），正在跑的保留
+  function clearFinishedRuns() {
+    let removed = 0;
+    for (const run of [...runs.values()]) {
+      if (run.finished_at) { runs.delete(run.id); removed += 1; }
+    }
+    if (removed) saveRunsNow();
+    return removed;
+  }
+
   return {
     load,
     listWorkflows, getWorkflow, saveWorkflow, deleteWorkflow,
     publishWorkflow, listVersions, restoreVersion, duplicateWorkflow, touchWorkflowRun,
-    saveRun, pruneRuns, listRuns, getRun, allRuns,
+    saveRun, pruneRuns, listRuns, getRun, allRuns, clearFinishedRuns,
   };
 }
 

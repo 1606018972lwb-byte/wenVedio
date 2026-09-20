@@ -123,6 +123,14 @@ function create({ store, engine, host, python, writeLog, sendJson, readBody, nod
       return true;
     }
 
+    if (route === '/api/workflow-runs' && method === 'DELETE') {
+      // 只清已结束的，正在跑的不动
+      const removed = store.clearFinishedRuns();
+      writeLog('info', `清空工作流运行记录：删除 ${removed} 条已结束记录`);
+      sendJson(res, 200, { ok: true, removed });
+      return true;
+    }
+
     if (route === '/api/workflow-runs' && method === 'GET') {
       const workflowId = url.searchParams.get('workflow_id') || '';
       const limit = Number(url.searchParams.get('limit')) || 50;

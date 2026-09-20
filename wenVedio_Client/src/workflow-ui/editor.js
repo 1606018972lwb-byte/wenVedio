@@ -1101,18 +1101,50 @@ function updateRunIndicator(run) {
 // ---------------- 运行记录 ----------------
 async function openRunList(workflowId) {
   try {
-    const query = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}&limit=50` : '?limit=50';
+    const query = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}&limit=100` : '?limit=100';
     const data = await api(`/api/workflow-runs${query}`);
-    const rows = data.runs.map((run) => `
-      <div class="wf-run-row" data-run="${esc(run.id)}">
-        <span class="wf-state ${esc(run.status)}">${esc(run.status)}</span>
-        <span class="mono">${esc((run.id || '').slice(4, 14))}</span>
-        <span>${esc(run.workflow_name || '')}${run.workflow_version ? ` <code>v${run.workflow_version}</code>` : ''}</span>
-        <span class="mono">${run.total_tokens ? `${run.total_tokens} tok` : ''}</span>
-        <span class="dur">${run.duration_ms != null ? `${(run.duration_ms / 1000).toFixed(1)}s` : '—'}</span>
-      </div>`).join('');
-    openDrawer('运行记录', `<div class="wf-runs">${rows || '<div class="wf-empty">还没有运行记录</div>'}</div>`, (root) => {
-      $$('[data-run]', root).forEach((el) => el.addEventListener('click', () => openRunDetail(el.dataset.run)));
+    const FILTERS = [
+      { key: 'all', label: '全部' },
+      { key: 'success', label: '成功' },
+      { key: 'failed', label: '失败' },
+      { key: 'cancelled', label: '已取消' },
+    ];
+    openDrawer('运行记录', '<div id="wfRunListBody"></div>', (root) => {
+      const body = $('#wfRunListBody', root);
+      let filter = 'all';
+      const draw = () => {
+        const list = data.runs.filter((run) => filter === 'all' || run.status === filter);
+        const rows = list.map((run) => `
+          <div class="wf-run-row" data-run="${esc(run.id)}">
+            <span class="wf-state ${esc(run.status)}">${esc(run.status)}</span>
+            <span class="mono">${esc((run.id || '').slice(4, 14))}</span>
+            <span>${esc(run.workflow_name || '')}${run.workflow_version ? ` <code>v${run.workflow_version}</code>` : ''}</span>
+            <span class="mono">${run.total_tokens ? `${run.total_tokens} tok` : ''}</span>
+            <span class="dur">${run.duration_ms != null ? `${(run.duration_ms / 1000).toFixed(1)}s` : '—'}</span>
+          </div>`).join('');
+        body.innerHTML = `
+          <div class="wf-toolbar" style="margin-bottom:10px">
+            ${FILTERS.map((item) => `<button type="button" class="outline-button${filter === item.key ? ' accent' : ''}" data-filter="${item.key}">${item.label}${item.key === 'all' ? ` ${data.runs.length}` : ` ${data.runs.filter((run) => run.status === item.key).length}`}</button>`).join('')}
+            <span class="grow"></span>
+            <button type="button" class="outline-button" id="wfClearRuns">清空已结束</button>
+          </div>
+          <div class="wf-runs">${rows || '<div class="wf-empty">没有符合条件的运行记录</div>'}</div>`;
+        $$('[data-run]', body).forEach((el) => el.addEventListener('click', () => openRunDetail(el.dataset.run)));
+        $$('[data-filter]', body).forEach((el) => el.addEventListener('click', () => { filter = el.dataset.filter; draw(); }));
+        $('#wfClearRuns', body)?.addEventListener('click', async () => {
+          const finished = data.runs.filter((run) => run.finished_at || ['success', 'failed', 'cancelled'].includes(run.status)).length;
+          if (!finished) { toast('没有已结束的记录可清理'); return; }
+          if (!window.confirm(`清空 ${finished} 条已结束的运行记录？正在运行的不受影响。`)) return;
+          try {
+            const res = await api('/api/workflow-runs', { method: 'DELETE' });
+            data.runs = data.runs.filter((run) => !(run.finished_at || ['success', 'failed', 'cancelled'].includes(run.status)));
+            if (workflowId) await loadWorkflows();
+            toast(`已清理 ${res.removed} 条记录`);
+            draw();
+          } catch (err) { toast(`清理失败：${err.message}`, 'error'); }
+        });
+      };
+      draw();
     });
   } catch (err) { toast(`读取运行记录失败：${err.message}`, 'error'); }
 }
