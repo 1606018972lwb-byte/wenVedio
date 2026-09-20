@@ -398,6 +398,7 @@ function mountCanvas() {
     onStatus: (message) => toast(message),
     // 画布上节点卡片的那行摘要
     describeNode: (node) => nodeSummary(node),
+    nodeIcon: (node) => state.meta?.nodes?.[node.type]?.icon || '●',
     // 双击节点也打开配置（n8n 习惯）
     onOpenNode: (id) => { state.canvas.selectNode(id); state.selectedNodeId = id; renderInspector(); },
     // 右键节点出小菜单

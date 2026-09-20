@@ -158,6 +158,7 @@
 .wf-node.failed .box { stroke: var(--danger); stroke-width: 2; }
 .wf-node.disabled .box { stroke-dasharray: 5 4; opacity: .55; }
 .wf-node.skipped .box { stroke: var(--border-2); stroke-dasharray: 4 3; }
+.wf-node .node-icon { fill: var(--text-2); font-size: 13px; }
 .wf-node .title { fill: var(--text); font-size: 12px; font-weight: 700; }
 .wf-node .subtitle { fill: var(--text-3); font-size: 10px; }
 .wf-node .port { fill: var(--surface); stroke: var(--border-2); stroke-width: 1.5; cursor: crosshair; }

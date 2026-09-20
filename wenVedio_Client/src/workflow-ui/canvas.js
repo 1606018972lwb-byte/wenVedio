@@ -209,9 +209,10 @@ export function createCanvas(host, handlers = {}) {
     const g = el('g', { class: 'wf-node', 'data-node': node.id });
     g.append(
       el('rect', { class: 'box', width: NODE_W, height: NODE_H, rx: 10 }),
-      el('circle', { class: 'status-dot', cx: 15, cy: 27, r: 3.5 }),
-      el('text', { class: 'title', x: 27, y: 24 }),
-      el('text', { class: 'subtitle', x: 27, y: 40 }),
+      el('circle', { class: 'status-dot', cx: 13, cy: 27, r: 3.5 }),
+      el('text', { class: 'node-icon', x: 31, y: 32, 'text-anchor': 'middle' }),
+      el('text', { class: 'title', x: 47, y: 24 }),
+      el('text', { class: 'subtitle', x: 47, y: 40 }),
       el('circle', { class: 'port', 'data-port': 'in', 'data-node': node.id, cx: 0, cy: 27, r: 5.5 }),
       el('circle', { class: 'port', 'data-port': 'out', 'data-node': node.id, cx: NODE_W, cy: 27, r: 5.5 }),
     );
@@ -241,6 +242,7 @@ export function createCanvas(host, handlers = {}) {
     g.setAttribute('class', classes.join(' '));
     g.setAttribute('transform', `translate(${Math.round(node.x)},${Math.round(node.y)})`);
     g.querySelector('.title').textContent = truncate(node.title || node.type);
+    g.querySelector('.node-icon').textContent = (handlers.nodeIcon ? handlers.nodeIcon(node) : '') || '●';
     const subtitle = g.querySelector('.subtitle');
     if (state.error) subtitle.textContent = truncate(String(state.error).split('\n')[0], 18);
     else if (status === 'running') subtitle.textContent = state.note ? truncate(state.note, 22) : (state.progress != null ? `运行中 ${state.progress}%` : '运行中…');
