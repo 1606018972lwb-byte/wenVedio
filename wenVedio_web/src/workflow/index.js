@@ -57,18 +57,20 @@ function create(deps) {
       const raw = String(value == null ? '' : value).trim();
       if (!raw) return null;
       if (/^data:/i.test(raw)) return raw;
-      if (/^https?:\/\//i.test(raw)) {
-        const local = raw.match(/\/api\/tasks\/[^/]+\/image\/\d+\?(?:.*&)?file=([^&]+)/);
-        if (local) {
-          const name = path.basename(decodeURIComponent(local[1]));
-          const file = path.join(imagesDir, name);
-          if (fs.existsSync(file)) {
-            const mime = MIME[path.extname(file).toLowerCase()] || 'image/png';
-            return `data:${mime};base64,${fs.readFileSync(file).toString('base64')}`;
-          }
+      // 本机预览地址：/api/tasks/<id>/image/<n>?file=<本地文件名>
+      // 注意必须限定成「我们自己服务器的地址」——否则第三方 URL 里恰好带 &file=
+      // 也会被当成本地文件名去读盘，把本地图片内容当作远程图交出去。
+      const localPreview = raw.match(/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?\/api\/tasks\/[^/]+\/image\/\d+\?(?:.*&)?file=([^&]+)/i);
+      if (localPreview) {
+        const name = path.basename(decodeURIComponent(localPreview[2]));
+        const file = path.join(imagesDir, name);
+        if (fs.existsSync(file)) {
+          const mime = MIME[path.extname(file).toLowerCase()] || 'image/png';
+          return `data:${mime};base64,${fs.readFileSync(file).toString('base64')}`;
         }
         return raw;
       }
+      if (/^https?:\/\//i.test(raw)) return raw;
       const name = path.basename(raw.split('?')[0]);
       const file = path.join(imagesDir, name);
       if (fs.existsSync(file)) {

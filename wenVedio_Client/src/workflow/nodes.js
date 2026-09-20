@@ -663,13 +663,30 @@ const NODE_DEFS = {
       }
       if (mode === 'slice') {
         const start = Math.max(0, Number(ctx.params.start) || 0);
-        const length = Number(ctx.params.length);
-        return { output: Number.isFinite(length) && length > 0 ? source.slice(start, start + length) : source.slice(start) };
+        const rawLength = ctx.params.length;
+        // length 填 0 或负数时语义是「取 0 个字符」，不再静默变成「一直截到结尾」
+        if (rawLength !== '' && rawLength != null && Number.isFinite(Number(rawLength)) && Number(rawLength) <= 0) {
+          return { output: '', note: '长度为 0，返回空字符串' };
+        }
+        const length = Number(rawLength);
+        return { output: Number.isFinite(length) ? source.slice(start, start + length) : source.slice(start) };
       }
       if (mode === 'regex') {
         const pattern = String(ctx.params.pattern || '');
         if (!pattern) throw new Error('正则模式需要填写正则表达式');
-        const match = new RegExp(pattern).exec(source);
+        // 正则是在主线程同步跑的，没有 vm 超时保护，
+        // (a+)+$ 这类灾难性回溯会直接卡死整个服务，所以先把规模按住。
+        if (pattern.length > 200) throw new Error('正则表达式过长（上限 200 字符）');
+        if (source.length > 200000) throw new Error('源文本过长，正则模式下上限 20 万字符');
+        if (/\([^)]*[+*][^)]*\)[+*]/.test(pattern)) {
+          throw new Error('这个正则形如 (…+)+ 会造成灾难性回溯、卡死服务，请改写（例如用 (a+) 或加上不会重叠的限定）');
+        }
+        let match;
+        try {
+          match = new RegExp(pattern).exec(source);
+        } catch (err) {
+          throw new Error(`正则不合法：${err.message}`);
+        }
         return { output: match ? (match[1] !== undefined ? match[1] : match[0]) : '' , matched: Boolean(match), groups: match ? match.slice(1) : [] };
       }
       if (mode === 'json') {
