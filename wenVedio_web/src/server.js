@@ -47,8 +47,11 @@ function loadEnv() {
 const env = loadEnv();
 const config = {
   port: Number(process.env.PORT || env.PORT || 8787),
-  // 监听地址：桌面客户端注入 HOST=127.0.0.1；独立服务端由 .env 的 HOST 决定（不写则保持原有行为）。
-  host: process.env.HOST || env.HOST || '',
+  // 监听地址：默认只听本机回环。
+  // 这个服务没有任何鉴权，而工作流的代码节点能执行任意 Python（完整系统权限），
+  // 绑到 0.0.0.0 等于把「在你机器上执行代码」开放给整个局域网，所以默认必须是 127.0.0.1。
+  // 确实需要局域网访问时显式设置 HOST（例如 HOST=0.0.0.0），启动时会打醒目警告。
+  host: process.env.HOST || env.HOST || '127.0.0.1',
   // 第三方提交接口前缀：实际提交 POST {endpoint}/{workflow}
   endpoint: env.AUTODL_ENDPOINT || 'https://www.autodl.art/api/v1/comfyui/comfyui_workflow',
   workflow: env.AUTODL_WORKFLOW || 'minimax_h3_lightx2v_v5_15s',
@@ -1987,6 +1990,14 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   writeLog('error', `未处理的 Promise 拒绝：${reason && reason.stack ? reason.stack : reason}`);
 });
+
+// 绑到非回环地址时明确警告：这个服务没有鉴权，而代码节点能执行任意代码
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+if (!LOOPBACK_HOSTS.has(String(config.host || '').toLowerCase())) {
+  writeLog('warn', `⚠ 服务监听在 ${config.host}（不是本机回环）。这个服务没有任何鉴权，`
+    + '局域网内任何人都能调它的接口，包括工作流的代码节点（可执行任意 Python、读写本机文件、读取已保存的 API Key）。'
+    + '如果不需要从别的机器访问，请把 HOST 改回 127.0.0.1 后重启。');
+}
 
 if (config.host) server.listen(config.port, config.host, onListening);
 else server.listen(config.port, onListening);
