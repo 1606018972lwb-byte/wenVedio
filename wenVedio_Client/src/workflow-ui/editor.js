@@ -441,6 +441,9 @@ function markDirty() {
 
 async function saveCurrent() {
   if (!state.current) return null;
+  // 主动保存就先撤掉待触发的自动保存，否则两个保存并发、后写的会覆盖先写的
+  clearTimeout(state.saveTimer);
+  state.saveTimer = null;
   const graph = state.canvas.getGraph();
   const payload = {
     id: state.current.id,
@@ -1005,7 +1008,12 @@ function promptRun(workflowId) {
     ? state.current
     : state.workflows.find((item) => item.id === workflowId);
   if (!wf) return;
-  const startNode = (wf.nodes || []).find((node) => node.type === 'start');
+  // 正在编辑这个工作流时，输入项要按「画布上的实时图」来渲染，
+  // 否则刚加/刚改的输入项不会出现在试运行表单里（state.current.nodes 是打开时的旧副本）
+  const liveGraph = state.current && state.current.id === workflowId && state.canvas
+    ? state.canvas.getGraph()
+    : { nodes: wf.nodes || [] };
+  const startNode = (liveGraph.nodes || []).find((node) => node.type === 'start');
   const fields = Array.isArray(startNode?.params?.fields) ? startNode.params.fields : [];
   const body = fields.length
     ? fields.map((field) => {
