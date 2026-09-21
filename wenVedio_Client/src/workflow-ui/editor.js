@@ -640,6 +640,9 @@ async function saveCurrent() {
 async function openWorkflow(id) {
   try {
     const data = await api(`/api/workflows/${encodeURIComponent(id)}`);
+    // 从别处进来的（图片页「用工作流生成」、外部入口触发）：工作流视图可能还没挂载，
+    // 直接 renderEditor 会往 null 上写 hidden 而报错
+    if (!$('#wfEditMode')) await mount();
     state.current = data.workflow;
     state.selectedNodeId = null;
     state.view = 'edit';
@@ -1199,7 +1202,7 @@ function writeSavedInputs(workflowId, inputs) {
   try { localStorage.setItem(`wenvedio-wf-inputs-${workflowId}`, JSON.stringify(inputs || {})); } catch (_) { /* 存不下不影响运行 */ }
 }
 
-function promptRun(workflowId) {
+function promptRun(workflowId, preset) {
   const wf = state.current && state.current.id === workflowId
     ? state.current
     : state.workflows.find((item) => item.id === workflowId);
@@ -1211,11 +1214,12 @@ function promptRun(workflowId) {
     : { nodes: wf.nodes || [] };
   const startNode = (liveGraph.nodes || []).find((node) => node.type === 'start');
   const fields = Array.isArray(startNode?.params?.fields) ? startNode.params.fields : [];
-  // 记住上次填的输入：试运行常常是「改一个参数、用同一组输入再跑一次」
+  // 记住上次填的输入：试运行常常是「改一个参数、用同一组输入再跑一次」。
+  // preset 是外部入口（例如图片页「用工作流生成」）带进来的预填值，优先于上次的记录。
   const savedInputs = readSavedInputs(workflowId);
   const body = fields.length
     ? fields.map((field) => {
-      const prev = savedInputs[field.key];
+      const prev = preset && preset[field.key] !== undefined ? preset[field.key] : savedInputs[field.key];
       const prevText = prev === undefined || prev === null ? '' : (typeof prev === 'string' ? prev : JSON.stringify(prev));
       const input = field.type === 'json'
         ? `<textarea data-input="${esc(field.key)}" rows="3" placeholder="JSON">${esc(prevText)}</textarea>`
@@ -2187,6 +2191,19 @@ document.addEventListener('keydown', (event) => {
   closeVarPicker();
 });
 
+// 外部入口（图片页「用工作流生成」）：不进入工作流视图也能弹出运行面板。
+// 工作流列表可能还没加载过，这里按需取一次再弹。
+async function runWithDialog(workflowId, preset) {
+  try {
+    if (!state.workflows.some((item) => item.id === workflowId)) {
+      const data = await api(`/api/workflows/${encodeURIComponent(workflowId)}`);
+      state.workflows = [data.workflow, ...state.workflows];
+    }
+    if (!state.meta) await loadBasics().catch(() => {});
+    promptRun(workflowId, preset);
+  } catch (err) { toast(`打开运行面板失败：${err.message}`, 'error'); }
+}
+
 if (typeof window !== 'undefined') {
-  window.wenvedioWorkflow = { mount, unmount };
+  window.wenvedioWorkflow = { mount, unmount, runWithDialog };
 }

@@ -3810,6 +3810,26 @@ function syncRecordsKindHighlight() {
   $$('.nav-sub-item').forEach((item) => item.classList.toggle('active', item.id === activeId));
 }
 
+// 图片页的「用工作流生成」：列出工作流，选一个就能弹出它的输入表单去运行。
+// 产出（图片/视频节点提交的任务）会进任务中心，和手动生成的任务一样。
+async function loadImageWorkflows() {
+  const section = $('#imageWorkflowSection');
+  const select = $('#imageWorkflowSelect');
+  if (!section || !select) return;
+  try {
+    const res = await fetch(`${settings.apiBase}/api/workflows`);
+    const data = await res.json();
+    const list = (data.workflows || []).filter((item) => (item.nodes || []).length);
+    const previous = select.value;
+    select.innerHTML = list.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}（${(item.nodes || []).length} 个节点）</option>`).join('');
+    if (list.some((item) => item.id === previous)) select.value = previous;
+    // 一个工作流都没有时这块不显示，避免空壳误导
+    section.hidden = !list.length;
+  } catch (_) {
+    section.hidden = true;
+  }
+}
+
 function showView(view) {
   const isQuery = view === 'query';
   const isImage = view === 'image';
@@ -3841,6 +3861,8 @@ function showView(view) {
   } else {
     try { window.wenvedioWorkflow?.unmount?.(); } catch (_) { /* 忽略 */ }
   }
+  // 图片页的「用工作流生成」列表按需刷新（工作流可能是刚建的）
+  if (isImage) loadImageWorkflows().catch(() => {});
   // 页面标题由各视图内的 h2 承担，顶栏只留一行面包屑，避免同一句话出现两三次
   const crumbs = {
     image: 'AI 工具 / 图片生成',
@@ -4009,6 +4031,14 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#imageTaskName').addEventListener('input', saveImageForm);
   $('#imageTaskSequence').addEventListener('input', saveImageForm);
   $('#clearImageForm').addEventListener('click', clearImageForm);
+  // 图片页的「用工作流生成」：把当前提示词预填给工作流里叫 prompt/提示词 的输入
+  $('#imageWorkflowRun').addEventListener('click', () => {
+    const id = $('#imageWorkflowSelect').value;
+    if (!id) { showToast('请先选一个工作流', 'error'); return; }
+    if (typeof window.wenvedioWorkflow?.runWithDialog !== 'function') { showToast('工作流模块还没准备好', 'error'); return; }
+    const prompt = ($('#imagePrompt').value || '').trim();
+    window.wenvedioWorkflow.runWithDialog(id, prompt ? { prompt, 提示词: prompt } : null);
+  });
   $('#imageHelpBtn').addEventListener('click', () => showToast('使用更具体的提示词，可以获得更稳定的生成效果。添加参考图后按图生图方式生成。', 'ok'));
   $('#videoHelpBtn').addEventListener('click', () => showToast('使用清晰主体和连续场景描述，视频稳定性更好。', 'ok'));
   // 参考图上传（图片页 + 视频页拖拽上传区）

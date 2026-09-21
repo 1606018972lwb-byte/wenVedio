@@ -85,6 +85,14 @@
                 <div class="gen-field-head"><b>生成模型 <i class="req">*</i></b></div>
                 <select id="imageModelSelect" class="gen-select"></select>
               </div>
+              <div class="gen-section" id="imageWorkflowSection" hidden>
+                <div class="gen-field-head"><b>用工作流生成</b></div>
+                <div class="wf-quick-row">
+                  <select id="imageWorkflowSelect" class="gen-select"></select>
+                  <button class="outline-button" id="imageWorkflowRun" type="button">运行</button>
+                </div>
+                <small class="char-count">选一个工作流并填好它的输入即可运行；产出会进任务中心，和普通任务一样能下载。</small>
+              </div>
               <div class="gen-section">
                 <div class="gen-field-head"><b>任务名称</b></div>
                 <div class="task-name-line"><input id="imageTaskName" type="text" value="未命名图片任务" maxlength="100" /><span class="seq-inline">序号 <input id="imageTaskSequence" type="number" min="1" step="1" value="1" /></span></div>

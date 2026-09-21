@@ -1801,3 +1801,8 @@ span.task-thumb-icon { color: var(--text-3); font-size: 15px; }
   .cost-strip { gap: 14px; }
   .cost-strip .cost-details { margin-left: 0; }
 }
+
+/* 图片页的「用工作流生成」：下拉 + 运行按钮一行 */
+.wf-quick-row { display: flex; gap: 8px; align-items: center; }
+.wf-quick-row .gen-select { flex: 1; min-width: 0; }
+.wf-quick-row .outline-button { flex: 0 0 auto; }
