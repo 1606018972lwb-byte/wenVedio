@@ -318,6 +318,60 @@ async function testVersions() {
   check('历史没有被恢复覆盖（仍然 3 个版本）', (list2.data.versions || []).length === 3, JSON.stringify(list2.data.versions?.map((v) => v.version)));
 }
 
+// 并行分支：互相独立的分支要并发推进；多上游节点要等所有上游定局才启动
+async function testParallelBranches() {
+  console.log('\n[并行分支] 独立分支并发推进 / 多上游等齐');
+  const http = require('http');
+  const DELAY_MS = 600;
+  const slow = http.createServer((req, res) => {
+    const path = (req.url || '/').split('?')[0];
+    setTimeout(() => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ from: path }));
+    }, DELAY_MS);
+  });
+  await new Promise((resolve) => slow.listen(0, '127.0.0.1', resolve));
+  const slowPort = slow.address().port;
+  try {
+    const wf = await createWorkflow({
+      name: '测试·并行分支',
+      nodes: [
+        startNode([]),
+        { id: 'http_a', type: 'http', title: '慢A', x: 200, y: 0, params: { method: 'GET', url: `http://127.0.0.1:${slowPort}/slow_a`, timeout: 30 } },
+        { id: 'http_b', type: 'http', title: '慢B', x: 200, y: 120, params: { method: 'GET', url: `http://127.0.0.1:${slowPort}/slow_b`, timeout: 30 } },
+        {
+          id: 'code_join', type: 'code', title: '汇总', x: 460, y: 60,
+          input_params: [{ key: 'a', value: '{{http_a.json.from}}' }, { key: 'b', value: '{{http_b.json.from}}' }],
+          params: { language: 'javascript', code: 'return { both: [input.a, input.b] };' },
+        },
+      ],
+      edges: [
+        { id: 'e1', from: 'start_1', to: 'http_a' },
+        { id: 'e2', from: 'start_1', to: 'http_b' },
+        { id: 'e3', from: 'http_a', to: 'code_join' },
+        { id: 'e4', from: 'http_b', to: 'code_join' },
+      ],
+    });
+    const wallStart = Date.now();
+    const run = await waitRun(await startRun(wf.id, {}), 40000);
+    const wall = Date.now() - wallStart;
+    check('两个并行分支都成功',
+      run?.nodes?.http_a?.status === 'success' && run?.nodes?.http_b?.status === 'success',
+      statuses(run || { nodes: {} }));
+    const gap = Math.abs(new Date(run.nodes.http_a.started_at) - new Date(run.nodes.http_b.started_at));
+    check(`两个分支同时开始（相差 ${gap}ms < 250）`, gap < 250, `gap=${gap}ms`);
+    check(`两次 ${DELAY_MS}ms 请求总耗时接近单次（${wall}ms < 1050；串行要 1200ms+）`, wall < 1050, `wall=${wall}ms`);
+    check('汇总节点等两边都结束才启动（两个分支的值都在输入里）',
+      run?.nodes?.code_join?.input?.a === '/slow_a' && run?.nodes?.code_join?.input?.b === '/slow_b',
+      JSON.stringify(run?.nodes?.code_join?.input));
+    check('汇总结果里两个分支的值都在',
+      run?.nodes?.code_join?.output?.both?.[0] === '/slow_a' && run?.nodes?.code_join?.output?.both?.[1] === '/slow_b',
+      JSON.stringify(run?.nodes?.code_join?.output));
+  } finally {
+    await new Promise((resolve) => slow.close(resolve));
+  }
+}
+
 async function testPersistence() {
   console.log('\n[持久化] 坏记录不得堵死后续落盘');
   const { create } = require(path.join(ROOT, 'src', 'workflow', 'store.js'));
@@ -391,6 +445,7 @@ async function waitHealthy(timeoutMs = 20000) {
     await testImportExportRerun();
     await testRunFromNode();
     await testVersions();
+    await testParallelBranches();
     await testPersistence();
     console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
     if (fail) console.log(`失败用例：${failures.join('、')}`);

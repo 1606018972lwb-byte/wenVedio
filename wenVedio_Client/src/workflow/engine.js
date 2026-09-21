@@ -10,6 +10,8 @@ const { NODE_DEFS, delay } = require('./nodes');
 const { resolveParam, getPath } = require('./vars');
 
 const TICK_MS = 800;
+// 一批最多同时推进几个节点：互相独立的分支并发跑，但不能无限开
+const MAX_PARALLEL = Math.max(1, Math.min(16, Number(process.env.WF_MAX_PARALLEL) || 4));
 // 运行记录里保存的输入/输出：超长字符串（图片 data URL 之类）截断，避免记录文件膨胀
 const MAX_RUN_STRING = 2000;
 
@@ -191,15 +193,18 @@ function create({ store, bridge, writeLog }) {
   //   skip  = 所有入边都已定局、但没有一条被走到（分支没选中它）
   //   wait  = 还有上游没跑完
   function evaluateNode(run, node, graph) {
-    // 被禁用的节点：直接跳过，但它的输入原样透传给下游（下游照常能跑）
-    if (node.disabled === true) return 'skip';
     const incoming = graph.incoming.get(node.id) || [];
-    if (!incoming.length) return 'ready';
+    const disabled = node.disabled === true;
+    if (!incoming.length) return disabled ? 'skip' : 'ready';
     let anyActive = false;
     let allSettled = true;
     for (const edge of incoming) {
       const up = run.nodes[edge.from];
+      // 上游还没定局就得等。被禁用的节点也要等——它的「透传」值就是上游的输出，
+      // 早标一步会把它标成 null，下游拿到的是空值（并发推进时踩到过）。
       if (!up || !TERMINAL.has(up.status)) { allSettled = false; continue; }
+      // 被禁用的节点不看分支：上游一旦定局就整条透传
+      if (disabled) continue;
       // 被禁用的上游算「已放行」：它只是透传，不该把下游一起掐掉
       if (up.status !== 'success' && up.disabled !== true) continue;
       if (up.disabled === true) { anyActive = true; continue; }
@@ -208,20 +213,44 @@ function create({ store, bridge, writeLog }) {
       // 分支节点 → 只有边上的分支名和它实际走的一致才算走到
       if (!edge.branch || !taken || edge.branch === taken) anyActive = true;
     }
-    if (anyActive) return 'ready';
-    return allSettled ? 'skip' : 'wait';
+    // 必须等所有入边都定局：多上游节点（变量聚合这种）早跑会拿到空的上游输出
+    if (!allSettled) return 'wait';
+    if (disabled) return 'skip';
+    return anyActive ? 'ready' : 'skip';
   }
 
-  function pickNext(run, graph) {
+  // 把「现在能跑」的节点一次挑一批：互相独立的分支就能并发推进，而不是排成一队。
+  // 注意 evaluateNode 要求所有入边都已定局——否则多上游节点（变量聚合这种）
+  // 会在另一个上游还在跑的时候就启动，参数里引用到的那一边是空的。
+  function pickBatch(run, graph, limit) {
+    const ready = [];
     for (const node of graph.nodes) {
       const state = run.nodes[node.id];
       if (!state || state.status !== 'pending') continue;
       const verdict = evaluateNode(run, node, graph);
-      if (verdict === 'ready') return { node, verdict };
-      // 分支没选中的节点直接标记跳过，它的下游再下一轮跟着跳过
-      if (verdict === 'skip') return { node, verdict };
+      // 分支没选中的节点：标一个跳过就立即重扫，下游依赖这个状态
+      if (verdict === 'skip') return { skip: node };
+      if (verdict === 'ready') {
+        ready.push(node);
+        if (ready.length >= limit) break;
+      }
     }
-    return null;
+    return { ready };
+  }
+
+  // 被跳过（没被分支选中）或「被禁用（透传）」的节点
+  function markSkipped(run, node, graph) {
+    const state = run.nodes[node.id];
+    state.status = 'skipped';
+    state.finished_at = nowIso();
+    state.error = null;
+    // 被禁用的节点把上游输出原样透传，下游才能照常跑
+    if (state.disabled === true) {
+      const ups = graph.incoming.get(node.id) || [];
+      const first = ups.length ? run.nodes[ups[0].from] : null;
+      state.output = first ? (first.output ?? null) : null;
+      state.note = '已禁用，输入已透传';
+    }
   }
 
   function hasPendingOrRunning(run) {
@@ -235,8 +264,15 @@ function create({ store, bridge, writeLog }) {
       if (run.paused) { store.saveRun(run); return; }
       if (RUN_TERMINAL.has(run.status)) return;
 
-      const picked = pickNext(run, graph);
-      if (!picked) {
+      const picked = pickBatch(run, graph, MAX_PARALLEL);
+      // 分支没选中：标记跳过，继续找下一批
+      if (picked.skip) {
+        markSkipped(run, picked.skip, graph);
+        store.saveRun(run);
+        continue;
+      }
+      const batch = picked.ready || [];
+      if (!batch.length) {
         if (!hasPendingOrRunning(run)) {
           const failed = Object.values(run.nodes).some((state) => state.status === 'failed');
           finalize(run, failed ? 'failed' : 'success', failed ? (run.error || '存在失败节点') : null);
@@ -246,24 +282,10 @@ function create({ store, bridge, writeLog }) {
         }
         return;
       }
-      // 分支没选中：标记跳过，继续找下一个
-      if (picked.verdict === 'skip') {
-        const skippedState = run.nodes[picked.node.id];
-        skippedState.status = 'skipped';
-        skippedState.finished_at = nowIso();
-        skippedState.error = null;
-        // 被禁用的节点把上游输出原样透传，下游才能照常跑
-        if (skippedState.disabled === true) {
-          const ups = graph.incoming.get(picked.node.id) || [];
-          const first = ups.length ? run.nodes[ups[0].from] : null;
-          skippedState.output = first ? (first.output ?? null) : null;
-          skippedState.note = '已禁用，输入已透传';
-        }
-        store.saveRun(run);
-        continue;
-      }
-      const next = picked.node;
-      await executeNode(run, next, graph);
+      // 并发推进这一批。某个节点失败且策略是「停止整个工作流」时，
+      // executeNode 会把运行直接标成失败，批内其它节点的结果照常落盘。
+      await Promise.all(batch.map((node) => executeNode(run, node, graph)));
+      store.saveRun(run);
     }
   }
 
