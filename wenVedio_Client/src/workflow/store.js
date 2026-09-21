@@ -15,9 +15,12 @@ function create({ configDir, writeLog }) {
   const WORKFLOWS_FILE = path.join(configDir, 'workflows.json');
   const RUNS_FILE = path.join(configDir, 'workflow-runs.json');
   const TEMPLATES_FILE = path.join(configDir, 'workflow-templates.json');
+  const WORKSPACES_FILE = path.join(configDir, 'workflow-workspaces.json');
   const workflows = new Map();
   const runs = new Map();
   const templates = new Map();
+  // 工作区（分类）登记表：即使一个工作流都还没归进来，也能先把分类建出来
+  const workspaces = [];
 
   // Windows 上目标文件可能被索引器 / 杀软短暂占用，rename 会 EPERM；
   // 所以这里重试几次，仍失败就直接覆盖写（宁可非原子，也不能丢数据或抛异常）。
@@ -74,7 +77,10 @@ function create({ configDir, writeLog }) {
     readJsonFile(TEMPLATES_FILE, (list) => {
       list.forEach((item) => { if (item && item.id) templates.set(item.id, item); });
     }, '工作流模板', 'templates');
-    writeLog('info', `工作流已恢复 ${workflows.size} 个，运行记录 ${runs.size} 条，模板 ${templates.size} 个`);
+    readJsonFile(WORKSPACES_FILE, (list) => {
+      list.forEach((name) => { const clean = normalizeWorkspaceName(name); if (clean && !workspaces.includes(clean)) workspaces.push(clean); });
+    }, '工作区', 'workspaces');
+    writeLog('info', `工作流已恢复 ${workflows.size} 个，运行记录 ${runs.size} 条，模板 ${templates.size} 个，工作区 ${workspaces.length} 个`);
   }
 
   function readJsonFile(file, onList, label, key) {
@@ -242,11 +248,77 @@ function create({ configDir, writeLog }) {
     return record;
   }
 
+  // ---------------- 工作区（分类） ----------------
+  // 工作区名既要能「先建后用」（登记表），也要认「只用未登记」的旧数据（从工作流里兜）
+  const normalizeWorkspaceName = (value) => str(value, 40).trim();
+
+  function saveWorkspaces() {
+    return writeJson(WORKSPACES_FILE, { version: 1, workspaces });
+  }
+
+  function workspaceNames() {
+    const set = new Set(workspaces.map(normalizeWorkspaceName).filter(Boolean));
+    for (const wf of workflows.values()) {
+      const name = normalizeWorkspaceName(wf.workspace || '');
+      if (name) set.add(name);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+  }
+
+  function listWorkspaces() {
+    const counts = new Map();
+    for (const wf of workflows.values()) {
+      const name = normalizeWorkspaceName(wf.workspace || '');
+      counts.set(name, (counts.get(name) || 0) + 1);
+    }
+    return workspaceNames().map((name) => ({ name, count: counts.get(name) || 0 }));
+  }
+
+  function createWorkspace(name) {
+    const clean = normalizeWorkspaceName(name);
+    if (!clean) throw new Error('工作区名称不能为空');
+    if (!workspaces.includes(clean)) { workspaces.push(clean); saveWorkspaces(); }
+    return listWorkspaces();
+  }
+
+  // 改名：登记表和工作流上的引用一起改
+  function renameWorkspace(from, to) {
+    const a = normalizeWorkspaceName(from);
+    const b = normalizeWorkspaceName(to);
+    if (!a || !b) throw new Error('工作区名称不能为空');
+    if (a === b) return listWorkspaces();
+    let changed = false;
+    for (const wf of workflows.values()) {
+      if (normalizeWorkspaceName(wf.workspace || '') === a) { wf.workspace = b; changed = true; }
+    }
+    if (changed) saveWorkflows();
+    const index = workspaces.indexOf(a);
+    if (index >= 0) workspaces.splice(index, 1);
+    if (!workspaces.includes(b)) { workspaces.push(b); saveWorkspaces(); }
+    return listWorkspaces();
+  }
+
+  // 解散工作区：里面的工作流回到「未分类」，分类本身删掉
+  function deleteWorkspace(name) {
+    const target = normalizeWorkspaceName(name);
+    let moved = 0;
+    for (const wf of workflows.values()) {
+      if (normalizeWorkspaceName(wf.workspace || '') === target) { wf.workspace = ''; moved += 1; }
+    }
+    if (moved) saveWorkflows();
+    const index = workspaces.indexOf(target);
+    if (index >= 0) { workspaces.splice(index, 1); saveWorkspaces(); }
+    return { moved, workspaces: listWorkspaces() };
+  }
+
   // 只改工作区（归类）走打补丁：不走 saveWorkflow，避免把界面正在编辑的节点图冲掉
   function setWorkspace(id, workspace) {
     const record = workflows.get(String(id));
     if (!record) return null;
-    return patchWorkflow(id, { workspace: str(workspace, 40).trim() });
+    const clean = normalizeWorkspaceName(workspace);
+    // 归到还没登记过的名字时顺手登记，下次就是下拉里的一项
+    if (clean && !workspaces.includes(clean)) { workspaces.push(clean); saveWorkspaces(); }
+    return patchWorkflow(id, { workspace: clean });
   }
 
   // 只打补丁式改几个字段（触发器的令牌 / 计划 / 上次触发时间用）：
@@ -504,6 +576,7 @@ function create({ configDir, writeLog }) {
     publishWorkflow, listVersions, getVersion, restoreVersion, duplicateWorkflow, touchWorkflowRun,
     saveRun, pruneRuns, listRuns, getRun, allRuns, clearFinishedRuns,
     listTemplates, getTemplate, saveTemplate, deleteTemplate,
+    listWorkspaces, createWorkspace, renameWorkspace, deleteWorkspace,
   };
 }
 

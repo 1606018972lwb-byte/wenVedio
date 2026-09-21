@@ -666,6 +666,51 @@ async function testTemplates() {
     JSON.stringify(removed.data));
 }
 
+// 工作区（分类）：先建后用、归类、改名连带、解散回到未分类
+async function testWorkspaces() {
+  console.log('\n[工作区] 新建分类 / 归类 / 自动登记 / 改名连带 / 解散');
+  const wf = await createWorkflow({
+    name: '测试·工作区',
+    nodes: [startNode([]), codeNode('code_1', 'return { ok: 1 };')],
+    edges: [{ id: 'e1', from: 'start_1', to: 'code_1' }],
+  });
+
+  const created = await api('POST', '/api/workflow-workspaces', { name: '视频分类' });
+  const hit = (created.data.workspaces || []).find((item) => item.name === '视频分类');
+  check('新建工作区（还没有工作流也算数，count=0）', created.data.ok === true && hit && hit.count === 0, JSON.stringify(created.data));
+  const again = await api('POST', '/api/workflow-workspaces', { name: '视频分类' });
+  check('同名不会重复建', (again.data.workspaces || []).filter((item) => item.name === '视频分类').length === 1, JSON.stringify(again.data.workspaces));
+  check('空名字被拒', (await api('POST', '/api/workflow-workspaces', { name: '   ' })).status === 400);
+
+  const assigned = await api('POST', `/api/workflows/${wf.id}/workspace`, { workspace: '视频分类' });
+  check('把工作流归进已有分类', assigned.data.workflow?.workspace === '视频分类', JSON.stringify(assigned.data.workflow?.workspace));
+  const listed = await api('GET', '/api/workflow-workspaces');
+  check('列表里带出数量', (listed.data.workspaces || []).find((item) => item.name === '视频分类')?.count === 1, JSON.stringify(listed.data.workspaces));
+
+  // 直接归到一个没建过的名字：自动登记，下次就能在下拉里选
+  await api('POST', `/api/workflows/${wf.id}/workspace`, { workspace: '临时分类' });
+  const auto = await api('GET', '/api/workflow-workspaces');
+  check('归到没建过的名字会自动登记', Boolean((auto.data.workspaces || []).find((item) => item.name === '临时分类')), JSON.stringify(auto.data.workspaces));
+
+  const renamed = await api('POST', '/api/workflow-workspaces/rename', { from: '临时分类', to: '改过的分类' });
+  const afterRename = await api('GET', `/api/workflows/${wf.id}`);
+  check('改名后工作流跟着走', afterRename.data.workflow?.workspace === '改过的分类', afterRename.data.workflow?.workspace);
+  check('改名后老的分类名没了',
+    !(renamed.data.workspaces || []).some((item) => item.name === '临时分类')
+    && (renamed.data.workspaces || []).some((item) => item.name === '改过的分类'),
+    JSON.stringify((renamed.data.workspaces || []).map((item) => item.name)));
+  check('改名不会动别的分类', (renamed.data.workspaces || []).some((item) => item.name === '视频分类'));
+
+  const deleted = await api('POST', '/api/workflow-workspaces/delete', { name: '改过的分类' });
+  const afterDelete = await api('GET', `/api/workflows/${wf.id}`);
+  check('解散分类：里面的工作流回到未分类（没被删）',
+    deleted.data.moved === 1 && afterDelete.data.workflow?.workspace === '' && Boolean(afterDelete.data.workflow?.id),
+    JSON.stringify({ moved: deleted.data.moved, ws: afterDelete.data.workflow?.workspace }));
+  check('解散后分类名消失', !(deleted.data.workspaces || []).some((item) => item.name === '改过的分类'),
+    JSON.stringify((deleted.data.workspaces || []).map((item) => item.name)));
+  await api('POST', '/api/workflow-workspaces/delete', { name: '视频分类' });
+}
+
 async function testPersistence() {
   console.log('\n[持久化] 坏记录不得堵死后续落盘');
   const { create } = require(path.join(ROOT, 'src', 'workflow', 'store.js'));
@@ -744,6 +789,7 @@ async function waitHealthy(timeoutMs = 20000) {
     await testTriggers();
     await testLoopBody();
     await testTemplates();
+    await testWorkspaces();
     await testPersistence();
     console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
     if (fail) console.log(`失败用例：${failures.join('、')}`);

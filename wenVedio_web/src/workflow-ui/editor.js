@@ -15,6 +15,7 @@ const state = {
   models: [],
   workflows: [],
   templates: [],
+  workspaces: [],
   current: null,
   canvas: null,
   selectedNodeId: null,
@@ -135,6 +136,100 @@ const workspaceOf = (wf) => String(wf.workspace || '').trim();
 function workspaceNames(list) {
   return [...new Set(list.map(workspaceOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
 }
+// 分类全集 = 登记表里建过的 + 工作流上已经用到的（先建后用、只用未登记都认）
+function allWorkspaceNames() {
+  const set = new Set((state.workspaces || []).map((item) => item.name).filter(Boolean));
+  for (const wf of state.workflows) { const name = workspaceOf(wf); if (name) set.add(name); }
+  return [...set].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+}
+
+async function loadWorkspaces() {
+  try { state.workspaces = (await api('/api/workflow-workspaces')).workspaces || []; }
+  catch (_) { state.workspaces = state.workspaces || []; }
+  return state.workspaces;
+}
+
+async function assignWorkspace(workflowId, name) {
+  try {
+    await api(`/api/workflows/${encodeURIComponent(workflowId)}/workspace`, { method: 'POST', body: { workspace: name } });
+    await Promise.all([loadWorkflows(), loadWorkspaces()]);
+    renderList();
+    toast(name ? `已归到工作区「${name}」` : '已移出工作区');
+    return true;
+  } catch (err) { toast(`归类失败：${err.message}`, 'error'); return false; }
+}
+
+// 新建分类：先建出来，再把工作流归进去（列表里那条下拉也能直接触发）
+function openWorkspaceCreator(onCreated) {
+  openDialog('新建工作区', `
+    <p class="wf-insp-empty">工作区就是分类。建好之后，列表里可以按工作区<b>分组</b>或<b>筛选</b>，
+    卡片和列表行上也都能直接把工作流归进去。</p>
+    <label class="wf-field"><span class="lbl">名称</span><input id="wfWsNew" type="text" maxlength="40" placeholder="例如：视频 / 图文 / 客户 A" /></label>`,
+  [
+    { label: '取消', action: 'close' },
+    { label: '创建', primary: true, action: async (close) => {
+      const name = ($('#wfWsNew')?.value || '').trim();
+      if (!name) { toast('先给工作区起个名字', 'error'); return; }
+      try {
+        await api('/api/workflow-workspaces', { method: 'POST', body: { name } });
+        await loadWorkspaces();
+        close();
+        if (onCreated) await onCreated(name);
+        else { renderList(); toast(`已创建工作区「${name}」`); }
+      } catch (err) { toast(`新建失败：${err.message}`, 'error'); }
+    } },
+  ]);
+}
+
+// 把某个工作流归到哪个工作区
+function openWorkspacePicker(workflowId) {
+  const wf = state.workflows.find((item) => item.id === workflowId);
+  const current = workspaceOf(wf || {});
+  const names = allWorkspaceNames();
+  const actions = [{ label: '取消', action: 'close' }];
+  for (const name of names) {
+    actions.push({
+      label: name === current ? `● ${name}` : name,
+      action: async (close) => { close(); await assignWorkspace(workflowId, name); },
+    });
+  }
+  if (current) actions.push({ label: '移出工作区', action: async (close) => { close(); await assignWorkspace(workflowId, ''); } });
+  actions.push({ label: '＋ 新建工作区…', primary: true, action: (close) => { close(); openWorkspaceCreator((name) => assignWorkspace(workflowId, name)); } });
+  openDialog('归到工作区', `
+    <p class="wf-insp-empty">把「${esc(wf?.name || workflowId)}」归到：</p>
+    ${names.length ? '' : '<p class="wf-insp-empty">还没有工作区，点下面「＋ 新建工作区…」建一个。</p>'}`,
+  actions);
+}
+
+async function renameWorkspacePrompt(from) {
+  openDialog('重命名工作区', `
+    <p class="wf-insp-empty">改名后，归在这个工作区里的工作流会一起跟过去。</p>
+    <label class="wf-field"><span class="lbl">名称</span><input id="wfWsRename" type="text" maxlength="40" value="${esc(from)}" /></label>`,
+  [
+    { label: '取消', action: 'close' },
+    { label: '保存', primary: true, action: async (close) => {
+      const to = ($('#wfWsRename')?.value || '').trim();
+      if (!to) { toast('名称不能为空', 'error'); return; }
+      try {
+        await api('/api/workflow-workspaces/rename', { method: 'POST', body: { from, to } });
+        await Promise.all([loadWorkflows(), loadWorkspaces()]);
+        close();
+        renderList();
+        toast(`已改名为「${to}」`);
+      } catch (err) { toast(`改名失败：${err.message}`, 'error'); }
+    } },
+  ]);
+}
+
+async function deleteWorkspaceConfirm(name) {
+  if (!window.confirm(`解散工作区「${name}」？里面的工作流不会被删，只会回到「未分类」。`)) return;
+  try {
+    const res = await api('/api/workflow-workspaces/delete', { method: 'POST', body: { name } });
+    await Promise.all([loadWorkflows(), loadWorkspaces()]);
+    renderList();
+    toast(`已解散「${name}」${res.moved ? `，${res.moved} 个工作流回到未分类` : ''}`);
+  } catch (err) { toast(`解散失败：${err.message}`, 'error'); }
+}
 
 const shortTime = (value) => (value ? new Date(value).toLocaleString('zh-CN', { hour12: false }).slice(5, 16) : '—');
 const statusChip = (wf) => (wf.last_run_status
@@ -159,7 +254,7 @@ function workflowCard(wf) {
       </div>
       <p class="wf-card-desc">${esc(wf.description || '—')}</p>
       <div class="wf-card-meta">
-        <span class="wf-ws-chip">${esc(workspaceOf(wf) || '未分类')}</span>
+        <button type="button" class="wf-ws-chip" data-ws-pick="${esc(wf.id)}" title="点一下归类到工作区">${esc(workspaceOf(wf) || '＋ 未分类')}</button>
         <span>${(wf.nodes || []).length} 个节点</span>
         <span>运行 ${wf.run_count || 0} 次</span>
         ${statusChip(wf)}
@@ -172,7 +267,7 @@ function workflowCard(wf) {
 function workflowRow(wf, workspaces) {
   const options = ['', ...workspaces]
     .map((name) => `<option value="${esc(name)}"${workspaceOf(wf) === name ? ' selected' : ''}>${esc(name || '未分类')}</option>`)
-    .join('');
+    .join('') + '<option value="__new__">＋ 新建工作区…</option>';
   return `
     <div class="wf-row" data-open="${esc(wf.id)}">
       <span class="wf-row-main">
@@ -195,7 +290,7 @@ function renderList() {
   const keyword = ($('#wfSearch')?.value || '').trim().toLowerCase();
   const onlyFailed = host.dataset.onlyFailed === '1';
   const failedCount = state.workflows.filter((wf) => wf.last_run_status === 'failed').length;
-  const allWorkspaces = workspaceNames(state.workflows);
+  const allWorkspaces = allWorkspaceNames();
   // 选中的工作区没了（被改名/删掉）就回到「全部」
   let wsFilter = state.workspaceFilter || '';
   if (wsFilter && !allWorkspaces.includes(wsFilter)) { wsFilter = ''; state.workspaceFilter = ''; }
@@ -220,11 +315,21 @@ function renderList() {
       if (!groups.has(name)) groups.set(name, []);
       groups.get(name).push(wf);
     }
+    // 刚建好、还没有工作流的分类也要显示出来（否则看不到，也没法改名 / 解散）
+    if (!wsFilter && !keyword) {
+      for (const name of allWorkspaces) if (!groups.has(name)) groups.set(name, []);
+    }
     const order = [...groups.keys()].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b, 'zh-Hans-CN')));
     bodyHtml = order.map((name) => `
       <section class="wf-group">
-        <header class="wf-group-head"><b>${esc(name || '未分类')}</b><span class="wf-band-count">${groups.get(name).length}</span></header>
-        ${renderItems(groups.get(name))}
+        <header class="wf-group-head">
+          <b>${esc(name || '未分类')}</b><span class="wf-band-count">${groups.get(name).length}</span>
+          ${name ? `<button type="button" class="wf-group-btn" data-ws-rename="${esc(name)}" title="重命名这个工作区">改名</button>
+          <button type="button" class="wf-group-btn danger" data-ws-del="${esc(name)}" title="解散这个工作区（工作流回到未分类）">解散</button>` : ''}
+        </header>
+        ${groups.get(name).length
+          ? renderItems(groups.get(name))
+          : '<div class="wf-group-empty">这个工作区还没有工作流：点卡片/列表行上的工作区角标把它归进来</div>'}
       </section>`).join('');
   } else {
     bodyHtml = renderItems(list);
@@ -288,6 +393,7 @@ function renderList() {
         <label class="wf-tool-label">工作区
           <select id="wfWsFilter"><option value="">全部（${state.workflows.length}）</option>${workspaceOptions}</select>
         </label>
+        <button class="outline-button" id="wfWsNew" type="button" title="新建一个工作区（分类）">＋ 工作区</button>
         <span class="grow"></span>
         <button class="outline-button" id="wfImport" type="button">导入</button>
         <input type="file" id="wfImportFile" accept=".json,application/json" hidden />
@@ -316,17 +422,32 @@ function renderList() {
   $('#wfGroupToggle')?.addEventListener('click', () => setPrefs({ group: !prefs.group }));
   $('#wfTplToggle')?.addEventListener('click', () => setPrefs({ templates: !prefs.templates }));
   $('#wfWsFilter')?.addEventListener('change', (event) => { state.workspaceFilter = event.target.value; renderList(); });
-  // 列表视图里直接归类：点下拉不该打开工作流
+  $('#wfWsNew')?.addEventListener('click', () => openWorkspaceCreator());
+  // 卡片上的工作区角标：点一下就能归类
+  $$('[data-ws-pick]', host).forEach((el) => el.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openWorkspacePicker(el.dataset.wsPick);
+  }));
+  $$('[data-ws-rename]', host).forEach((el) => el.addEventListener('click', (event) => {
+    event.stopPropagation();
+    renameWorkspacePrompt(el.dataset.wsRename);
+  }));
+  $$('[data-ws-del]', host).forEach((el) => el.addEventListener('click', (event) => {
+    event.stopPropagation();
+    deleteWorkspaceConfirm(el.dataset.wsDel);
+  }));
+  // 列表视图里直接归类：点下拉不该打开工作流；选到「＋ 新建工作区…」就先建再归
   $$('[data-ws]', host).forEach((el) => {
     el.addEventListener('click', (event) => event.stopPropagation());
     el.addEventListener('change', async (event) => {
       event.stopPropagation();
-      try {
-        await api(`/api/workflows/${encodeURIComponent(el.dataset.ws)}/workspace`, { method: 'POST', body: { workspace: event.target.value } });
-        await loadWorkflows();
-        renderList();
-        toast(event.target.value ? `已归到「${event.target.value}」` : '已移出工作区');
-      } catch (err) { toast(`归类失败：${err.message}`, 'error'); }
+      const workflowId = el.dataset.ws;
+      const value = event.target.value;
+      if (value === '__new__') {
+        openWorkspaceCreator((name) => assignWorkspace(workflowId, name));
+        return;
+      }
+      await assignWorkspace(workflowId, value);
     });
   });
   $('#wfNew')?.addEventListener('click', () => createWorkflow());
@@ -626,7 +747,7 @@ function renderEditor() {
       <input class="wf-name-input" id="wfName" value="${esc(wf.name)}" maxlength="60" />
       <input class="wf-ws-input" id="wfWorkspace" list="wfWorkspaceOptions" maxlength="40" placeholder="工作区（可不填）"
         title="归到哪个工作区：列表页可以按工作区整理、分组显示" value="${esc(wf.workspace || '')}" />
-      <datalist id="wfWorkspaceOptions">${workspaceNames(state.workflows).map((name) => `<option value="${esc(name)}"></option>`).join('')}</datalist>
+      <datalist id="wfWorkspaceOptions">${allWorkspaceNames().map((name) => `<option value="${esc(name)}"></option>`).join('')}</datalist>
       <span class="wf-state ${wf.published ? 'published' : 'draft'}">${wf.published ? `已发布 V${wf.published_version}` : '草稿'}</span>
       <span class="wf-save-state" id="wfSaveState">已保存</span>
       <div class="wf-head-actions">
@@ -661,12 +782,12 @@ function renderEditor() {
   $('#wfPublish').addEventListener('click', publishCurrent);
   $('#wfDebugNode').addEventListener('click', debugSelectedNode);
   $('#wfName').addEventListener('input', () => { state.current.name = $('#wfName').value; markDirty(); });
-  $('#wfWorkspace').addEventListener('change', () => {
+  $('#wfWorkspace').addEventListener('change', async () => {
     const next = $('#wfWorkspace').value.trim();
     if ((state.current.workspace || '') === next) return;
     state.current.workspace = next;
-    markDirty();
-    toast(next ? `已归到工作区「${next}」` : '已移出工作区');
+    // 走归类接口：这样新名字会顺手登记进工作区列表（列表页的下拉里就有了）
+    await assignWorkspace(state.current.id, next);
   });
 }
 
@@ -2324,6 +2445,7 @@ export async function mount() {
     await loadBasics();
     await loadWorkflows();
     await loadTemplates();
+    await loadWorkspaces();
   } catch (err) {
     root.innerHTML = `<div class="wf-empty">工作流模块加载失败：${esc(err.message)}</div>`;
     return;

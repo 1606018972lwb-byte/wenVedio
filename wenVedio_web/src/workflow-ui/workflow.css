@@ -410,7 +410,12 @@
 .wf-group-head { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; }
 .wf-group-head b { font-size: 12.5px; color: var(--text-2); }
 .wf-muted { color: var(--text-3); font-size: 11.5px; }
-.wf-ws-chip { padding: 1px 7px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); font-size: 10.5px; }
+.wf-ws-chip { padding: 1px 8px; border: 1px solid transparent; border-radius: 999px; background: var(--brand-soft); color: var(--brand); font-size: 10.5px; cursor: pointer; }
+.wf-ws-chip:hover { border-color: var(--brand); background: var(--surface); }
+.wf-group-btn { padding: 1px 7px; border: 1px solid var(--border); border-radius: var(--r-xs); background: var(--surface); color: var(--text-3); font-size: 10.5px; cursor: pointer; }
+.wf-group-btn:hover { border-color: var(--brand); color: var(--brand); }
+.wf-group-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+.wf-group-empty { padding: 14px; border: 1px dashed var(--border); border-radius: var(--r-md); color: var(--text-3); font-size: 11.5px; }
 /* 列表视图 */
 .wf-rows { display: grid; gap: 8px; }
 .wf-row {

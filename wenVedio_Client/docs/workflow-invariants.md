@@ -157,6 +157,12 @@
 - 测后端时先确认端口没被旧的 `node src/server.js` 占着——
   曾经因为旧进程还活着，新进程绑不上端口，测的其实是旧代码
 - 用户正在用的客户端**不能动**：所有验证都在独立档案实例（`WENVEDIO_PROFILE=test`）上做
+- **改文件一律用编辑工具，不要用 PowerShell 的 `Get-Content` + `Set-Content` 往返改**：
+  中文系统上 `Get-Content` 按 GBK 读 UTF-8，写回就把整份文件变成乱码并加上 BOM
+  （2026-09-21 因此把两个 `package.json` 和两份 README 整份写坏，JSON 直接解析失败，
+  只能从上一个提交 `git checkout` 回来重做）。一行改动就用编辑工具，改完用 node 复核
+- 夹具里**不要用 `location.reload()` 当第一步**：会把首屏夹具卡死（某次 classify 步骤组就卡在
+  第一步、一张截图都没出）。要「回到默认状态」就点 UI 把偏好点回去（分组/卡片/排序/降序）
 
 ## 八、已知限制（不是 bug，是设计取舍）
 

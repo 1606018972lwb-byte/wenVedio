@@ -31,9 +31,43 @@ function create({ store, engine, host, python, triggers, writeLog, sendJson, rea
     const route = url.pathname;
     const known = route.startsWith('/api/workflows')
       || route.startsWith('/api/workflow-runs')
-      || route.startsWith('/api/workflow-templates');
+      || route.startsWith('/api/workflow-templates')
+      || route.startsWith('/api/workflow-workspaces');
     if (!known) return false;
     const method = req.method;
+
+    // ---------------- 工作区（分类） ----------------
+    if (route === '/api/workflow-workspaces' && method === 'GET') {
+      sendJson(res, 200, { ok: true, workspaces: store.listWorkspaces() });
+      return true;
+    }
+    if (route === '/api/workflow-workspaces' && method === 'POST') {
+      const payload = await readJson(req);
+      try {
+        const workspaces = store.createWorkspace(payload.name);
+        writeLog('info', `新建工作区：${String(payload.name || '').slice(0, 40)}`);
+        sendJson(res, 200, { ok: true, workspaces });
+      } catch (err) {
+        sendJson(res, 400, { ok: false, msg: err.message });
+      }
+      return true;
+    }
+    if (route === '/api/workflow-workspaces/rename' && method === 'POST') {
+      const payload = await readJson(req);
+      try {
+        const workspaces = store.renameWorkspace(payload.from, payload.to);
+        sendJson(res, 200, { ok: true, workspaces });
+      } catch (err) {
+        sendJson(res, 400, { ok: false, msg: err.message });
+      }
+      return true;
+    }
+    if (route === '/api/workflow-workspaces/delete' && method === 'POST') {
+      const payload = await readJson(req);
+      const result = store.deleteWorkspace(payload.name);
+      sendJson(res, 200, { ok: true, ...result });
+      return true;
+    }
 
     // ---------------- 模板库 ----------------
     if (route === '/api/workflow-templates' && method === 'GET') {
