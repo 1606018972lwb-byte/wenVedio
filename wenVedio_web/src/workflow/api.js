@@ -29,8 +29,61 @@ function create({ store, engine, host, python, triggers, writeLog, sendJson, rea
 
   async function handle(req, res, url) {
     const route = url.pathname;
-    if (!route.startsWith('/api/workflows') && !route.startsWith('/api/workflow-runs')) return false;
+    const known = route.startsWith('/api/workflows')
+      || route.startsWith('/api/workflow-runs')
+      || route.startsWith('/api/workflow-templates');
+    if (!known) return false;
     const method = req.method;
+
+    // ---------------- 模板库 ----------------
+    if (route === '/api/workflow-templates' && method === 'GET') {
+      sendJson(res, 200, { ok: true, templates: store.listTemplates() });
+      return true;
+    }
+
+    if (route === '/api/workflow-templates' && method === 'POST') {
+      const payload = await readJson(req);
+      try {
+        const template = store.saveTemplate(payload);
+        writeLog('info', `保存工作流模板：${template.name}（${template.nodes.length} 个节点）`);
+        sendJson(res, 200, { ok: true, template: { id: template.id, name: template.name, node_count: template.nodes.length, edge_count: template.edges.length } });
+      } catch (err) {
+        sendJson(res, 400, { ok: false, msg: err.message });
+      }
+      return true;
+    }
+
+    const templateMatch = route.match(/^\/api\/workflow-templates\/([^/]+)(?:\/(export))?$/);
+    if (templateMatch) {
+      const template = store.getTemplate(decodeURIComponent(templateMatch[1]));
+      if (!template) { sendJson(res, 404, { ok: false, msg: '模板不存在' }); return true; }
+      if (templateMatch[2] === 'export' && method === 'GET') {
+        // 与工作流导出用同一种结构：拿到的文件直接走「导入」就能用
+        sendJson(res, 200, {
+          ok: true,
+          kind: 'wenvedio-workflow',
+          exported_at: new Date().toISOString(),
+          workflow: {
+            name: template.name,
+            description: template.description || '',
+            nodes: template.nodes,
+            edges: template.edges,
+            variables: template.variables || [],
+          },
+        });
+        return true;
+      }
+      if (!templateMatch[2] && method === 'GET') {
+        sendJson(res, 200, { ok: true, template });
+        return true;
+      }
+      if (!templateMatch[2] && method === 'DELETE') {
+        store.deleteTemplate(template.id);
+        writeLog('info', `删除工作流模板：${template.name}`);
+        sendJson(res, 200, { ok: true, deleted: template.id });
+        return true;
+      }
+    }
 
     // 节点元信息（前端节点库与参数面板都靠它自动渲染）
     if (route === '/api/workflows/meta' && method === 'GET') {

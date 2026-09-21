@@ -14,6 +14,7 @@ const state = {
   meta: null,
   models: [],
   workflows: [],
+  templates: [],
   current: null,
   canvas: null,
   selectedNodeId: null,
@@ -136,6 +137,19 @@ function renderList() {
       </div>
       <p class="wf-card-desc">${esc(tpl.description)}</p>
       <div class="wf-card-actions"><button type="button" data-template="${index}">使用模板</button></div>
+    </article>`).join('')
+    + (state.templates || []).map((tpl) => `
+    <article class="wf-card" data-mytemplate="${esc(tpl.id)}">
+      <div class="wf-card-head">
+        <span class="wf-card-title">${esc(tpl.name)}</span>
+        <span class="wf-state published">我的模板</span>
+      </div>
+      <p class="wf-card-desc">${esc(tpl.description || '从工作流收藏的模板')} · ${tpl.node_count} 个节点 / ${tpl.edge_count} 条连线</p>
+      <div class="wf-card-actions">
+        <button type="button" data-template-use="${esc(tpl.id)}">使用模板</button>
+        <button type="button" data-template-export="${esc(tpl.id)}">导出分享</button>
+        <button type="button" data-template-del="${esc(tpl.id)}">删除</button>
+      </div>
     </article>`).join('');
 
   host.innerHTML = `
@@ -145,6 +159,8 @@ function renderList() {
       <span class="grow"></span>
       <button class="outline-button" id="wfImport" type="button">导入</button>
       <input type="file" id="wfImportFile" accept=".json,application/json" hidden />
+      <button class="outline-button" id="wfImportTemplate" type="button" title="导入别人分享的模板（和工作流同一种文件格式）">导入模板</button>
+      <input type="file" id="wfImportTemplateFile" accept=".json,application/json" hidden />
       <button class="outline-button accent" id="wfPythonEnv" type="button">🐍 Python 环境</button>
       <button class="primary-button" id="wfNew" type="button"><span>＋</span> 新建工作流</button>
     </div>
@@ -168,6 +184,19 @@ function renderList() {
   $$('button[data-export]', host).forEach((el) => el.addEventListener('click', () => exportWorkflow(el.dataset.export)));
   $('#wfImport')?.addEventListener('click', () => $('#wfImportFile')?.click());
   $('#wfImportFile')?.addEventListener('change', (event) => importWorkflow(event.target.files?.[0]));
+  $('#wfImportTemplate')?.addEventListener('click', () => $('#wfImportTemplateFile')?.click());
+  $('#wfImportTemplateFile')?.addEventListener('change', (event) => importTemplateFile(event.target.files?.[0]));
+  $$('button[data-template-use]', host).forEach((el) => el.addEventListener('click', () => useTemplate(el.dataset.templateUse)));
+  $$('button[data-template-export]', host).forEach((el) => el.addEventListener('click', () => exportTemplate(el.dataset.templateExport)));
+  $$('button[data-template-del]', host).forEach((el) => el.addEventListener('click', async () => {
+    if (!window.confirm('删除这个模板？不影响已经用它建出来的工作流。')) return;
+    try {
+      await api(`/api/workflow-templates/${encodeURIComponent(el.dataset.templateDel)}`, { method: 'DELETE' });
+      await loadTemplates();
+      renderList();
+      toast('模板已删除');
+    } catch (err) { toast(`删除失败：${err.message}`, 'error'); }
+  }));
   $$('button[data-copy]', host).forEach((el) => el.addEventListener('click', async () => {
     try { await api(`/api/workflows/${encodeURIComponent(el.dataset.copy)}/duplicate`, { method: 'POST' }); await loadWorkflows(); renderList(); }
     catch (err) { toast(`复制失败：${err.message}`, 'error'); }
@@ -210,15 +239,7 @@ async function exportWorkflow(id) {
   try {
     const data = await api(`/api/workflows/${encodeURIComponent(id)}/export`);
     const name = String(data.workflow?.name || 'workflow').replace(/[\\/:*?"<>|]/g, '_');
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${name}.wenvedio-workflow.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    downloadJson(data, `${name}.wenvedio-workflow.json`);
     toast(`已导出 ${name}`);
   } catch (err) { toast(`导出失败：${err.message}`, 'error'); }
 }
@@ -245,6 +266,101 @@ async function importWorkflow(file) {
     await openWorkflow(data.workflow.id);
   } catch (err) { toast(`导入失败：${err.message}`, 'error'); }
   finally { const input = $('#wfImportFile'); if (input) input.value = ''; }
+}
+
+// ---------------- 模板库 ----------------
+// 模板就是一份命名的节点图快照：可以从工作流收藏、导出成文件分享、
+// 也可以导入别人的文件（格式与工作流导出完全一致）。
+async function loadTemplates() {
+  try { state.templates = (await api('/api/workflow-templates')).templates || []; }
+  catch (_) { state.templates = state.templates || []; }
+  return state.templates;
+}
+
+async function useTemplate(id) {
+  try {
+    const data = await api(`/api/workflow-templates/${encodeURIComponent(id)}`);
+    const tpl = data.template;
+    const created = await createWorkflow({
+      name: tpl.name,
+      description: tpl.description || '',
+      nodes: tpl.nodes,
+      edges: tpl.edges,
+      variables: tpl.variables || [],
+    });
+    if (created) toast(`已从模板创建：${tpl.name}`);
+  } catch (err) { toast(`使用模板失败：${err.message}`, 'error'); }
+}
+
+function downloadJson(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
+async function exportTemplate(id) {
+  try {
+    const data = await api(`/api/workflow-templates/${encodeURIComponent(id)}/export`);
+    const name = String(data.workflow?.name || 'template').replace(/[\\/:*?"<>|]/g, '_');
+    downloadJson(data, `${name}.wenvedio-workflow.json`);
+    toast(`已导出模板 ${data.workflow?.name || ''}`);
+  } catch (err) { toast(`导出失败：${err.message}`, 'error'); }
+}
+
+// 导入模板：文件格式和工作流导出一样，所以直接存进模板库而不是建工作流
+async function importTemplateFile(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    let payload;
+    try { payload = JSON.parse(text); }
+    catch (_) { throw new Error('文件不是合法 JSON'); }
+    const source = payload?.workflow && typeof payload.workflow === 'object' ? payload.workflow : payload;
+    if (!source || !Array.isArray(source.nodes) || !source.nodes.length) throw new Error('文件里没有节点，可能不是模板文件');
+    const data = await api('/api/workflow-templates', { method: 'POST', body: {
+      name: String(source.name || '导入的模板').slice(0, 60),
+      description: String(source.description || '').slice(0, 200),
+      nodes: source.nodes,
+      edges: source.edges,
+      variables: source.variables,
+    } });
+    await loadTemplates();
+    renderList();
+    toast(`已导入模板：${data.template?.name || source.name}`);
+  } catch (err) { toast(`导入模板失败：${err.message}`, 'error'); }
+  finally { const input = $('#wfImportTemplateFile'); if (input) input.value = ''; }
+}
+
+// 把当前工作流存进模板库
+function saveAsTemplate() {
+  const wf = state.current;
+  if (!wf) return;
+  openDialog('存为模板', `
+    <p class="wf-insp-empty">把当前工作流存进模板库：之后可以在列表页「使用模板」一键套用，也能「导出分享」给别人导入。</p>
+    <label class="wf-field"><span class="lbl">模板名称</span><input id="wfTplName" type="text" maxlength="60" value="${esc(wf.name)}" /></label>
+    <label class="wf-field"><span class="lbl">说明</span><input id="wfTplDesc" type="text" maxlength="200" value="${esc(wf.description || '')}" /></label>`,
+  [
+    { label: '取消', action: 'close' },
+    { label: '保存', primary: true, action: async (close) => {
+      try {
+        await saveCurrent();
+        const res = await api('/api/workflow-templates', { method: 'POST', body: {
+          from_workflow_id: wf.id,
+          name: $('#wfTplName')?.value.trim() || wf.name,
+          description: $('#wfTplDesc')?.value.trim() || '',
+        } });
+        await loadTemplates();
+        toast(`已存为模板：${res.template?.name || wf.name}`);
+        close();
+      } catch (err) { toast(`存模板失败：${err.message}`, 'error'); }
+    } },
+  ]);
 }
 
 // 复制一段文本到剪贴板：优先用 clipboard API，不可用时退化到临时 textarea
@@ -358,6 +474,7 @@ function renderEditor() {
         <button type="button" id="wfDebugNode" title="只运行选中的这一个节点">⚡ 测试节点</button>
         <button type="button" id="wfVersions" title="发布过的版本：对比与恢复">版本</button>
         <button type="button" id="wfTriggers" title="Webhook 地址与定时计划">触发</button>
+        <button type="button" id="wfTplSave" title="把当前工作流存进模板库">存为模板</button>
         <button type="button" id="wfRuns">运行记录</button>
         <button type="button" id="wfPublish">发布</button>
         <button type="button" class="primary" id="wfRun" title="试运行整个工作流">▶ 试运行</button>
@@ -379,6 +496,7 @@ function renderEditor() {
   $('#wfRuns').addEventListener('click', () => openRunList(wf.id));
   $('#wfVersions').addEventListener('click', () => openVersionList());
   $('#wfTriggers').addEventListener('click', () => openTriggerPanel());
+  $('#wfTplSave').addEventListener('click', saveAsTemplate);
   $('#wfPublish').addEventListener('click', publishCurrent);
   $('#wfDebugNode').addEventListener('click', debugSelectedNode);
   $('#wfName').addEventListener('input', () => { state.current.name = $('#wfName').value; markDirty(); });
@@ -540,6 +658,7 @@ function backToList() {
   $('#wfEditMode').innerHTML = '';
   $('#wfListMode').hidden = false;
   loadWorkflows().then(renderList).catch(() => {});
+  loadTemplates().then(renderList).catch(() => {});
 }
 
 async function publishCurrent() {
@@ -2031,6 +2150,7 @@ export async function mount() {
   try {
     await loadBasics();
     await loadWorkflows();
+    await loadTemplates();
   } catch (err) {
     root.innerHTML = `<div class="wf-empty">工作流模块加载失败：${esc(err.message)}</div>`;
     return;

@@ -621,6 +621,51 @@ async function testLoopBody() {
     JSON.stringify({ s: nestedRun?.nodes?.code_sum?.status, loop: nestedRun?.nodes?.code_sum?.in_loop }));
 }
 
+// 模板库：从工作流收藏、列表统计、导出结构、分享导入、删除
+async function testTemplates() {
+  console.log('\n[模板库] 收藏 / 列表 / 导出结构 / 分享导入 / 删除');
+  const wf = await createWorkflow({
+    name: '测试·模板来源',
+    description: '来自回归测试',
+    nodes: [startNode([]), codeNode('code_1', 'return { ok: 1 };')],
+    edges: [{ id: 'e1', from: 'start_1', to: 'code_1' }],
+  });
+  const saved = await api('POST', '/api/workflow-templates', { from_workflow_id: wf.id, name: '测试模板', description: '收藏来的' });
+  check('从工作流收藏成功', saved.data.ok === true && String(saved.data.template?.id).startsWith('tpl_'), JSON.stringify(saved.data));
+  check('返回模板名与节点数（覆盖了默认名）',
+    saved.data.template?.name === '测试模板' && saved.data.template?.node_count === 2,
+    JSON.stringify(saved.data.template));
+
+  const list = await api('GET', '/api/workflow-templates');
+  const hit = (list.data.templates || []).find((item) => item.id === saved.data.template.id);
+  check('列表里能看到刚存的模板（带统计与来源）',
+    Boolean(hit) && hit.node_count === 2 && hit.edge_count === 1 && hit.source_workflow_id === wf.id,
+    JSON.stringify(hit));
+
+  const full = await api('GET', `/api/workflow-templates/${saved.data.template.id}`);
+  check('取完整模板内容（节点与连线都在）',
+    full.data.template?.nodes?.length === 2 && full.data.template?.edges?.length === 1,
+    JSON.stringify(full.data).slice(0, 120));
+
+  const exported = await api('GET', `/api/workflow-templates/${saved.data.template.id}/export`);
+  check('导出结构与工作流导出一致（kind + workflow）',
+    exported.data.kind === 'wenvedio-workflow' && exported.data.workflow?.nodes?.length === 2 && exported.data.workflow?.name === '测试模板',
+    JSON.stringify(exported.data).slice(0, 140));
+
+  const imported = await api('POST', '/api/workflows/import', exported.data);
+  check('分享出去的文件用「导入」就能直接建出工作流',
+    imported.data.ok === true && imported.data.workflow?.nodes?.length === 2,
+    JSON.stringify(imported.data).slice(0, 120));
+
+  check('空模板被拒', (await api('POST', '/api/workflow-templates', { name: '空的', nodes: [], edges: [] })).status === 400);
+  check('取不存在的模板返回 404', (await api('GET', '/api/workflow-templates/tpl_nope')).status === 404);
+
+  const removed = await api('DELETE', `/api/workflow-templates/${saved.data.template.id}`);
+  check('删除模板后取不到了',
+    removed.data.ok === true && (await api('GET', `/api/workflow-templates/${saved.data.template.id}`)).status === 404,
+    JSON.stringify(removed.data));
+}
+
 async function testPersistence() {
   console.log('\n[持久化] 坏记录不得堵死后续落盘');
   const { create } = require(path.join(ROOT, 'src', 'workflow', 'store.js'));
@@ -698,6 +743,7 @@ async function waitHealthy(timeoutMs = 20000) {
     await testSubWorkflowNode();
     await testTriggers();
     await testLoopBody();
+    await testTemplates();
     await testPersistence();
     console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
     if (fail) console.log(`失败用例：${failures.join('、')}`);

@@ -14,8 +14,10 @@ const MAX_NODES = 200;
 function create({ configDir, writeLog }) {
   const WORKFLOWS_FILE = path.join(configDir, 'workflows.json');
   const RUNS_FILE = path.join(configDir, 'workflow-runs.json');
+  const TEMPLATES_FILE = path.join(configDir, 'workflow-templates.json');
   const workflows = new Map();
   const runs = new Map();
+  const templates = new Map();
 
   // Windows 上目标文件可能被索引器 / 杀软短暂占用，rename 会 EPERM；
   // 所以这里重试几次，仍失败就直接覆盖写（宁可非原子，也不能丢数据或抛异常）。
@@ -69,10 +71,13 @@ function create({ configDir, writeLog }) {
     readJsonFile(RUNS_FILE, (list) => {
       list.forEach((item) => { if (item && item.id) runs.set(item.id, item); });
     }, '工作流运行记录');
-    writeLog('info', `工作流已恢复 ${workflows.size} 个，运行记录 ${runs.size} 条`);
+    readJsonFile(TEMPLATES_FILE, (list) => {
+      list.forEach((item) => { if (item && item.id) templates.set(item.id, item); });
+    }, '工作流模板', 'templates');
+    writeLog('info', `工作流已恢复 ${workflows.size} 个，运行记录 ${runs.size} 条，模板 ${templates.size} 个`);
   }
 
-  function readJsonFile(file, onList, label) {
+  function readJsonFile(file, onList, label, key) {
     let text;
     try {
       text = fs.readFileSync(file, 'utf8');
@@ -82,7 +87,7 @@ function create({ configDir, writeLog }) {
     }
     try {
       const parsed = JSON.parse(text);
-      const list = Array.isArray(parsed) ? parsed : parsed[`${label === '工作流' ? 'workflows' : 'runs'}`];
+      const list = Array.isArray(parsed) ? parsed : parsed[key || (label === '工作流' ? 'workflows' : 'runs')];
       if (Array.isArray(list)) { onList(list); return; }
       writeLog('warn', `${label}文件结构不对（没有数组），按空处理`);
     } catch (err) {
@@ -253,6 +258,66 @@ function create({ configDir, writeLog }) {
       for (const [runId, run] of runs) if (run.workflow_id === id) runs.delete(runId);
       saveRuns();
     }
+    return ok;
+  }
+
+  // ---------------- 模板库 ----------------
+  // 模板就是一份命名的节点图快照：可以从某个工作流收藏下来，也可以导入别人分享的文件。
+  // 导出用的是和工作流导出完全一样的结构，所以「导入模板」直接走工作流导入即可。
+
+  const TEMPLATES_LIMIT = 100;
+
+  function saveTemplates() {
+    return writeJson(TEMPLATES_FILE, { version: 1, templates: [...templates.values()] });
+  }
+
+  function listTemplates() {
+    return [...templates.values()]
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        description: item.description || '',
+        node_count: (item.nodes || []).length,
+        edge_count: (item.edges || []).length,
+        source_workflow_id: item.source_workflow_id || '',
+        created_at: item.created_at,
+      }));
+  }
+
+  function getTemplate(id) {
+    return templates.get(String(id)) || null;
+  }
+
+  function saveTemplate(payload) {
+    const source = payload?.from_workflow_id ? workflows.get(String(payload.from_workflow_id)) : null;
+    const raw = source || payload || {};
+    const { nodes, edges } = sanitizeDefinition(raw);
+    if (!nodes.length) throw new Error('模板里没有节点，保存不了');
+    const now = new Date().toISOString();
+    const record = {
+      id: `tpl_${crypto.randomBytes(6).toString('hex')}`,
+      // 名字与说明可以用请求里的覆盖（「从工作流收藏」时允许改个名字）
+      name: str(payload?.name, 60).trim() || `${str(raw.name, 50).trim() || '未命名'} 模板`,
+      description: str(payload?.description !== undefined ? payload.description : raw.description, 200),
+      nodes,
+      edges,
+      variables: Array.isArray(raw.variables) ? raw.variables.slice(0, 50) : [],
+      source_workflow_id: source ? source.id : str(payload?.source_workflow_id, 64),
+      created_at: now,
+    };
+    templates.set(record.id, record);
+    if (templates.size > TEMPLATES_LIMIT) {
+      const oldest = [...templates.values()].sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))[0];
+      if (oldest) templates.delete(oldest.id);
+    }
+    saveTemplates();
+    return record;
+  }
+
+  function deleteTemplate(id) {
+    const ok = templates.delete(String(id));
+    if (ok) saveTemplates();
     return ok;
   }
 
@@ -429,6 +494,7 @@ function create({ configDir, writeLog }) {
     listWorkflows, getWorkflow, saveWorkflow, patchWorkflow, deleteWorkflow,
     publishWorkflow, listVersions, getVersion, restoreVersion, duplicateWorkflow, touchWorkflowRun,
     saveRun, pruneRuns, listRuns, getRun, allRuns, clearFinishedRuns,
+    listTemplates, getTemplate, saveTemplate, deleteTemplate,
   };
 }
 
