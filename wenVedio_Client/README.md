@@ -1,5 +1,7 @@
 # wenVedio · 桌面客户端（一体化）
 
+> 当前版本 **2026.9.21-1**（版本号规则见文末「版本号规则」）
+
 跨平台桌面版视频生成工作台：界面、服务端全部内置在一个应用里，双击即用，不需要安装 Node，也不需要单独部署服务。基于 Electron 实现，可打包 macOS 与 Windows x64。
 
 ## 工作方式
@@ -86,6 +88,36 @@ npm run dist:mac    # macOS：dmg + zip（x64 / arm64）
 ```
 
 产物输出到 `release/`。
+
+## 版本号规则
+
+**`年.月.日-当天第几版`**，例如 `2026.9.21-1` = 2026 年 9 月 21 日改出的第 1 版。
+
+- 日期用**北京时间**、写真实数字（不补零）：`2026.9.21`，不是 `2026.09.21`
+- 同一天再交付一次：序号 +1（`2026.9.21-2`）；跨天回到 1（`2026.9.22-1`）
+- 序号只在**打包 / 交付**时递增：白天改代码不算，一天里反复改、最后只打一次包就是 `-1`
+- 三处必须一致：`package.json` 的 `version`、本 README 顶部标注、产物文件名
+- 这个格式是合法 semver（`主.次.修订-预发布`），npm 与 electron-builder 直接认
+- **所有自研程序都用这一套**（`wenVedio_Client`、`wenVedio_web`、后续插件与工具），
+  各自独立计数；同一天一起交付的几个程序写同一个日期序号
+
+打包流程：
+
+```bash
+# 1) 改版本号：两个 package.json + README 顶部的「当前版本」
+# 2) 出包
+node node_modules/electron-builder/out/cli/cli.js --win --x64
+# 产物自动带版本号：
+#   release/wenVedio-2026.9.21-1-win-x64-setup.exe     （NSIS 安装包）
+#   release/wenVedio-2026.9.21-1-win-x64-portable.exe  （免安装单文件）
+```
+
+两个环境坑（都踩过）：
+- PowerShell 禁止运行脚本时 `npm run dist:win` 会报 ExecutionPolicy，
+  直接用上面那条 `node node_modules/electron-builder/out/cli/cli.js` 即可绕开
+- 网络受限时先设镜像再打包：
+  `ELECTRON_MIRROR=https://cdn.npmmirror.com/binaries/electron/`
+  `ELECTRON_BUILDER_BINARIES_MIRROR=https://cdn.npmmirror.com/binaries/electron-builder-binaries/`
 
 关于跨平台构建：
 
