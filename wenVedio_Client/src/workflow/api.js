@@ -2,7 +2,7 @@
 // 挂到现有 server.js 的 /api 路由前面：命中就处理，没命中返回 false 交回给原路由。
 'use strict';
 
-function create({ store, engine, host, python, writeLog, sendJson, readBody, nodeMeta }) {
+function create({ store, engine, host, python, triggers, writeLog, sendJson, readBody, nodeMeta }) {
   const readJson = async (req) => {
     try {
       const text = await readBody(req);
@@ -175,6 +175,30 @@ function create({ store, engine, host, python, writeLog, sendJson, readBody, nod
       }
     }
 
+    // 触发器：Webhook 地址与令牌、定时计划的读写（两段路径，要在通用规则之前匹配）
+    const triggerMatch = route.match(/^\/api\/workflows\/([^/]+)\/(triggers|hook-token)$/);
+    if (triggerMatch) {
+      const workflow = store.getWorkflow(decodeURIComponent(triggerMatch[1]));
+      if (!workflow) { sendJson(res, 404, { ok: false, msg: '工作流不存在' }); return true; }
+      const base = `${url.protocol}//${url.host}`;
+      const current = () => store.getWorkflow(workflow.id) || workflow;
+      if (triggerMatch[2] === 'triggers' && method === 'GET') {
+        sendJson(res, 200, { ok: true, ...triggers.describe(current(), base) });
+        return true;
+      }
+      if (triggerMatch[2] === 'triggers' && method === 'POST') {
+        const payload = await readJson(req);
+        triggers.saveSchedules(current(), payload.schedules);
+        sendJson(res, 200, { ok: true, ...triggers.describe(current(), base) });
+        return true;
+      }
+      if (triggerMatch[2] === 'hook-token' && method === 'POST') {
+        triggers.resetToken(current());
+        sendJson(res, 200, { ok: true, ...triggers.describe(current(), base) });
+        return true;
+      }
+    }
+
     // 单个版本的完整内容：版本对比要拿它和当前草稿逐项比（GET，两段路径）
     const versionMatch = route.match(/^\/api\/workflows\/([^/]+)\/versions\/([^/]+)$/);
     if (versionMatch && method === 'GET') {
@@ -307,6 +331,20 @@ function create({ store, engine, host, python, writeLog, sendJson, readBody, nod
     }
 
     // 单节点调试：只跑这一个节点，inputs 当作上游输出喂进去
+    if (action === 'hook' && method === 'POST') {
+      // Webhook：请求体（JSON）就是这次运行的输入，query 参数也能当输入用
+      const workflow = store.getWorkflow(id);
+      if (!workflow) { sendJson(res, 404, { ok: false, msg: 'Webhook 地址无效' }); return true; }
+      const payload = await readJson(req);
+      for (const [key, value] of url.searchParams) {
+        if (payload[key] === undefined) payload[key] = value;
+      }
+      const result = triggers.fireHook(workflow, param, payload);
+      if (!result.ok) { sendJson(res, result.status || 400, { ok: false, msg: result.msg }); return true; }
+      sendJson(res, 200, { ok: true, run_id: result.run.id, status: result.run.status, workflow_id: workflow.id });
+      return true;
+    }
+
     if (action === 'test-node' && method === 'POST') {
       const payload = await readJson(req);
       const node = payload.node;

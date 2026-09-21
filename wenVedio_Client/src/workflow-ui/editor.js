@@ -357,6 +357,7 @@ function renderEditor() {
         <button type="button" id="wfRedo" title="重做 Ctrl+Y">↷</button>
         <button type="button" id="wfDebugNode" title="只运行选中的这一个节点">⚡ 测试节点</button>
         <button type="button" id="wfVersions" title="发布过的版本：对比与恢复">版本</button>
+        <button type="button" id="wfTriggers" title="Webhook 地址与定时计划">触发</button>
         <button type="button" id="wfRuns">运行记录</button>
         <button type="button" id="wfPublish">发布</button>
         <button type="button" class="primary" id="wfRun" title="试运行整个工作流">▶ 试运行</button>
@@ -377,6 +378,7 @@ function renderEditor() {
   $('#wfRun').addEventListener('click', () => promptRun(wf.id));
   $('#wfRuns').addEventListener('click', () => openRunList(wf.id));
   $('#wfVersions').addEventListener('click', () => openVersionList());
+  $('#wfTriggers').addEventListener('click', () => openTriggerPanel());
   $('#wfPublish').addEventListener('click', publishCurrent);
   $('#wfDebugNode').addEventListener('click', debugSelectedNode);
   $('#wfName').addEventListener('input', () => { state.current.name = $('#wfName').value; markDirty(); });
@@ -1392,6 +1394,135 @@ async function restoreVersion(version) {
     await openWorkflow(wf.id);
     toast(`已恢复到 V${version}，当前版本 V${data.workflow.version}`);
   } catch (err) { toast(`恢复失败：${err.message}`, 'error'); }
+}
+
+// ---------------- 触发器（Webhook / 定时）----------------
+// 工作流目前只能手动跑或调 HTTP 接口跑。这里是「让它自己跑起来」的入口：
+// 一把 Webhook 令牌 + 若干定时计划。
+async function openTriggerPanel() {
+  const wf = state.current;
+  if (!wf) return;
+  try {
+    // 触发器跑的是服务端存的定义，先把画布上的改动落盘
+    await saveCurrent();
+    const data = await api(`/api/workflows/${encodeURIComponent(wf.id)}/triggers`);
+    state.triggerData = data;
+    openDrawer(`触发方式 · ${wf.name}`, '<div id="wfTrigBody"></div>', (root) => {
+      const body = $('#wfTrigBody', root);
+      let schedules = (data.schedules || []).map((item) => ({ ...item }));
+
+      const draw = () => {
+        const hook = data.webhook || {};
+        const curl = `curl -X POST '${hook.url}' -H 'Content-Type: application/json' -d '{"输入名":"值"}'`;
+        body.innerHTML = `
+          <div class="wf-trig-block">
+            <b>Webhook：外部系统直接调起这个工作流</b>
+            <p class="wf-insp-empty">POST 到这个地址，请求体（JSON）就是这次运行的输入；缺必填输入会被拒绝并在响应里说明。</p>
+            <div class="wf-hook-line"><input type="text" id="wfHookUrl" readonly value="${esc(hook.url || '')}" /></div>
+            <div class="wf-insp-actions">
+              <button type="button" id="wfCopyHook">复制地址</button>
+              <button type="button" id="wfCopyCurl">复制 curl 示例</button>
+              <button type="button" id="wfResetHook">重置令牌</button>
+            </div>
+            <small class="wf-sch-meta">已触发 ${hook.runs || 0} 次${hook.last_at ? ` · 最近 ${esc(formatStamp(hook.last_at))}` : ''} · 令牌 ${esc(String(hook.token || '').slice(0, 8))}…</small>
+          </div>
+          <div class="wf-trig-block">
+            <b>定时：到点自动跑</b>
+            <p class="wf-insp-empty">「每隔 N 分钟」按上次触发时间顺延；「每天 HH:MM」按北京时间。上一个运行还没结束时，这次会跳过而不是叠着跑。</p>
+            <div class="wf-sch-list">${schedules.map(triggerScheduleRow).join('') || '<div class="wf-empty">还没有定时计划</div>'}</div>
+            <div class="wf-insp-actions">
+              <button type="button" id="wfSchAdd">＋ 添加计划</button>
+              <button type="button" class="primary" id="wfSchSave">保存计划</button>
+            </div>
+          </div>`;
+
+        $('#wfCopyHook')?.addEventListener('click', () => copyTextToClipboard(hook.url || '', '已复制 Webhook 地址'));
+        $('#wfCopyCurl')?.addEventListener('click', () => copyTextToClipboard(curl, '已复制 curl 示例'));
+        $('#wfResetHook')?.addEventListener('click', async () => {
+          if (!window.confirm('重置令牌？旧地址会立刻失效，已经接好的外部系统需要改成新地址。')) return;
+          try {
+            const res = await api(`/api/workflows/${encodeURIComponent(wf.id)}/hook-token`, { method: 'POST' });
+            data.webhook = res.webhook;
+            draw();
+            toast('令牌已重置');
+          } catch (err) { toast(`重置失败：${err.message}`, 'error'); }
+        });
+        $('#wfSchAdd')?.addEventListener('click', () => {
+          if (schedules.length >= 8) { toast('最多 8 条定时计划'); return; }
+          const draft = readScheduleRows(body, schedules);
+          if (!draft) return;
+          schedules = [...draft, {
+            mode: 'interval', every_minutes: 60, at: '09:00', enabled: true,
+            inputs: {}, created_at: new Date().toISOString(), last_fired_at: null, next_at: null,
+          }];
+          draw();
+        });
+        $('#wfSchSave')?.addEventListener('click', async () => {
+          const next = readScheduleRows(body, schedules);
+          if (!next) return;
+          try {
+            const res = await api(`/api/workflows/${encodeURIComponent(wf.id)}/triggers`, { method: 'POST', body: { schedules: next } });
+            data.schedules = res.schedules;
+            schedules = (res.schedules || []).map((item) => ({ ...item }));
+            draw();
+            toast(`已保存 ${schedules.length} 条定时计划`);
+          } catch (err) { toast(`保存失败：${err.message}`, 'error'); }
+        });
+      };
+      draw();
+    });
+  } catch (err) { toast(`读取触发器失败：${err.message}`, 'error'); }
+}
+
+function triggerScheduleRow(schedule, index) {
+  const mode = schedule?.mode === 'daily' ? 'daily' : 'interval';
+  return `
+    <div class="wf-sch-row" data-sch="${index}">
+      <select data-sch-mode>
+        <option value="interval"${mode === 'interval' ? ' selected' : ''}>每隔</option>
+        <option value="daily"${mode === 'daily' ? ' selected' : ''}>每天</option>
+      </select>
+      <input type="number" min="1" max="10080" data-sch-every value="${Number(schedule?.every_minutes) || 60}"${mode === 'daily' ? ' hidden' : ''} />
+      <span class="wf-sch-unit"${mode === 'daily' ? ' hidden' : ''}>分钟</span>
+      <input type="time" data-sch-at value="${esc(schedule?.at || '09:00')}"${mode === 'daily' ? '' : ' hidden'} />
+      <label class="wf-sch-enable"><input type="checkbox" data-sch-enabled${schedule?.enabled === false ? '' : ' checked'} /> 启用</label>
+      <button type="button" class="wf-row-del" data-sch-del="${index}">×</button>
+      <input type="text" data-sch-inputs value="${esc(JSON.stringify(schedule?.inputs || {}))}" placeholder='预写输入 JSON，例如 {"n": 1}' />
+      <small class="wf-sch-meta">${schedule?.last_fired_at ? `上次：${esc(formatStamp(schedule.last_fired_at))}` : '还没触发过'}${schedule?.next_at ? ` · 下次：${esc(formatStamp(schedule.next_at))}` : ''}${schedule?.last_status ? ` · ${esc(schedule.last_status)}` : ''}</small>
+    </div>`;
+}
+
+// 把抽屉里的计划行读回对象；JSON 写错就提示并返回 null（不静默丢掉）
+function readScheduleRows(body, previous) {
+  const rows = $$('.wf-sch-row', body);
+  const out = [];
+  for (const row of rows) {
+    const index = Number(row.dataset.sch);
+    const raw = ($('[data-sch-inputs]', row)?.value || '').trim();
+    let inputs = {};
+    if (raw) {
+      try { inputs = JSON.parse(raw); } catch (_) {
+        toast(`第 ${index + 1} 条计划的输入不是合法 JSON`, 'error');
+        return null;
+      }
+    }
+    if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) {
+      toast(`第 ${index + 1} 条计划的输入必须是对象`, 'error');
+      return null;
+    }
+    out.push({
+      mode: $('[data-sch-mode]', row)?.value === 'daily' ? 'daily' : 'interval',
+      every_minutes: Number($('[data-sch-every]', row)?.value) || 60,
+      at: $('[data-sch-at]', row)?.value || '09:00',
+      enabled: $('[data-sch-enabled]', row)?.checked !== false,
+      inputs,
+      // 保留上次触发的记账信息，否则「每隔 N 分钟」会被重置成从现在开始算
+      created_at: previous[index]?.created_at,
+      last_fired_at: previous[index]?.last_fired_at || null,
+      last_run_id: previous[index]?.last_run_id || '',
+    });
+  }
+  return out;
 }
 
 // ---------------- 单节点调试 ----------------

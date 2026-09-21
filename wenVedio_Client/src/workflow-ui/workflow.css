@@ -362,6 +362,21 @@
 .wf-node.selected .branch-label { fill: var(--text); }
 .wf-node.disabled .branch-label { fill: var(--text-3); }
 
+/* 触发器：Webhook 地址 + 定时计划行 */
+.wf-trig-block { margin-bottom: 16px; }
+.wf-trig-block > b { display: block; font-size: 13px; color: var(--text); margin-bottom: 4px; }
+.wf-hook-line input { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2, var(--surface)); color: var(--text-2); font: 11px var(--mono); }
+.wf-sch-list { display: grid; gap: 8px; margin: 8px 0; }
+.wf-sch-row {
+  display: grid; grid-template-columns: 74px 78px 34px 96px auto auto minmax(0, 1fr); gap: 8px; align-items: center;
+  padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface);
+}
+.wf-sch-row input[type="number"], .wf-sch-row input[type="time"], .wf-sch-row select { padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r-xs); background: var(--surface); color: var(--text); font-size: 12px; }
+.wf-sch-row input[data-sch-inputs] { grid-column: 1 / -1; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--r-xs); background: var(--surface); color: var(--text-2); font: 11px var(--mono); }
+.wf-sch-row .wf-sch-enable { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-2); }
+.wf-sch-row .wf-sch-unit { font-size: 12px; color: var(--text-3); }
+.wf-sch-meta { grid-column: 1 / -1; color: var(--text-3); font-size: 11px; }
+
 /* 历史版本：版本行 + 对比结果 */
 .wf-vers { display: grid; gap: 8px; }
 .wf-ver-row {

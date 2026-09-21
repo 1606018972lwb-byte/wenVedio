@@ -9,6 +9,7 @@ const { create: createStore } = require('./store');
 const { create: createEngine } = require('./engine');
 const { create: createApi } = require('./api');
 const { create: createPython } = require('./python');
+const { create: createTriggers } = require('./triggers');
 const { describeNodes } = require('./nodes');
 
 const DEFAULT_CHAT_URL = 'https://api.deepseek.com/chat/completions';
@@ -142,6 +143,8 @@ function create(deps) {
 
   const store = createStore({ configDir, writeLog });
   const engine = createEngine({ store, bridge, writeLog });
+  // 触发器（Webhook + 定时）：让工作流能自己跑起来
+  const triggers = createTriggers({ store, engine, writeLog });
 
   // 循环节点用：列出可选子工作流、按 id 把它跑到结束
   bridge.listWorkflows = () => store.listWorkflows().map((item) => ({
@@ -156,16 +159,18 @@ function create(deps) {
     store, engine, host: bridge, writeLog, sendJson, readBody,
     nodeMeta: describeNodes(),
     python,
+    triggers,
   });
 
   return {
     handleApi: (req, res, url) => api.handle(req, res, url),
-    start: () => engine.start(),
-    stop: () => engine.stop(),
+    start: () => { engine.start(); triggers.start(); },
+    stop: () => { engine.stop(); triggers.stop(); },
     store,
     engine,
     bridge,
     python,
+    triggers,
   };
 }
 

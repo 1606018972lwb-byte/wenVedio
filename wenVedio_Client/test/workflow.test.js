@@ -447,6 +447,101 @@ async function testSubWorkflowNode() {
     !(await api('GET', `/api/workflow-runs?limit=100`)).data.runs.some((item) => item.parent_run_id === selfRun?.id));
 }
 
+// 触发器：Webhook 调起 + 定时计划（含到点真的会触发一次）
+async function testTriggers() {
+  console.log('\n[触发器] Webhook 令牌 / 必填校验 / 重置失效 / 定时到点触发');
+  const wf = await createWorkflow({
+    name: '测试·触发器',
+    nodes: [
+      startNode([{ key: 'n', label: '数字', type: 'number' }]),
+      codeNode('code_double', 'return { doubled: Number(input.n) * 2 };'),
+      { id: 'end_1', type: 'end', title: '结束', x: 600, y: 0,
+        params: { outputs: [{ key: '结果', value: '{{code_double.output.doubled}}' }] } },
+    ],
+    edges: [
+      { id: 'e1', from: 'start_1', to: 'code_double' },
+      { id: 'e2', from: 'code_double', to: 'end_1' },
+    ],
+  });
+
+  const info = await api('GET', `/api/workflows/${wf.id}/triggers`);
+  const url = info.data.webhook?.url || '';
+  const token = info.data.webhook?.token || '';
+  check('触发器接口给出 Webhook 地址与令牌', url.includes(`/api/workflows/${wf.id}/hook/`) && token.length === 32, url);
+  check('令牌是随机的十六进制', /^[0-9a-f]{32}$/.test(token), token);
+
+  const hookPath = `/api/workflows/${wf.id}/hook/${token}`;
+  const missing = await api('POST', hookPath, {});
+  check('Webhook 缺必填输入被拒', missing.status === 400 && /缺少必填输入/.test(missing.data.msg || ''), JSON.stringify(missing.data));
+
+  const fired = await api('POST', hookPath, { n: 21 });
+  check('Webhook 触发成功并返回 run_id', fired.data.ok === true && String(fired.data.run_id).startsWith('run_'), JSON.stringify(fired.data));
+  const hookRun = await waitRun(fired.data.run_id);
+  check('Webhook 跑出来的结果正确（21 × 2）', hookRun?.outputs?.结果 === 42, JSON.stringify(hookRun?.outputs));
+  check('这条运行的来源标成 hook', hookRun?.mode === 'hook', hookRun?.mode);
+
+  const badToken = await api('POST', `/api/workflows/${wf.id}/hook/${'0'.repeat(32)}`, { n: 1 });
+  check('令牌不对返回 404', badToken.status === 404, JSON.stringify(badToken.data));
+
+  const listed = await api('GET', `/api/workflows/${wf.id}/triggers`);
+  check('触发次数与最近触发时间被记录',
+    listed.data.webhook?.runs === 1 && Boolean(listed.data.webhook?.last_at),
+    JSON.stringify(listed.data.webhook));
+
+  // 重置令牌：旧地址立刻失效，新地址可用
+  const reset = await api('POST', `/api/workflows/${wf.id}/hook-token`);
+  const newToken = reset.data.webhook?.token || '';
+  check('重置后令牌换了', newToken !== token && /^[0-9a-f]{32}$/.test(newToken), newToken);
+  const oldAgain = await api('POST', hookPath, { n: 1 });
+  check('旧地址重置后失效', oldAgain.status === 404, JSON.stringify(oldAgain.data));
+  const newOk = await api('POST', `/api/workflows/${wf.id}/hook/${newToken}`, { n: 3 });
+  check('新地址可用', newOk.data.ok === true, JSON.stringify(newOk.data));
+  await waitRun(newOk.data.run_id);
+
+  // 定时计划：先验证「到点」的判定，再造一条已经过期的计划，等调度器自己跑
+  const { nextFireAt, normalizeSchedules } = require(path.join(ROOT, 'src', 'workflow', 'triggers.js'));
+  const now = Date.now();
+  const interval = normalizeSchedules([{ mode: 'interval', every_minutes: 1, last_fired_at: new Date(now - 5 * 60000).toISOString() }])[0];
+  check('间隔计划：上次触发 5 分钟前 + 每 1 分钟 → 已经到点', nextFireAt(interval, now) <= now, new Date(nextFireAt(interval, now)).toISOString());
+  const future = normalizeSchedules([{ mode: 'interval', every_minutes: 30, last_fired_at: new Date(now).toISOString() }])[0];
+  check('间隔计划：刚跑过 + 每 30 分钟 → 还没到点', nextFireAt(future, now) > now + 29 * 60000, new Date(nextFireAt(future, now)).toISOString());
+  const daily = normalizeSchedules([{ mode: 'daily', at: '23:59' }])[0];
+  const dailyNext = nextFireAt(daily, now);
+  check('每天计划：下一次是未来 24 小时内的 23:59（北京时间）', dailyNext > now && dailyNext - now <= 86400000, new Date(dailyNext).toISOString());
+  check('计划参数被收口（非法模式 → interval、0/超大分钟数 → 默认或上限、超过 8 条被截断）',
+    normalizeSchedules([{ mode: 'weird', every_minutes: 0 }])[0].mode === 'interval'
+    && normalizeSchedules([{ mode: 'interval', every_minutes: 0 }])[0].every_minutes === 60
+    && normalizeSchedules([{ mode: 'interval', every_minutes: 99999 }])[0].every_minutes === 10080
+    && normalizeSchedules(new Array(20).fill({ mode: 'interval', every_minutes: 5 })).length === 8);
+
+  const saveSchedules = await api('POST', `/api/workflows/${wf.id}/triggers`, {
+    schedules: [
+      { mode: 'interval', every_minutes: 1, last_fired_at: new Date(Date.now() - 10 * 60000).toISOString(), inputs: { n: 5 } },
+      { mode: 'daily', at: '23:59', enabled: false, inputs: { n: 7 } },
+    ],
+  });
+  check('计划保存后返回下一次时间', saveSchedules.data.schedules?.length === 2 && Boolean(saveSchedules.data.schedules[0].next_at),
+    JSON.stringify(saveSchedules.data.schedules));
+  check('停用的计划没有下一次时间', saveSchedules.data.schedules[1].next_at === null);
+
+  // 调度器每 20 秒扫一次：等它把那条已过期的计划跑起来
+  let scheduled = null;
+  const deadline = Date.now() + 32000;
+  while (Date.now() < deadline && !scheduled) {
+    const runs = await api('GET', `/api/workflow-runs?workflow_id=${wf.id}&limit=20`);
+    scheduled = (runs.data.runs || []).find((run) => run.mode === 'schedule');
+    if (!scheduled) await sleep(1000);
+  }
+  check('到点的计划被调度器真的触发了（mode=schedule）', Boolean(scheduled), scheduled ? scheduled.id : '32 秒内没有触发');
+  if (scheduled) {
+    const scheduledRun = await waitRun(scheduled.id, 30000);
+    check('定时触发的输入来自计划里预写的 inputs（5 × 2）', scheduledRun?.outputs?.结果 === 10, JSON.stringify(scheduledRun?.outputs));
+    const after = await api('GET', `/api/workflows/${wf.id}/triggers`);
+    const first = after.data.schedules?.[0] || {};
+    check('计划被记为已触发并给出下一次时间', Boolean(first.last_fired_at) && Boolean(first.next_at), JSON.stringify(first));
+  }
+}
+
 async function testPersistence() {
   console.log('\n[持久化] 坏记录不得堵死后续落盘');
   const { create } = require(path.join(ROOT, 'src', 'workflow', 'store.js'));
@@ -522,6 +617,7 @@ async function waitHealthy(timeoutMs = 20000) {
     await testVersions();
     await testParallelBranches();
     await testSubWorkflowNode();
+    await testTriggers();
     await testPersistence();
     console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
     if (fail) console.log(`失败用例：${failures.join('、')}`);

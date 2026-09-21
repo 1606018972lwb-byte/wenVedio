@@ -222,10 +222,26 @@ function create({ configDir, writeLog }) {
       versions: existing?.versions || [],
       run_count: existing?.run_count || 0,
       last_run_at: existing?.last_run_at || null,
+      // 触发器状态由 triggers.js 维护：保存节点图时不能被覆盖掉
+      hook_token: existing?.hook_token || '',
+      hook_runs: existing?.hook_runs || 0,
+      hook_last_at: existing?.hook_last_at || null,
+      triggers: Array.isArray(existing?.triggers) ? existing.triggers : [],
       created_at: existing?.created_at || now,
       updated_at: now,
     };
     workflows.set(id, record);
+    saveWorkflows();
+    return record;
+  }
+
+  // 只打补丁式改几个字段（触发器的令牌 / 计划 / 上次触发时间用）：
+  // 走 saveWorkflow 会把界面正在编辑的节点图整份覆盖掉
+  function patchWorkflow(id, patch) {
+    const record = workflows.get(String(id));
+    if (!record) return null;
+    Object.assign(record, patch && typeof patch === 'object' ? patch : {});
+    workflows.set(record.id, record);
     saveWorkflows();
     return record;
   }
@@ -410,7 +426,7 @@ function create({ configDir, writeLog }) {
 
   return {
     load,
-    listWorkflows, getWorkflow, saveWorkflow, deleteWorkflow,
+    listWorkflows, getWorkflow, saveWorkflow, patchWorkflow, deleteWorkflow,
     publishWorkflow, listVersions, getVersion, restoreVersion, duplicateWorkflow, touchWorkflowRun,
     saveRun, pruneRuns, listRuns, getRun, allRuns, clearFinishedRuns,
   };

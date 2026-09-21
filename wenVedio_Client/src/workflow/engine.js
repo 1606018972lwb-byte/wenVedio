@@ -597,7 +597,7 @@ function create({ store, bridge, writeLog }) {
     }
   }
 
-  return { start, stop, startRun, kick, cancelRun, pauseRun, resumeRun, resumeOnLoad, testNode, runToCompletion, isAdvancing: (id) => advancing.has(id) };
+  return { start, stop, startRun, kick, cancelRun, pauseRun, resumeRun, resumeOnLoad, testNode, runToCompletion, isAdvancing: (id) => advancing.has(id), hasActiveRun: (workflowId) => [...store.allRuns()].some((run) => run.workflow_id === workflowId && !RUN_TERMINAL.has(run.status)) };
 }
 
 module.exports = { create };
