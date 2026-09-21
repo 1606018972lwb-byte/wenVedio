@@ -6,6 +6,9 @@
 const vm = require('vm');
 const { resolveParam } = require('./vars');
 
+// 子工作流最多嵌套几层：互相调用时靠它中止，而不是无限递归把服务打爆
+const MAX_SUB_DEPTH = 5;
+
 const NODE_DEFS = {
   // ---------------- 基础 ----------------
   start: {
@@ -193,7 +196,11 @@ const NODE_DEFS = {
           if (ctx.isCancelled && ctx.isCancelled()) throw new Error('运行已被取消');
           const inputs = { [itemKey]: list[index], index, total: list.length };
           try {
-            const sub = await ctx.bridge.runWorkflow(workflowId, inputs, { timeoutMs, parentRunId: ctx.run.id });
+            const sub = await ctx.bridge.runWorkflow(workflowId, inputs, {
+              timeoutMs,
+              parentRunId: ctx.run.id,
+              depth: Number(ctx.run.depth || 0) + 1,
+            });
             results[index] = sub.outputs;
           } catch (err) {
             results[index] = null;
@@ -212,6 +219,56 @@ const NODE_DEFS = {
         throw new Error(`${failed.length} 项失败，已按「遇到失败就中止」停止`);
       }
       return { results, count: results.filter((item) => item !== null).length, failed, total: list.length };
+    },
+  },
+
+  subworkflow: {
+    label: '子工作流', icon: '⧉', group: '逻辑', color: 'violet',
+    description: '把另一个工作流当成一个节点执行：输入映射进去、返回值接到下游',
+    inputs: ['main'],
+    outputs: [
+      { key: 'output', label: '子工作流返回', type: 'object' },
+      { key: 'run_id', label: '子运行 ID', type: 'string' },
+      { key: 'duration_ms', label: '耗时(毫秒)', type: 'number' },
+    ],
+    params: [
+      { key: 'workflow_id', label: '要执行的工作流', type: 'workflow', required: true,
+        help: '被调用的工作流要先把它的「开始」节点里声明好要接的输入项' },
+      { key: 'input_fields', label: '输入映射', type: 'pairs',
+        help: '左边写子工作流「开始」节点里的字段名，右边写本工作流里的值；留空则把上游输出整体传进去' },
+      { key: 'timeout_ms', label: '超时(毫秒)', type: 'number', min: 1000, max: 3600000, default: 600000 },
+    ],
+    async run(ctx) {
+      const workflowId = String(ctx.params.workflow_id || '').trim();
+      if (!workflowId) throw new Error('子工作流节点需要先选一个要执行的工作流');
+      if (workflowId === ctx.run.workflow_id) throw new Error('子工作流不能是自己（会无限递归）');
+      if (Number(ctx.run.depth || 0) >= MAX_SUB_DEPTH) {
+        throw new Error(`子工作流嵌套超过 ${MAX_SUB_DEPTH} 层，已中止（多半是两个工作流在互相调用）`);
+      }
+      const rows = Array.isArray(ctx.params.input_fields) ? ctx.params.input_fields : [];
+      const inputs = {};
+      if (rows.length) {
+        for (const row of rows) {
+          const key = String(row?.key || '').trim();
+          if (key) inputs[key] = resolveParam(row?.value, ctx.scope);
+        }
+      } else if (ctx.input && typeof ctx.input === 'object' && !Array.isArray(ctx.input)) {
+        // 没写映射就把上游输出整体传进去（子工作流的开始节点按同名接）
+        Object.assign(inputs, ctx.input);
+      }
+      const timeoutMs = Math.max(1000, Math.min(3600000, Number(ctx.params.timeout_ms) || 600000));
+      ctx.note?.(`执行子工作流…`);
+      const sub = await ctx.bridge.runWorkflow(workflowId, inputs, {
+        timeoutMs,
+        parentRunId: ctx.run.id,
+        depth: Number(ctx.run.depth || 0) + 1,
+      });
+      return {
+        output: sub.outputs,
+        run_id: sub.id,
+        duration_ms: sub.duration_ms,
+        total_tokens: sub.total_tokens || 0,
+      };
     },
   },
 

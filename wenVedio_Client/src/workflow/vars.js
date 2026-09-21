@@ -14,10 +14,14 @@ function getPath(root, path) {
   }, root);
 }
 
-const VAR_RE = /\{\{\s*([A-Za-z0-9_$.[\]-]+)\s*\}\}/g;
+// 路径里允许中文等非 ASCII 字符：用户很自然会写 {{start_1.产品图}}，
+// 而老的正则只认 [A-Za-z0-9_$.[\]-]，中文变量会**整个不匹配**——
+// 插值直接跳过、原样把 {{...}} 留在参数里，看起来像「变量没生效」。
+const VAR_PATH = '[^\\s{}]+';
+const VAR_RE = new RegExp('\\{\\{\\s*(' + VAR_PATH + ')\\s*\\}\\}', 'g');
 // 整个字符串只有一个变量时按「取值」处理，保留原始类型；
 // 夹在其它文字里才按「插值」处理，转成字符串。变量选择器统一插入 {{路径}} 即可。
-const EXACT_RE = /^\s*\{\{\s*([A-Za-z0-9_$.[\]-]+)\s*\}\}\s*$/;
+const EXACT_RE = new RegExp('^\\s*\\{\\{\\s*(' + VAR_PATH + ')\\s*\\}\\}\\s*$');
 
 // 找不到的变量保留 {{原文}}，让人一眼看出哪里没接上
 function interpolate(text, scope) {

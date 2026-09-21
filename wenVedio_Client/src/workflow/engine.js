@@ -556,6 +556,7 @@ function create({ store, bridge, writeLog }) {
       clearPending: () => {},
       log: (message) => writeLog('info', `[单节点调试/${node.id}] ${message}`),
       progress: () => {},
+      note: () => {},
       isCancelled: () => false,
       bridge,
     };
@@ -563,10 +564,13 @@ function create({ store, bridge, writeLog }) {
     return { output: output === undefined ? null : output, duration_ms: Date.now() - started };
   }
 
-  // 把一个工作流跑到结束并返回运行记录：循环节点用它重复执行子工作流
-  async function runToCompletion(workflow, inputs, { timeoutMs = 600000, parentRunId = '' } = {}) {
+  // 把一个工作流跑到结束并返回运行记录：循环 / 子工作流节点用它重复执行别的流程。
+  // depth 记在子运行上，节点据此拦住「互相调用」的死循环。
+  async function runToCompletion(workflow, inputs, { timeoutMs = 600000, parentRunId = '', depth = 0 } = {}) {
     const run = startRun(workflow, inputs, 'sub');
-    if (parentRunId) { run.parent_run_id = parentRunId; store.saveRun(run); }
+    run.depth = Number(depth) || 0;
+    if (parentRunId) run.parent_run_id = parentRunId;
+    store.saveRun(run);
     const deadline = Date.now() + Math.max(1000, timeoutMs);
     for (;;) {
       const current = store.getRun(run.id) || run;

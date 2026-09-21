@@ -372,6 +372,81 @@ async function testParallelBranches() {
   }
 }
 
+// 子工作流节点：把另一个工作流当成一个节点跑，输入映射进去、返回值接出来
+async function testSubWorkflowNode() {
+  console.log('\n[子工作流节点] 输入映射 / 返回接出 / 自己不能调自己');
+  const child = await createWorkflow({
+    name: '测试·子工作流（子）',
+    nodes: [
+      startNode([{ key: 'x', label: '数字', type: 'number' }, { key: 'tag', label: '标签', type: 'text' }]),
+      codeNode('code_double', 'return { doubled: Number(input.x) * 2, tag: String(input.tag || "") };'),
+      { id: 'end_1', type: 'end', title: '结束', x: 600, y: 0,
+        params: { outputs: [{ key: '结果', value: '{{code_double.output.doubled}}' }, { key: '标签', value: '{{code_double.output.tag}}' }] } },
+    ],
+    edges: [
+      { id: 'e1', from: 'start_1', to: 'code_double' },
+      { id: 'e2', from: 'code_double', to: 'end_1' },
+    ],
+  });
+  const parent = await createWorkflow({
+    name: '测试·子工作流（父）',
+    nodes: [
+      startNode([{ key: 'n', label: '数字', type: 'number' }]),
+      {
+        id: 'sub_1', type: 'subworkflow', title: '调用子工作流', x: 240, y: 0,
+        params: {
+          workflow_id: child.id,
+          input_fields: [{ key: 'x', value: '{{start_1.n}}' }, { key: 'tag', value: '父级传入' }],
+          timeout_ms: 20000,
+        },
+      },
+      { id: 'end_1', type: 'end', title: '结束', x: 520, y: 0,
+        params: { outputs: [
+          { key: '子结果', value: '{{sub_1.output.结果}}' },
+          { key: '标签', value: '{{sub_1.output.标签}}' },
+          { key: '子运行', value: '{{sub_1.run_id}}' },
+        ] } },
+    ],
+    edges: [
+      { id: 'e1', from: 'start_1', to: 'sub_1' },
+      { id: 'e2', from: 'sub_1', to: 'end_1' },
+    ],
+  });
+  const run = await waitRun(await startRun(parent.id, { n: 4 }), 40000);
+  check('父运行成功', run?.status === 'success', run?.error);
+  check('子工作流返回值接到下游（4 × 2 = 8）', run?.outputs?.子结果 === 8, JSON.stringify(run?.outputs));
+  check('输入映射把父级的常量也传进去了', run?.outputs?.标签 === '父级传入', JSON.stringify(run?.outputs));
+  check('中文变量名能解析（{{子节点.中文键}} 不再是原样字符串）',
+    typeof run?.outputs?.子结果 === 'number' && typeof run?.outputs?.标签 === 'string',
+    JSON.stringify(run?.outputs));
+  check('子运行 ID 回传给了父运行',
+    typeof run?.nodes?.sub_1?.output?.run_id === 'string' && run.nodes.sub_1.output.run_id.startsWith('run_'),
+    JSON.stringify(run?.nodes?.sub_1?.output));
+  const subRun = await api('GET', `/api/workflow-runs/${run.nodes.sub_1.output.run_id}`);
+  check('子运行挂在父运行下（取消能一起传播）', subRun.data.run?.parent_run_id === run.id, subRun.data.run?.parent_run_id);
+  const listRuns = await api('GET', `/api/workflow-runs?workflow_id=${parent.id}&limit=50`);
+  check('子运行不进工作流的运行记录列表',
+    (listRuns.data.runs || []).every((item) => item.id !== run.nodes.sub_1.output.run_id),
+    JSON.stringify((listRuns.data.runs || []).map((item) => item.id).slice(0, 3)));
+
+  // 自己调自己：必须在跑之前就被拦住
+  const selfRef = await createWorkflow({
+    name: '测试·子工作流（自引用）',
+    nodes: [startNode([]), { id: 'sub_self', type: 'subworkflow', title: '调自己', x: 240, y: 0, params: { workflow_id: '__SELF__' } }],
+    edges: [{ id: 'e1', from: 'start_1', to: 'sub_self' }],
+  });
+  await api('POST', '/api/workflows', {
+    id: selfRef.id,
+    name: '测试·子工作流（自引用）',
+    nodes: [startNode([]), { id: 'sub_self', type: 'subworkflow', title: '调自己', x: 240, y: 0, params: { workflow_id: selfRef.id } }],
+    edges: [{ id: 'e1', from: 'start_1', to: 'sub_self' }],
+  });
+  const selfRun = await waitRun(await startRun(selfRef.id, {}), 30000);
+  check('自己调自己被拒绝', selfRun?.status === 'failed' && /不能是自己/.test(selfRun?.error || ''), `${selfRun?.status} ${selfRun?.error}`);
+  check('自引用失败时不会留下未结束的子运行',
+    !(await api('GET', `/api/workflow-runs?limit=100`)).data.runs.some((item) => item.parent_run_id === selfRun?.id));
+}
+
 async function testPersistence() {
   console.log('\n[持久化] 坏记录不得堵死后续落盘');
   const { create } = require(path.join(ROOT, 'src', 'workflow', 'store.js'));
@@ -446,6 +521,7 @@ async function waitHealthy(timeoutMs = 20000) {
     await testRunFromNode();
     await testVersions();
     await testParallelBranches();
+    await testSubWorkflowNode();
     await testPersistence();
     console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
     if (fail) console.log(`失败用例：${failures.join('、')}`);
