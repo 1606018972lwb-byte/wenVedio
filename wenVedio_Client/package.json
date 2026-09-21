@@ -47,10 +47,10 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "shortcutName": "wenVedio",
-      "artifactName": "${productName}-${version}-win-x64-setup.${ext}"
+      "artifactName": "wenVedio-win-x64-setup.${ext}"
     },
     "portable": {
-      "artifactName": "${productName}-${version}-win-x64-portable.${ext}"
+      "artifactName": "wenVedio-win-x64-portable.${ext}"
     },
     "mac": {
       "target": [

@@ -87,7 +87,12 @@ npm run dist:win    # Windows x64：NSIS 安装包 + 免安装 portable
 npm run dist:mac    # macOS：dmg + zip（x64 / arm64）
 ```
 
-产物输出到 `release/`。
+产物输出到 `release/`，**文件名固定、不带版本号**：
+
+```
+release\wenVedio-win-x64-setup.exe      # NSIS 安装包（每次打包覆盖）
+release\wenVedio-win-x64-portable.exe   # 免安装单文件（每次打包覆盖）
+```
 
 ## 版本号规则
 
@@ -96,7 +101,11 @@ npm run dist:mac    # macOS：dmg + zip（x64 / arm64）
 - 日期用**北京时间**、写真实数字（不补零）：`2026.9.21`，不是 `2026.09.21`
 - 同一天再交付一次：序号 +1（`2026.9.21-2`）；跨天回到 1（`2026.9.22-1`）
 - 序号只在**打包 / 交付**时递增：白天改代码不算，一天里反复改、最后只打一次包就是 `-1`
-- 三处必须一致：`package.json` 的 `version`、本 README 顶部标注、产物文件名
+- **两处必须一致**：`package.json` 的 `version` + 本 README 顶部的「当前版本」
+- **产物文件名固定、不带版本号**：`release\wenVedio-win-x64-setup.exe` /
+  `release\wenVedio-win-x64-portable.exe`。文件名固定是为了让下载链接、快捷方式、
+  脚本路径永远有效，不必每次发版改一遍；要确认某个 exe 是哪一版，
+  看同一目录里打包时的 `package.json`、或 exe 的修改时间
 - 这个格式是合法 semver（`主.次.修订-预发布`），npm 与 electron-builder 直接认
 - **所有自研程序都用这一套**（`wenVedio_Client`、`wenVedio_web`、后续插件与工具），
   各自独立计数；同一天一起交付的几个程序写同一个日期序号
@@ -105,12 +114,14 @@ npm run dist:mac    # macOS：dmg + zip（x64 / arm64）
 
 ```bash
 # 1) 改版本号：两个 package.json + README 顶部的「当前版本」
-# 2) 出包
+# 2) 出包（文件名固定，会覆盖上一次的产物）
 node node_modules/electron-builder/out/cli/cli.js --win --x64
-# 产物自动带版本号：
-#   release/wenVedio-2026.9.21-1-win-x64-setup.exe     （NSIS 安装包）
-#   release/wenVedio-2026.9.21-1-win-x64-portable.exe  （免安装单文件）
+#   release/wenVedio-win-x64-setup.exe     （NSIS 安装包）
+#   release/wenVedio-win-x64-portable.exe  （免安装单文件）
 ```
+
+（macOS / Linux 的产物名仍带版本号，没有固定文件名。）
+
 
 两个环境坑（都踩过）：
 - PowerShell 禁止运行脚本时 `npm run dist:win` 会报 ExecutionPolicy，
