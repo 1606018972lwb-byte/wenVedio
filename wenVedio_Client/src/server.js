@@ -77,6 +77,8 @@ const MODELS_FILE = path.join(CONFIG_DIR, 'models.json');
 const TOKENS_FILE = path.join(CONFIG_DIR, 'tokens.json');
 const PROMPTS_FILE = path.join(CONFIG_DIR, 'prompts.json');
 const IMAGES_DIR = path.join(DATA_DIR, 'images');
+// 预约任务的参考图落盘目录：任务记录里只留文件名，不再塞 base64 原文
+const REFS_DIR = path.join(DATA_DIR, 'refs');
 const store = new Map();
 const models = new Map();
 const tokens = new Map();
@@ -158,6 +160,54 @@ function saveStore() {
   const records = [...store.values()].map(persistedRecord);
   fs.writeFileSync(temporary, JSON.stringify({ version: 1, tasks: records }, null, 2));
   fs.renameSync(temporary, TASKS_FILE);
+}
+
+// 任务状态变化很频繁（前端按任务轮询、图片生成完成…），每次都全量重写 tasks.json
+// 既费 IO，也容易撞上索引器/杀软占用而抖动，所以状态更新走 250ms 合并写。
+// 新建、删除这类关键路径仍旧立即写（saveStore）。
+let storeSaveTimer = null;
+function saveStoreSoon() {
+  if (storeSaveTimer) return;
+  storeSaveTimer = setTimeout(() => { storeSaveTimer = null; saveStore(); }, 250);
+  if (storeSaveTimer.unref) storeSaveTimer.unref();
+}
+// 退出时补写最后一次改动。这里绝不能 clearTimeout：在 'exit' 阶段动定时器
+// 会撞上 libuv 的 handle 状态断言。
+process.once('exit', () => {
+  if (!storeSaveTimer) return;
+  try { saveStore(); } catch (_) { /* 退出阶段尽力而为 */ }
+});
+
+// 预约任务要把参考图留到真正提交，但 base64 原文会让 tasks.json 迅速膨胀。
+// 落成文件、记录里只留文件名，提交时再读回来（resolveRefBuffer 认识文件名）。
+function spillScheduledRefs(record) {
+  const refs = Array.isArray(record.reference_images) ? record.reference_images : [];
+  if (!refs.length) return;
+  try { fs.mkdirSync(REFS_DIR, { recursive: true }); } catch (_) { return; }
+  record.reference_images = refs.map((ref, index) => {
+    const value = String(ref || '');
+    const match = value.match(/^data:([^;]+);base64,(.+)$/s);
+    if (!match) return ref;
+    const ext = /jpeg|jpg/i.test(match[1]) ? 'jpg' : /webp/i.test(match[1]) ? 'webp' : 'png';
+    const name = `${record.local_id}-${index + 1}.${ext}`;
+    try {
+      fs.writeFileSync(path.join(REFS_DIR, name), Buffer.from(match[2], 'base64'));
+      return name;
+    } catch (err) {
+      writeLog('warn', `参考图落盘失败，仍按 base64 存在任务记录里：${err.message}`);
+      return ref;
+    }
+  });
+}
+
+// 预约任务提交完（或任务被删）之后，落盘的参考图就没用了
+function removeScheduledRefFiles(record) {
+  const refs = Array.isArray(record?.reference_images) ? record.reference_images : [];
+  for (const ref of refs) {
+    const value = String(ref || '');
+    if (!value || /^(data:|https?:)/i.test(value)) continue;
+    try { fs.unlinkSync(path.join(REFS_DIR, path.basename(value))); } catch (_) { /* 不在也无所谓 */ }
+  }
 }
 
 function saveModels() {
@@ -371,18 +421,33 @@ function loadModels() {
   else if (!Array.isArray(records)) writeLog('error', '模型配置无法解析，已保留原文件不覆盖（请检查 data/config/models.json）');
 }
 
-// 上次进程异常退出可能留下「提交中」且没有平台任务号的记录，启动时标记为失败，避免长期显示进行中
+// 上次进程异常退出会把「提交中 / 生成中」的记录留在原地。
+//   · 视频任务：有平台任务号就能续查，所以只把「提交中且没有任务号」的判失败，并给 2 分钟宽限
+//     （提交请求可能已经到达平台，只是响应没回来）；
+//   · 图片任务：走的是同步接口、没有可续查的任务号（README 里记的已知限制），
+//     重启后它永远等不到结果，必须直接判失败——否则界面上会一直挂着「进行中」。
 function recoverStuckTasks() {
-  const cutoff = Date.now() - 2 * 60 * 1000;
+  const now = Date.now();
+  const cutoff = now - 2 * 60 * 1000;
+  // 刚提交几秒内的不算：启动时的预约调度可能正好把它提交出去
+  const imageGrace = now - 5 * 1000;
   let changed = false;
   store.forEach((task) => {
-    if (task.status !== 'submitting' || task.provider_task_id) return;
+    if (task.provider_task_id) return;
+    const isImage = task.kind === 'image';
+    const stuck = isImage
+      ? (task.status === 'processing' || task.status === 'submitting')
+      : task.status === 'submitting';
+    if (!stuck) return;
     const at = new Date(task.submitted_at || task.created_at || 0).getTime();
-    if (!Number.isNaN(at) && at > cutoff) return;
+    if (!Number.isNaN(at) && at > (isImage ? imageGrace : cutoff)) return;
     task.status = 'failed';
-    task.error = task.error || '提交中断（提交过程中客户端或服务退出）';
+    task.error = task.error || (isImage
+      ? '生成过程中客户端退出：图片接口没有可续查的任务号，请重新提交'
+      : '提交中断（提交过程中客户端或服务退出）');
+    if (!task.finished_at) task.finished_at = new Date().toISOString();
     changed = true;
-    writeLog('warn', `任务 ${task.local_id} 曾在提交中被中断，已标记为失败`);
+    writeLog('warn', `任务 ${task.local_id}（${isImage ? '图片' : '视频'}）上次没跑完，已标记为失败`);
   });
   if (changed) saveStore();
 }
@@ -543,6 +608,8 @@ async function performSubmission(record) {
   }
   delete record.scheduled_at;
   saveStore();
+  // 预约时落盘的参考图已经用完，删掉不留垃圾
+  removeScheduledRefFiles(record);
   return record;
 }
 
@@ -692,7 +759,14 @@ async function resolveRefBuffer(ref) {
     if (!res.ok) throw new Error(`下载参考图失败 HTTP ${res.status}`);
     return { type: res.headers.get('content-type') || 'image/png', data: Buffer.from(await res.arrayBuffer()) };
   }
-  throw new Error('参考图仅支持图片链接或 base64 图片');
+  // 预约任务落盘的参考图：只存文件名，提交时从 data/refs 读回来（basename 防止越出目录）
+  const local = path.join(REFS_DIR, path.basename(value));
+  if (fs.existsSync(local)) {
+    const ext = path.extname(local).toLowerCase();
+    const type = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : 'image/png';
+    return { type, data: fs.readFileSync(local) };
+  }
+  throw new Error('参考图仅支持图片链接、base64 图片，或本机已落盘的参考图文件');
 }
 
 // 零依赖 multipart/form-data 构建
@@ -817,15 +891,18 @@ async function runImageGeneration(record) {
     record.error = err.message;
     writeLog('error', `图片任务 ${record.local_id} 失败: ${err.message}`);
   }
-  saveStore();
+  saveStoreSoon();
 }
 
-// 删除图片任务时同时清理落盘的图片文件。
+// 删除任务时同时清理落盘的产物：图片文件、以及预约时落盘的参考图
 function deleteTaskFiles(record) {
-  if (!record || record.kind !== 'image' || !Array.isArray(record.image_files)) return;
-  for (const name of record.image_files) {
-    try { fs.unlinkSync(path.join(IMAGES_DIR, path.basename(name))); } catch (_) { /* 文件可能已不存在 */ }
+  if (!record) return;
+  if (record.kind === 'image' && Array.isArray(record.image_files)) {
+    for (const name of record.image_files) {
+      try { fs.unlinkSync(path.join(IMAGES_DIR, path.basename(name))); } catch (_) { /* 文件可能已不存在 */ }
+    }
   }
+  removeScheduledRefFiles(record);
 }
 
 // ---------------- JSON / 静态资源 工具 ----------------
@@ -1763,6 +1840,8 @@ async function handleApi(req, res, url) {
         saveStore();
         runImageGeneration(record);
       } else if (shouldSchedule) {
+        // 预约任务要留参考图到明天，落盘成文件，别把 base64 原文塞进任务记录
+        spillScheduledRefs(record);
         saveStore();
       } else {
         await performSubmission(record);
@@ -1890,7 +1969,7 @@ async function handleApi(req, res, url) {
       && Date.now() - createdAt >= TASK_EXPIRE_MS) {
       rec.status = 'expired';
       rec.error = '距开始生成已超过 24 小时仍未完成，已判定为过期';
-      saveStore();
+      saveStoreSoon();
       return sendJson(res, 200, { ok: true, task: rec });
     }
 
@@ -1909,10 +1988,10 @@ async function handleApi(req, res, url) {
         if (['failed', 'timeout'].includes(rec.status) && platformMessage) rec.error = platformMessage;
         if (rec.status === 'completed' && !rec.error) rec.error = null;
         rec.query_error = null;
-        if (before !== JSON.stringify([rec.status, rec.video_url, rec.progress, rec.error, rec.query_error])) saveStore();
+        if (before !== JSON.stringify([rec.status, rec.video_url, rec.progress, rec.error, rec.query_error])) saveStoreSoon();
       } catch (err) {
         rec.query_error = err.message;
-        saveStore();
+        saveStoreSoon();
       }
     }
     return sendJson(res, 200, { ok: true, task: rec });
