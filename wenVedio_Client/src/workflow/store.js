@@ -227,6 +227,8 @@ function create({ configDir, writeLog }) {
       versions: existing?.versions || [],
       run_count: existing?.run_count || 0,
       last_run_at: existing?.last_run_at || null,
+      // 工作区（分组用）：空串表示「未分类」
+      workspace: str(payload.workspace, 40).trim() || (existing?.workspace || ''),
       // 触发器状态由 triggers.js 维护：保存节点图时不能被覆盖掉
       hook_token: existing?.hook_token || '',
       hook_runs: existing?.hook_runs || 0,
@@ -238,6 +240,13 @@ function create({ configDir, writeLog }) {
     workflows.set(id, record);
     saveWorkflows();
     return record;
+  }
+
+  // 只改工作区（归类）走打补丁：不走 saveWorkflow，避免把界面正在编辑的节点图冲掉
+  function setWorkspace(id, workspace) {
+    const record = workflows.get(String(id));
+    if (!record) return null;
+    return patchWorkflow(id, { workspace: str(workspace, 40).trim() });
   }
 
   // 只打补丁式改几个字段（触发器的令牌 / 计划 / 上次触发时间用）：
@@ -491,7 +500,7 @@ function create({ configDir, writeLog }) {
 
   return {
     load,
-    listWorkflows, getWorkflow, saveWorkflow, patchWorkflow, deleteWorkflow,
+    listWorkflows, getWorkflow, saveWorkflow, patchWorkflow, setWorkspace, deleteWorkflow,
     publishWorkflow, listVersions, getVersion, restoreVersion, duplicateWorkflow, touchWorkflowRun,
     saveRun, pruneRuns, listRuns, getRun, allRuns, clearFinishedRuns,
     listTemplates, getTemplate, saveTemplate, deleteTemplate,

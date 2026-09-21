@@ -1,13 +1,73 @@
 {
-  "name": "wenvedio",
-  "version": "2026.9.21-1",
-  "description": "视频生成工作台：前端工作台 + Node 服务端代理（MiniMax H3 / autodl）",
-  "main": "src/server.js",
+  "name": "wenvedio-client",
+  "productName": "wenVedio",
+  "version": "2026.9.21-2",
+  "description": "wenVedio 视频生成工作台桌面客户端（Electron，可打包 macOS 与 Windows x64）",
+  "author": "WenMumu <1606018972lwb@gmail.com>",
+  "license": "MIT",
+  "main": "desktop/main.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "desktop": "electron .",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win --x64",
+    "dist:mac": "electron-builder --mac",
+    "dist:all": "electron-builder --win --x64 --mac"
   },
   "engines": {
     "node": ">=18"
   },
-  "license": "MIT"
+  "devDependencies": {
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.wenvedio.desktop",
+    "productName": "wenVedio",
+    "asar": false,
+    "files": [
+      "desktop/**/*",
+      "src/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "wenVedio",
+      "artifactName": "wenVedio-win-x64-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "wenVedio-win-x64-portable.${ext}"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "${productName} ${version}"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Utility",
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
+    }
+  }
 }

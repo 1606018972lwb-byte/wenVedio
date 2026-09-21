@@ -1,7 +1,7 @@
 {
   "name": "wenvedio-client",
   "productName": "wenVedio",
-  "version": "2026.9.21-1",
+  "version": "2026.9.21-2",
   "description": "wenVedio 视频生成工作台桌面客户端（Electron，可打包 macOS 与 Windows x64）",
   "author": "WenMumu <1606018972lwb@gmail.com>",
   "license": "MIT",

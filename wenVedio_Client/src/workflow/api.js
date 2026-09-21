@@ -153,6 +153,7 @@ function create({ store, engine, host, python, triggers, writeLog, sendJson, rea
       const record = store.saveWorkflow({
         name: `${String(source.name || '导入的工作流').slice(0, 50)}（导入）`,
         description: String(source.description || '').slice(0, 200),
+        workspace: String(source.workspace || '').slice(0, 40),
         nodes: source.nodes,
         edges: source.edges,
         variables: source.variables,
@@ -302,6 +303,15 @@ function create({ store, engine, host, python, triggers, writeLog, sendJson, rea
       return true;
     }
 
+    // 归类到工作区（列表页按工作区整理用）
+    if (action === 'workspace' && method === 'POST') {
+      const payload = await readJson(req);
+      const updated = store.setWorkspace(id, payload.workspace);
+      if (!updated) { sendJson(res, 404, { ok: false, msg: '工作流不存在' }); return true; }
+      sendJson(res, 200, { ok: true, workflow: updated });
+      return true;
+    }
+
     if (action === 'export' && method === 'GET') {
       const workflow = store.getWorkflow(id);
       if (!workflow) { sendJson(res, 404, { ok: false, msg: '工作流不存在' }); return true; }
@@ -312,6 +322,7 @@ function create({ store, engine, host, python, triggers, writeLog, sendJson, rea
         workflow: {
           name: workflow.name,
           description: workflow.description || '',
+          workspace: workflow.workspace || '',
           nodes: workflow.nodes,
           edges: workflow.edges,
           variables: workflow.variables || [],

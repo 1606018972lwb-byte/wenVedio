@@ -97,15 +97,61 @@ const TEMPLATES = [
 ];
 
 // ---------------- 列表页 ----------------
-function renderList() {
-  const host = $('#wfListMode');
-  const keyword = ($('#wfSearch')?.value || '').trim().toLowerCase();
-  const onlyFailed = host.dataset.onlyFailed === '1';
-  const failedCount = state.workflows.filter((wf) => wf.last_run_status === 'failed').length;
-  const list = state.workflows
-    .filter((wf) => !onlyFailed || wf.last_run_status === 'failed')
-    .filter((wf) => !keyword || `${wf.name} ${wf.description || ''}`.toLowerCase().includes(keyword));
-  const cards = list.map((wf) => `
+// 列表偏好（显示方式 / 排序 / 分组）存本地：切来切去不用每次重设
+const LIST_PREFS_KEY = 'wenvedio-wf-list-prefs';
+const SORT_OPTIONS = [['updated_at', '修改时间'], ['created_at', '创建时间'], ['name', '名称']];
+
+function readListPrefs() {
+  const fallback = { view: 'cards', sortKey: 'updated_at', sortDir: 'desc', group: true, templates: true };
+  try {
+    const saved = JSON.parse(localStorage.getItem(LIST_PREFS_KEY) || 'null');
+    if (!saved || typeof saved !== 'object') return fallback;
+    return {
+      view: saved.view === 'list' ? 'list' : 'cards',
+      sortKey: SORT_OPTIONS.some(([key]) => key === saved.sortKey) ? saved.sortKey : 'updated_at',
+      sortDir: saved.sortDir === 'asc' ? 'asc' : 'desc',
+      group: saved.group !== false,
+      templates: saved.templates !== false,
+    };
+  } catch (_) { return fallback; }
+}
+
+function writeListPrefs(prefs) {
+  try { localStorage.setItem(LIST_PREFS_KEY, JSON.stringify(prefs)); } catch (_) { /* 存不下不影响使用 */ }
+}
+
+function sortWorkflows(list, prefs) {
+  const dir = prefs.sortDir === 'asc' ? 1 : -1;
+  return [...list].sort((a, b) => {
+    if (prefs.sortKey === 'name') return dir * String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN');
+    const left = new Date(a[prefs.sortKey] || 0).getTime() || 0;
+    const right = new Date(b[prefs.sortKey] || 0).getTime() || 0;
+    return dir * (left - right);
+  });
+}
+
+// 工作区：空串算「未分类」
+const workspaceOf = (wf) => String(wf.workspace || '').trim();
+function workspaceNames(list) {
+  return [...new Set(list.map(workspaceOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+}
+
+const shortTime = (value) => (value ? new Date(value).toLocaleString('zh-CN', { hour12: false }).slice(5, 16) : '—');
+const statusChip = (wf) => (wf.last_run_status
+  ? `<span class="wf-state ${esc(wf.last_run_status)}">上次${wf.last_run_status === 'success' ? '成功' : wf.last_run_status === 'failed' ? '失败' : '已取消'}</span>`
+  : '<span class="wf-muted">未运行</span>');
+
+function workflowActions(wf) {
+  return `<button type="button" data-open="${esc(wf.id)}">打开</button>
+        <button type="button" data-run="${esc(wf.id)}">运行</button>
+        <button type="button" data-copy="${esc(wf.id)}">复制</button>
+        <button type="button" data-runs="${esc(wf.id)}">记录</button>
+        <button type="button" data-export="${esc(wf.id)}">导出</button>
+        <button type="button" class="danger" data-del="${esc(wf.id)}">删除</button>`;
+}
+
+function workflowCard(wf) {
+  return `
     <article class="wf-card" data-open="${esc(wf.id)}">
       <div class="wf-card-head">
         <span class="wf-card-title">${esc(wf.name)}</span>
@@ -113,21 +159,81 @@ function renderList() {
       </div>
       <p class="wf-card-desc">${esc(wf.description || '—')}</p>
       <div class="wf-card-meta">
+        <span class="wf-ws-chip">${esc(workspaceOf(wf) || '未分类')}</span>
         <span>${(wf.nodes || []).length} 个节点</span>
         <span>运行 ${wf.run_count || 0} 次</span>
-        ${wf.last_run_status ? `<span class="wf-state ${esc(wf.last_run_status)}">上次${wf.last_run_status === 'success' ? '成功' : wf.last_run_status === 'failed' ? '失败' : '已取消'}</span>` : ''}
-        ${wf.last_run_finished_at ? `<span>${new Date(wf.last_run_finished_at).toLocaleString('zh-CN', { hour12: false }).slice(5, 16)}</span>` : ''}
-        <span>${wf.updated_at ? new Date(wf.updated_at).toLocaleString('zh-CN', { hour12: false }).slice(5, 16) : ''}</span>
+        ${statusChip(wf)}
+        <span title="修改时间">改 ${shortTime(wf.updated_at)}</span>
       </div>
-      <div class="wf-card-actions">
-        <button type="button" data-open="${esc(wf.id)}">打开</button>
-        <button type="button" data-run="${esc(wf.id)}">运行</button>
-        <button type="button" data-copy="${esc(wf.id)}">复制</button>
-        <button type="button" data-runs="${esc(wf.id)}">记录</button>
-        <button type="button" data-export="${esc(wf.id)}">导出</button>
-        <button type="button" class="danger" data-del="${esc(wf.id)}">删除</button>
-      </div>
-    </article>`).join('');
+      <div class="wf-card-actions">${workflowActions(wf)}</div>
+    </article>`;
+}
+
+function workflowRow(wf, workspaces) {
+  const options = ['', ...workspaces]
+    .map((name) => `<option value="${esc(name)}"${workspaceOf(wf) === name ? ' selected' : ''}>${esc(name || '未分类')}</option>`)
+    .join('');
+  return `
+    <div class="wf-row" data-open="${esc(wf.id)}">
+      <span class="wf-row-main">
+        <b>${esc(wf.name)}</b>
+        <small>${esc(wf.description || '—')}</small>
+      </span>
+      <span class="wf-row-cell wf-hide-narrow">${(wf.nodes || []).length} 节点</span>
+      <span class="wf-row-cell wf-hide-narrow">${wf.published ? `已发布 V${wf.published_version}` : '草稿'}</span>
+      <span class="wf-row-cell wf-hide-narrow">运行 ${wf.run_count || 0} 次</span>
+      <span class="wf-row-cell">${statusChip(wf)}</span>
+      <span class="wf-row-cell mono" title="创建 ${esc(shortTime(wf.created_at))}">改 ${shortTime(wf.updated_at)}</span>
+      <select class="wf-row-ws" data-ws="${esc(wf.id)}" title="归到哪个工作区">${options}</select>
+      <span class="wf-row-actions">${workflowActions(wf)}</span>
+    </div>`;
+}
+
+function renderList() {
+  const host = $('#wfListMode');
+  const prefs = state.listPrefs || (state.listPrefs = readListPrefs());
+  const keyword = ($('#wfSearch')?.value || '').trim().toLowerCase();
+  const onlyFailed = host.dataset.onlyFailed === '1';
+  const failedCount = state.workflows.filter((wf) => wf.last_run_status === 'failed').length;
+  const allWorkspaces = workspaceNames(state.workflows);
+  // 选中的工作区没了（被改名/删掉）就回到「全部」
+  let wsFilter = state.workspaceFilter || '';
+  if (wsFilter && !allWorkspaces.includes(wsFilter)) { wsFilter = ''; state.workspaceFilter = ''; }
+  const filtered = state.workflows
+    .filter((wf) => !onlyFailed || wf.last_run_status === 'failed')
+    .filter((wf) => !wsFilter || workspaceOf(wf) === wsFilter)
+    .filter((wf) => !keyword || `${wf.name} ${wf.description || ''} ${workspaceOf(wf)}`.toLowerCase().includes(keyword));
+  const list = sortWorkflows(filtered, prefs);
+
+  const renderItems = (items) => (prefs.view === 'list'
+    ? `<div class="wf-rows">${items.map((wf) => workflowRow(wf, allWorkspaces)).join('')}</div>`
+    : `<div class="wf-cards">${items.map(workflowCard).join('')}</div>`);
+
+  let bodyHtml;
+  if (!list.length) {
+    bodyHtml = `<div class="wf-empty">${state.workflows.length ? '没有匹配的工作流' : '还没有工作流。点「新建工作流」从空白开始，或直接用上面的模板。'}</div>`;
+  } else if (prefs.group) {
+    // 按工作区分组：有名有姓的排前面，「未分类」放最后
+    const groups = new Map();
+    for (const wf of list) {
+      const name = workspaceOf(wf);
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(wf);
+    }
+    const order = [...groups.keys()].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b, 'zh-Hans-CN')));
+    bodyHtml = order.map((name) => `
+      <section class="wf-group">
+        <header class="wf-group-head"><b>${esc(name || '未分类')}</b><span class="wf-band-count">${groups.get(name).length}</span></header>
+        ${renderItems(groups.get(name))}
+      </section>`).join('');
+  } else {
+    bodyHtml = renderItems(list);
+  }
+
+  const sortLabel = (SORT_OPTIONS.find(([key]) => key === prefs.sortKey) || SORT_OPTIONS[0])[1];
+  const workspaceOptions = allWorkspaces
+    .map((name) => `<option value="${esc(name)}"${wsFilter === name ? ' selected' : ''}>${esc(name)}（${state.workflows.filter((wf) => workspaceOf(wf) === name).length}）</option>`)
+    .join('');
 
   const templateCards = TEMPLATES.map((tpl, index) => `
     <article class="wf-card" data-template="${index}">
@@ -151,12 +257,25 @@ function renderList() {
         <button type="button" data-template-del="${esc(tpl.id)}">删除</button>
       </div>
     </article>`).join('');
+  const templateCount = TEMPLATES.length + (state.templates || []).length;
 
   host.innerHTML = `
     <div class="wf-toolbar">
-      <input id="wfSearch" type="search" placeholder="搜索工作流…" value="${esc($('#wfSearch')?.value || '')}" />
+      <input id="wfSearch" type="search" placeholder="搜索工作流 / 工作区…" value="${esc($('#wfSearch')?.value || '')}" />
       <button class="outline-button${onlyFailed ? ' accent' : ''}" id="wfOnlyFailed" type="button"${failedCount ? '' : ' disabled'}>${onlyFailed ? '✓ ' : ''}只看上次失败的${failedCount ? ` (${failedCount})` : ''}</button>
       <span class="grow"></span>
+      <span class="wf-seg" role="group" aria-label="显示方式">
+        <button type="button" id="wfViewCards" class="${prefs.view === 'cards' ? 'on' : ''}" title="卡片视图">▦ 卡片</button>
+        <button type="button" id="wfViewList" class="${prefs.view === 'list' ? 'on' : ''}" title="列表视图">☰ 列表</button>
+      </span>
+      <label class="wf-tool-label">排序
+        <select id="wfSortKey">${SORT_OPTIONS.map(([key, label]) => `<option value="${key}"${prefs.sortKey === key ? ' selected' : ''}>${label}</option>`).join('')}</select>
+      </label>
+      <button type="button" class="outline-button" id="wfSortDir" title="切换升序 / 降序">${prefs.sortDir === 'asc' ? '↑ 升序' : '↓ 降序'}</button>
+      <button type="button" class="outline-button${prefs.group ? ' accent' : ''}" id="wfGroupToggle" title="按工作区分组显示">按工作区分组</button>
+      <label class="wf-tool-label">工作区
+        <select id="wfWsFilter"><option value="">全部（${state.workflows.length}）</option>${workspaceOptions}</select>
+      </label>
       <button class="outline-button" id="wfImport" type="button">导入</button>
       <input type="file" id="wfImportFile" accept=".json,application/json" hidden />
       <button class="outline-button" id="wfImportTemplate" type="button" title="导入别人分享的模板（和工作流同一种文件格式）">导入模板</button>
@@ -164,18 +283,57 @@ function renderList() {
       <button class="outline-button accent" id="wfPythonEnv" type="button">🐍 Python 环境</button>
       <button class="primary-button" id="wfNew" type="button"><span>＋</span> 新建工作流</button>
     </div>
-    <div class="wf-cards">${cards || ''}${templateCards}</div>
-    ${state.workflows.length ? '' : '<div class="wf-empty">还没有工作流。点「新建工作流」从空白开始，或直接用下面的模板。</div>'}`;
+    <section class="wf-band wf-band-templates">
+      <header class="wf-band-head">
+        <button type="button" class="wf-band-toggle" id="wfTplToggle" title="${prefs.templates ? '收起模板' : '展开模板'}">${prefs.templates ? '▾' : '▸'}</button>
+        <b>模板</b><span class="wf-band-count">${templateCount}</span>
+        <span class="wf-band-hint">固定在最上面：点「使用模板」按它建一个工作流</span>
+      </header>
+      ${prefs.templates ? `<div class="wf-cards wf-cards-templates">${templateCards}</div>` : ''}
+    </section>
+    <section class="wf-band wf-band-workflows">
+      <header class="wf-band-head">
+        <b>工作流</b><span class="wf-band-count">${list.length}</span>
+        <span class="wf-band-hint">按${sortLabel}${prefs.sortDir === 'asc' ? '升序' : '降序'}${prefs.group ? ' · 已按工作区分组' : ''}${wsFilter ? ` · 只看「${esc(wsFilter)}」` : ''}</span>
+      </header>
+      <div class="wf-band-body">${bodyHtml}</div>
+    </section>`;
 
   $('#wfSearch')?.addEventListener('input', () => renderList());
   $('#wfOnlyFailed')?.addEventListener('click', () => {
-    host.dataset.onlyFailed = host.dataset.onlyFailed === '1' ? '0' : '1';
+    host.dataset.onlyFailed = onlyFailed ? '0' : '1';
     renderList();
+  });
+  const setPrefs = (patch) => {
+    state.listPrefs = { ...prefs, ...patch };
+    writeListPrefs(state.listPrefs);
+    renderList();
+  };
+  $('#wfViewCards')?.addEventListener('click', () => setPrefs({ view: 'cards' }));
+  $('#wfViewList')?.addEventListener('click', () => setPrefs({ view: 'list' }));
+  $('#wfSortKey')?.addEventListener('change', (event) => setPrefs({ sortKey: event.target.value }));
+  $('#wfSortDir')?.addEventListener('click', () => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' }));
+  $('#wfGroupToggle')?.addEventListener('click', () => setPrefs({ group: !prefs.group }));
+  $('#wfTplToggle')?.addEventListener('click', () => setPrefs({ templates: !prefs.templates }));
+  $('#wfWsFilter')?.addEventListener('change', (event) => { state.workspaceFilter = event.target.value; renderList(); });
+  // 列表视图里直接归类：点下拉不该打开工作流
+  $$('[data-ws]', host).forEach((el) => {
+    el.addEventListener('click', (event) => event.stopPropagation());
+    el.addEventListener('change', async (event) => {
+      event.stopPropagation();
+      try {
+        await api(`/api/workflows/${encodeURIComponent(el.dataset.ws)}/workspace`, { method: 'POST', body: { workspace: event.target.value } });
+        await loadWorkflows();
+        renderList();
+        toast(event.target.value ? `已归到「${event.target.value}」` : '已移出工作区');
+      } catch (err) { toast(`归类失败：${err.message}`, 'error'); }
+    });
   });
   $('#wfNew')?.addEventListener('click', () => createWorkflow());
   $('#wfPythonEnv')?.addEventListener('click', () => openPythonPanel());
   $$('[data-open]', host).forEach((el) => el.addEventListener('click', (event) => {
-    if (event.target.closest('button[data-run],button[data-copy],button[data-runs],button[data-del]')) return;
+    // 卡片里的按钮、列表行里的下拉/按钮都不该触发「打开」
+    if (event.target.closest('button, select, input, a')) return;
     openWorkflow(el.dataset.open);
   }));
   $$('button[data-open]', host).forEach((el) => el.addEventListener('click', () => openWorkflow(el.dataset.open)));
@@ -466,6 +624,9 @@ function renderEditor() {
     <div class="wf-head">
       <button class="wf-back" id="wfBack" type="button" title="返回列表">‹</button>
       <input class="wf-name-input" id="wfName" value="${esc(wf.name)}" maxlength="60" />
+      <input class="wf-ws-input" id="wfWorkspace" list="wfWorkspaceOptions" maxlength="40" placeholder="工作区（可不填）"
+        title="归到哪个工作区：列表页可以按工作区整理、分组显示" value="${esc(wf.workspace || '')}" />
+      <datalist id="wfWorkspaceOptions">${workspaceNames(state.workflows).map((name) => `<option value="${esc(name)}"></option>`).join('')}</datalist>
       <span class="wf-state ${wf.published ? 'published' : 'draft'}">${wf.published ? `已发布 V${wf.published_version}` : '草稿'}</span>
       <span class="wf-save-state" id="wfSaveState">已保存</span>
       <div class="wf-head-actions">
@@ -500,6 +661,13 @@ function renderEditor() {
   $('#wfPublish').addEventListener('click', publishCurrent);
   $('#wfDebugNode').addEventListener('click', debugSelectedNode);
   $('#wfName').addEventListener('input', () => { state.current.name = $('#wfName').value; markDirty(); });
+  $('#wfWorkspace').addEventListener('change', () => {
+    const next = $('#wfWorkspace').value.trim();
+    if ((state.current.workspace || '') === next) return;
+    state.current.workspace = next;
+    markDirty();
+    toast(next ? `已归到工作区「${next}」` : '已移出工作区');
+  });
 }
 
 // 节点库放在画布下方的「添加节点」面板（Coze 1.0 的位置）
@@ -624,6 +792,7 @@ async function saveCurrent() {
     id: state.current.id,
     name: $('#wfName')?.value || state.current.name,
     description: state.current.description || '',
+    workspace: $('#wfWorkspace')?.value.trim() ?? (state.current.workspace || ''),
     nodes: graph.nodes,
     edges: graph.edges,
     variables: state.current.variables || [],

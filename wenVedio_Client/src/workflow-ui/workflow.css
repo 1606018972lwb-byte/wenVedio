@@ -384,6 +384,59 @@
 .wf-sch-row .wf-sch-unit { font-size: 12px; color: var(--text-3); }
 .wf-sch-meta { grid-column: 1 / -1; color: var(--text-3); font-size: 11px; }
 
+/* ---------------- 列表页：模板固定区 + 工作流区（视图/排序/工作区分组） ---------------- */
+#wfListMode { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.wf-tool-label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+.wf-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+.wf-seg button { padding: 8px 12px; border: 0; background: var(--surface); color: var(--text-2); font-size: 12.5px; cursor: pointer; }
+.wf-seg button + button { border-left: 1px solid var(--border); }
+.wf-seg button:hover { background: var(--surface-hover); }
+.wf-seg button.on { background: var(--brand-soft); color: var(--brand); font-weight: 700; }
+.wf-band { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); }
+/* 模板固定在列表上方：页面滚动时也不被工作流顶走 */
+.wf-band-templates { position: sticky; top: 0; z-index: 3; }
+.wf-band-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.wf-band-head b { font-size: 13px; color: var(--text); }
+.wf-band-count { padding: 1px 8px; border-radius: 999px; background: var(--slate-soft); color: var(--text-2); font-size: 11px; }
+.wf-band-hint { color: var(--text-3); font-size: 11.5px; }
+.wf-band-toggle { width: 22px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: var(--r-xs); background: var(--surface); color: var(--text-2); cursor: pointer; line-height: 1; }
+.wf-band-toggle:hover { border-color: var(--brand); color: var(--brand); }
+.wf-band-body { padding: 14px; }
+.wf-band-templates .wf-cards { padding: 14px; }
+.wf-cards-templates { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.wf-group + .wf-group { margin-top: 16px; }
+.wf-group-head { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; }
+.wf-group-head b { font-size: 12.5px; color: var(--text-2); }
+.wf-muted { color: var(--text-3); font-size: 11.5px; }
+.wf-ws-chip { padding: 1px 7px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); font-size: 10.5px; }
+/* 列表视图 */
+.wf-rows { display: grid; gap: 8px; }
+.wf-row {
+  display: grid; grid-template-columns: minmax(0, 2.2fr) 78px 96px 84px 96px 96px 132px auto;
+  gap: 10px; align-items: center; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); cursor: pointer;
+}
+.wf-row:hover { border-color: var(--brand); background: var(--surface-hover); }
+.wf-row-main { min-width: 0; }
+.wf-row-main b { display: block; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-row-main small { display: block; margin-top: 2px; color: var(--text-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-row-cell { font-size: 11.5px; color: var(--text-2); }
+.wf-row-cell.mono { font-family: var(--mono); color: var(--text-3); }
+.wf-row-ws { padding: 5px 6px; border: 1px solid var(--border); border-radius: var(--r-xs); background: var(--surface); color: var(--text-2); font-size: 11.5px; }
+.wf-row-actions { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.wf-row-actions button { padding: 4px 7px; font-size: 11px; }
+/* 编辑器标题栏里的工作区输入 */
+.wf-ws-input {
+  width: 130px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--text); font-size: 12px; outline: none;
+}
+.wf-ws-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
+
+@media (max-width: 1280px) {
+  .wf-row { grid-template-columns: minmax(0, 2fr) 96px 96px 132px auto; }
+  .wf-row .wf-hide-narrow { display: none; }
+}
+
 /* 历史版本：版本行 + 对比结果 */
 .wf-vers { display: grid; gap: 8px; }
 .wf-ver-row {
