@@ -1,7 +1,7 @@
 // 工作流 · 视图
 // 原生 ES 模块，浏览器直接加载（<script type="module">），没有构建步骤。
 // 结构：列表页 ⇄ 编辑器（左节点库 / 中画布 / 右配置面板）+ 运行记录 + Python 环境面板。
-import { createCanvas, NODE_W, NODE_H } from './canvas.js';
+import { createCanvas, branchesOf, NODE_W, NODE_H } from './canvas.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -856,14 +856,8 @@ function bindParamInputs(node, def) {
   });
   const commit = () => {
     const params = collectRows(node, def);
+    // 条件分支的出口由 canvas 从 params.branches 直接推导，这里不用再同步一份缓存
     state.canvas.updateNodeParams(node.id, params, { record: false });
-    // 条件分支：把出口同步到节点上，画布据此画端口与分支标签
-    if ((def.params || []).some((p) => p.type === 'branches')) {
-      const rows = Array.isArray(params.branches) ? params.branches : [];
-      const branches = rows.map((row) => ({ id: row.key, label: row.key }));
-      branches.push({ id: 'else', label: '否则' });
-      state.canvas.updateNode(node.id, { branches }, { record: false });
-    }
   };
   $$('[data-param]', host).forEach((input) => {
     const event = input.type === 'checkbox' ? 'change' : (input.tagName === 'SELECT' ? 'change' : 'input');
@@ -1736,7 +1730,7 @@ function pickEdgeBranch(edgeId) {
   const edge = state.canvas.getEdge(edgeId);
   if (!edge) return;
   const fromNode = state.canvas.getGraph().nodes.find((n) => n.id === edge.from);
-  const branches = Array.isArray(fromNode?.branches) ? fromNode.branches : [];
+  const branches = branchesOf(fromNode);
   if (!branches.length) { toast('这个节点没有分支出口'); return; }
   const anchor = state.canvas.nodeScreenRect(edge.from);
   openMenuAt(

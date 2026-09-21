@@ -356,6 +356,12 @@
 .wf-progress { flex: 1; height: 6px; border-radius: 999px; background: var(--surface); overflow: hidden; }
 .wf-progress i { display: block; height: 100%; width: 0; border-radius: 999px; background: var(--brand-grad); transition: width .3s; }
 
+/* 条件分支节点：一出口一行、一行一个圆点 */
+.wf-node .branch-sep { stroke: var(--border); stroke-width: 1; opacity: .6; }
+.wf-node .branch-label { fill: var(--text-2); font-size: 11px; }
+.wf-node.selected .branch-label { fill: var(--text); }
+.wf-node.disabled .branch-label { fill: var(--text-3); }
+
 /* 历史版本：版本行 + 对比结果 */
 .wf-vers { display: grid; gap: 8px; }
 .wf-ver-row {

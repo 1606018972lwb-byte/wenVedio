@@ -5,6 +5,41 @@
 const NS = 'http://www.w3.org/2000/svg';
 export const NODE_W = 176;
 export const NODE_H = 54;
+// 条件分支节点的「多出口」形态（Coze 的选择器节点）：一个出口一行、一行一个圆点。
+// 出口多于一个时卡片会比普通节点高，高度由出口数推出来。
+const BRANCH_ROW_H = 26;
+const BRANCH_HEAD_H = 40;
+const BRANCH_TAIL_H = 10;
+
+// 条件节点的出口列表：以 params.branches 为准（引擎就是按它产生 branch 名的），
+// 末尾固定跟一个隐式的「否则」出口。
+// 不再读 node.branches 那份缓存——它只在参数面板改动时才刷新，
+// 粘贴 / 导入 / 回放进来的条件节点那里是空的，出口就会少一半。
+export function branchesOf(node) {
+  if (!node || node.type !== 'condition') return [];
+  const rows = Array.isArray(node.params?.branches) ? node.params.branches : [];
+  const list = rows.map((row, index) => {
+    const key = String(row?.key ?? '').trim();
+    // 引擎里 key 为空的行用「分支N」当出口名，这里保持一致
+    return { id: key || `分支${index + 1}`, label: key || `条件${index + 1}` };
+  });
+  list.push({ id: 'else', label: '否则' });
+  return list;
+}
+
+// 节点在画布上的高度：条件节点按出口数长高，其余固定
+export function nodeHeight(node) {
+  const count = node && node.type === 'condition' ? branchesOf(node).length : 1;
+  if (count <= 1) return NODE_H;
+  return BRANCH_HEAD_H + count * BRANCH_ROW_H + BRANCH_TAIL_H;
+}
+
+// 第 index 个出口圆点的 y 偏移（相对节点左上角）
+function branchPortOffset(node, index) {
+  const count = node && node.type === 'condition' ? branchesOf(node).length : 0;
+  if (count <= 1) return nodeHeight(node) / 2;
+  return BRANCH_HEAD_H + index * BRANCH_ROW_H + BRANCH_ROW_H / 2;
+}
 
 const el = (tag, attrs = {}) => {
   const node = document.createElementNS(NS, tag);
@@ -106,7 +141,7 @@ export function createCanvas(host, handlers = {}) {
     const minX = Math.min(...nodes.map((n) => n.x)) - 40;
     const minY = Math.min(...nodes.map((n) => n.y)) - 40;
     const maxX = Math.max(...nodes.map((n) => n.x + NODE_W)) + 40;
-    const maxY = Math.max(...nodes.map((n) => n.y + NODE_H)) + 40;
+    const maxY = Math.max(...nodes.map((n) => n.y + nodeHeight(n))) + 40;
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
     mmScale = Math.min((MM_W - 14) / width, (MM_H - 14) / height);
@@ -126,7 +161,7 @@ export function createCanvas(host, handlers = {}) {
       rect.setAttribute('x', mmOffset.x + node.x * mmScale);
       rect.setAttribute('y', mmOffset.y + node.y * mmScale);
       rect.setAttribute('width', Math.max(2, NODE_W * mmScale));
-      rect.setAttribute('height', Math.max(2, NODE_H * mmScale));
+      rect.setAttribute('height', Math.max(2, nodeHeight(node) * mmScale));
       const status = nodeStateOf(node.id).status || 'idle';
       const fill = status === 'success' ? 'var(--ok)' : status === 'failed' ? 'var(--danger)'
         : status === 'running' ? 'var(--info)' : selection.has(node.id) ? 'var(--brand)' : 'var(--border-2)';
@@ -216,7 +251,9 @@ export function createCanvas(host, handlers = {}) {
       el('text', { class: 'title', x: 47, y: 24 }),
       el('text', { class: 'subtitle', x: 47, y: 40 }),
       el('circle', { class: 'port', 'data-port': 'in', 'data-node': node.id, cx: 0, cy: 27, r: 5.5 }),
-      el('circle', { class: 'port', 'data-port': 'out', 'data-node': node.id, cx: NODE_W, cy: 27, r: 5.5 }),
+      // 出口圆点与出口名按分支数量动态生成（条件分支节点一出口一个圆点）
+      el('g', { class: 'wf-branch-rows' }),
+      el('g', { class: 'wf-branch-ports' }),
     );
     // 悬停节点时右侧出现的「+」：点它直接接一个新节点（Coze 的习惯）
     const next = el('g', { class: 'wf-add wf-add-next', 'data-add': 'next', 'data-node': node.id, transform: `translate(${NODE_W + 26},${NODE_H / 2})` });
@@ -253,20 +290,69 @@ export function createCanvas(host, handlers = {}) {
     else if (status === 'skipped') subtitle.textContent = node.disabled === true ? '已禁用（透传）' : '已跳过';
     else if (node.disabled === true) subtitle.textContent = '已禁用（运行时跳过）';
     else subtitle.textContent = truncate(handlers.describeNode ? handlers.describeNode(node) : node.type, 22);
+
+    // 条件分支节点：按出口数长高，一出口一行、一行一个圆点（Coze 的选择器节点形态）
+    const branchList = branchesOf(node);
+    const ports = branchList.length ? branchList : [{ id: '', label: '' }];
+    const multi = branchList.length > 1;
+    const height = nodeHeight(node);
+    const headerCenter = multi ? BRANCH_HEAD_H / 2 : NODE_H / 2;
+    g.querySelector('.box').setAttribute('height', height);
+    g.querySelector('.status-dot').setAttribute('cy', headerCenter);
+    g.querySelector('.node-icon').setAttribute('y', headerCenter + 5);
+    g.querySelector('.title').setAttribute('y', headerCenter - 3);
+    subtitle.setAttribute('y', headerCenter + 13);
+    // 多出口时卡片下半部分全是出口行，副标题没地方放
+    subtitle.setAttribute('visibility', multi ? 'hidden' : 'visible');
+    const portSig = `${height}|${ports.map((item) => item.id).join('|')}`;
+    if (g.dataset.branchSig !== portSig) {
+      g.dataset.branchSig = portSig;
+      const rowsLayer = g.querySelector('.wf-branch-rows');
+      const portsLayer = g.querySelector('.wf-branch-ports');
+      rowsLayer.innerHTML = '';
+      portsLayer.innerHTML = '';
+      ports.forEach((branch, index) => {
+        const offset = branchPortOffset(node, index);
+        portsLayer.appendChild(el('circle', {
+          class: 'port', 'data-port': 'out', 'data-node': node.id,
+          'data-branch': branch.id, cx: NODE_W, cy: offset, r: 5.5,
+        }));
+        if (!multi) return;
+        rowsLayer.appendChild(el('line', {
+          class: 'branch-sep',
+          x1: 1, y1: BRANCH_HEAD_H + index * BRANCH_ROW_H,
+          x2: NODE_W - 1, y2: BRANCH_HEAD_H + index * BRANCH_ROW_H,
+        }));
+        const label = el('text', { class: 'branch-label', x: 14, y: offset + 4 });
+        label.textContent = truncate(branch.label, 13);
+        rowsLayer.appendChild(label);
+      });
+    }
     // 开始节点没有输入口，结束节点没有输出口；结束节点后面不能再接
+    g.querySelector('[data-port="in"]').setAttribute('cy', headerCenter);
     g.querySelector('[data-port="in"]').setAttribute('visibility', node.type === 'start' ? 'hidden' : 'visible');
-    g.querySelector('[data-port="out"]').setAttribute('visibility', node.type === 'end' ? 'hidden' : 'visible');
+    g.querySelector('.wf-branch-ports').setAttribute('visibility', node.type === 'end' ? 'hidden' : 'visible');
+    g.querySelector('.wf-branch-rows').setAttribute('visibility', multi && node.type !== 'end' ? 'visible' : 'hidden');
+    g.querySelector('.wf-add-next').setAttribute('transform', `translate(${NODE_W + 26},${height / 2})`);
     g.querySelector('.wf-add-next').setAttribute('visibility', node.type === 'end' ? 'hidden' : 'visible');
   }
 
-  function portPos(id, side) {
+  // 连线端点：出口走「这条边所属分支」的那颗圆点（条件分支节点一出口一个点）
+  function portPos(id, side, branchId = '') {
     const node = nodes.find((n) => n.id === id);
     if (!node) return { x: 0, y: 0 };
-    return { x: node.x + (side === 'out' ? NODE_W : 0), y: node.y + NODE_H / 2 };
+    if (side !== 'out') return { x: node.x, y: node.y + nodeHeight(node) / 2 };
+    const list = branchesOf(node);
+    let index = 0;
+    if (list.length > 1) {
+      const found = list.findIndex((item) => item.id === branchId);
+      index = found < 0 ? 0 : found;
+    }
+    return { x: node.x + NODE_W, y: node.y + branchPortOffset(node, index) };
   }
 
-  function edgePath(from, to) {
-    const a = portPos(from, 'out');
+  function edgePath(from, to, branch = '') {
+    const a = portPos(from, 'out', branch);
     const b = portPos(to, 'in');
     const dx = Math.max(36, Math.abs(b.x - a.x) * 0.5);
     return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
@@ -292,7 +378,7 @@ export function createCanvas(host, handlers = {}) {
         edgeEls.set(edge.id, group);
         edgesLayer.appendChild(group);
       }
-      const d = edgePath(edge.from, edge.to);
+      const d = edgePath(edge.from, edge.to, edge.branch);
       const visible = group.querySelector('.wf-edge');
       const hit = group.querySelector('.wf-edge-hit');
       visible.setAttribute('d', d);
@@ -300,12 +386,12 @@ export function createCanvas(host, handlers = {}) {
       const fromState = nodeStateOf(edge.from).status;
       visible.setAttribute('class', `wf-edge${selectedEdge === edge.id ? ' selected' : ''}${fromState && fromState !== 'idle' ? ` ${fromState}` : ''}`);
       hit.setAttribute('d', d);
-      const a = portPos(edge.from, 'out');
+      const a = portPos(edge.from, 'out', edge.branch);
       const b = portPos(edge.to, 'in');
       group.querySelector('.wf-add-edge').setAttribute('transform', `translate(${Math.round((a.x + b.x) / 2)},${Math.round((a.y + b.y) / 2)})`);
       const labelEl = group.querySelector('.wf-edge-label');
       const fromNode = nodes.find((n) => n.id === edge.from);
-      const branchDef = edge.branch ? (fromNode?.branches || []).find((item) => item.id === edge.branch) : null;
+      const branchDef = edge.branch ? branchesOf(fromNode).find((item) => item.id === edge.branch) : null;
       if (edge.branch) {
         labelEl.textContent = branchDef?.label || edge.branch;
         labelEl.setAttribute('x', Math.round((a.x + b.x) / 2));
@@ -351,9 +437,10 @@ export function createCanvas(host, handlers = {}) {
     if (addTarget && !readOnly) {
       event.preventDefault();
       const point = toWorld(event.clientX, event.clientY);
+      const anchorNode = addTarget.dataset.node ? nodes.find((n) => n.id === addTarget.dataset.node) : null;
       const payload = {
         x: point.x - NODE_W / 2,
-        y: point.y - NODE_H / 2,
+        y: point.y - (anchorNode ? nodeHeight(anchorNode) : NODE_H) / 2,
         clientX: event.clientX,
         clientY: event.clientY,
       };
@@ -377,7 +464,7 @@ export function createCanvas(host, handlers = {}) {
     if (target.dataset && target.dataset.port === 'out') {
       if (readOnly) return;
       mode = 'connect';
-      drag = { from: target.dataset.node, point: toWorld(event.clientX, event.clientY) };
+      drag = { from: target.dataset.node, branch: target.dataset.branch || '', point: toWorld(event.clientX, event.clientY) };
       draftEdge.setAttribute('visibility', 'visible');
       updateDraftEdge(event);
       event.preventDefault();
@@ -427,7 +514,7 @@ export function createCanvas(host, handlers = {}) {
 
   function updateDraftEdge(event) {
     if (!drag || mode !== 'connect') return;
-    const from = portPos(drag.from, 'out');
+    const from = portPos(drag.from, 'out', drag.branch);
     const to = toWorld(event.clientX, event.clientY);
     const dx = Math.max(36, Math.abs(to.x - from.x) * 0.5);
     draftEdge.setAttribute('d', `M ${from.x} ${from.y} C ${from.x + dx} ${from.y}, ${to.x - dx} ${to.y}, ${to.x} ${to.y}`);
@@ -501,7 +588,7 @@ export function createCanvas(host, handlers = {}) {
         w: Number(marquee.getAttribute('width')), h: Number(marquee.getAttribute('height')),
       };
       if (box.w > 4 && box.h > 4) {
-        const hit = nodes.filter((n) => n.x + NODE_W >= box.x && n.x <= box.x + box.w && n.y + NODE_H >= box.y && n.y <= box.y + box.h);
+        const hit = nodes.filter((n) => n.x + NODE_W >= box.x && n.x <= box.x + box.w && n.y + nodeHeight(n) >= box.y && n.y <= box.y + box.h);
         selection = new Set(hit.map((n) => n.id));
         render();
         emitSelect();
@@ -511,7 +598,7 @@ export function createCanvas(host, handlers = {}) {
       const under = document.elementFromPoint(event.clientX, event.clientY);
       const port = under && under.dataset ? under.dataset.port : null;
       const toId = under && under.dataset ? under.dataset.node : null;
-      if (port === 'in' && toId && toId !== drag.from) connect(drag.from, toId);
+      if (port === 'in' && toId && toId !== drag.from) connect(drag.from, toId, drag.branch);
     }
     mode = null;
     drag = null;
@@ -602,13 +689,13 @@ export function createCanvas(host, handlers = {}) {
     const x = primary.x + dx;
     const y = primary.y + dy;
     const mineX = [x, x + NODE_W / 2, x + NODE_W];
-    const mineY = [y, y + NODE_H / 2, y + NODE_H];
+    const mineY = [y, y + nodeHeight(primary) / 2, y + nodeHeight(primary)];
     let bestX = SNAP_DISTANCE + 1;
     let bestY = SNAP_DISTANCE + 1;
     for (const other of nodes) {
       if (draggingSet.has(other.id)) continue;
       const theirsX = [other.x, other.x + NODE_W / 2, other.x + NODE_W];
-      const theirsY = [other.y, other.y + NODE_H / 2, other.y + NODE_H];
+      const theirsY = [other.y, other.y + nodeHeight(other) / 2, other.y + nodeHeight(other)];
       for (const mx of mineX) {
         for (const tx of theirsX) {
           const delta = tx - mx;
@@ -633,7 +720,7 @@ export function createCanvas(host, handlers = {}) {
     const minX = Math.min(...nodes.map((n) => n.x)) - pad;
     const maxX = Math.max(...nodes.map((n) => n.x + NODE_W)) + pad;
     const minY = Math.min(...nodes.map((n) => n.y)) - pad;
-    const maxY = Math.max(...nodes.map((n) => n.y + NODE_H)) + pad;
+    const maxY = Math.max(...nodes.map((n) => n.y + nodeHeight(n))) + pad;
     if (x == null) guideV.setAttribute('visibility', 'hidden');
     else {
       guideV.setAttribute('x1', x);
@@ -670,7 +757,7 @@ export function createCanvas(host, handlers = {}) {
     return `e_${Date.now().toString(36)}_${edgeSeq}`;
   }
 
-  function connect(from, to) {
+  function connect(from, to, branchId = '') {
     const fromNode = nodes.find((n) => n.id === from);
     const toNode = nodes.find((n) => n.id === to);
     if (!fromNode || !toNode) return;
@@ -679,13 +766,18 @@ export function createCanvas(host, handlers = {}) {
     if (edges.some((e) => e.from === from && e.to === to)) { handlers.onStatus?.('这两个节点已经连过了'); return; }
     if (reaches(to, from)) { handlers.onStatus?.('这条连线会形成环，已取消'); return; }
     snapshot();
-    // 从条件分支节点连出去时，这条线默认归属第一个出口，之后可以改
-    const branches = Array.isArray(fromNode.branches) ? fromNode.branches : [];
-    const created = { id: nextEdgeId(), from, to, branch: branches.length ? branches[0].id : '' };
+    // 条件分支节点：从哪个出口的圆点拖出来就归哪个出口；
+    // 没带出口名（从「+」插入节点那条路径）才默认落在第一个出口，再让用户选
+    const branches = branchesOf(fromNode);
+    let branch = '';
+    if (branches.length) {
+      branch = branches.some((item) => item.id === branchId) ? branchId : branches[0].id;
+    }
+    const created = { id: nextEdgeId(), from, to, branch };
     edges.push(created);
     render();
     emitChange();
-    if (branches.length) handlers.onEdgeCreated?.(created.id);
+    if (branches.length && !branchId) handlers.onEdgeCreated?.(created.id);
   }
 
   function addNode(type, position, meta) {
@@ -710,11 +802,8 @@ export function createCanvas(host, handlers = {}) {
           : param.default;
       }
     }
-    // 条件分支节点：从参数推导出出口列表，画布据此标分支名
-    if (meta?.branches) {
-      const rows = Array.isArray(node.params.branches) ? node.params.branches : [];
-      node.branches = [...rows.filter((row) => row && row.key).map((row) => ({ id: row.key, label: row.key })), { id: 'else', label: '否则' }];
-    }
+    // 条件分支节点：出口列表由 branchesOf() 从 params.branches 直接推导，
+    // 不再往节点上写一份 branches 缓存（缓存会在导入 / 粘贴 / 回放时过期）
     nodes.push(node);
     selection = new Set([id]);
     render();
@@ -739,7 +828,13 @@ export function createCanvas(host, handlers = {}) {
     const node = addNode(type, pos, meta);
     snapshot();
     if (wiring.edgeId) edges = edges.filter((e) => e.id !== wiring.edgeId);
-    if (wiring.from && node.type !== 'start') edges.push({ id: nextEdgeId(), from: wiring.from, to: node.id });
+    if (wiring.from && node.type !== 'start') {
+      const branches = branchesOf(anchor);
+      const created = { id: nextEdgeId(), from: wiring.from, to: node.id, branch: branches.length ? branches[0].id : '' };
+      edges.push(created);
+      // 从条件节点插出来的节点算哪个出口是不确定的，交给出口选择器定
+      if (branches.length > 1) handlers.onEdgeCreated?.(created.id);
+    }
     if (wiring.to && node.type !== 'end') edges.push({ id: nextEdgeId(), from: node.id, to: wiring.to });
     render();
     emitChange();
@@ -759,7 +854,18 @@ export function createCanvas(host, handlers = {}) {
     const node = nodes.find((n) => n.id === id);
     if (!node) return;
     if (record) snapshot();
+    // 条件节点改出口名时，把连着旧出口的边跟着改名。
+    // 否则用户只是把「条件1」改成「金额大于100」，那条线就会悄悄掉到第一个出口上。
+    const before = branchesOf(node).map((item) => item.id);
     node.params = { ...params };
+    const after = branchesOf(node).map((item) => item.id);
+    if (before.length > 1 && after.length > 1 && before.join('|') !== after.join('|')) {
+      for (const edge of edges) {
+        if (edge.from !== id || !edge.branch) continue;
+        const index = before.indexOf(edge.branch);
+        if (index >= 0 && after[index] !== undefined && !after.includes(edge.branch)) edge.branch = after[index];
+      }
+    }
     render();
     emitChange();
   }
@@ -861,7 +967,7 @@ export function createCanvas(host, handlers = {}) {
     const minX = Math.min(...nodes.map((n) => n.x));
     const minY = Math.min(...nodes.map((n) => n.y));
     const maxX = Math.max(...nodes.map((n) => n.x + NODE_W));
-    const maxY = Math.max(...nodes.map((n) => n.y + NODE_H));
+    const maxY = Math.max(...nodes.map((n) => n.y + nodeHeight(n)));
     const pad = 40;
     const w = maxX - minX + pad * 2;
     const h = maxY - minY + pad * 2;
@@ -950,7 +1056,7 @@ export function createCanvas(host, handlers = {}) {
     if (!node) return;
     const rect = svg.getBoundingClientRect();
     panX = rect.width / 2 - (node.x + NODE_W / 2) * scale;
-    panY = rect.height / 2 - (node.y + NODE_H / 2) * scale;
+    panY = rect.height / 2 - (node.y + nodeHeight(node) / 2) * scale;
     applyTransform();
   }
 
@@ -965,9 +1071,9 @@ export function createCanvas(host, handlers = {}) {
       left: rect.left + panX + node.x * scale,
       top: rect.top + panY + node.y * scale,
       width: NODE_W * scale,
-      height: NODE_H * scale,
+      height: nodeHeight(node) * scale,
       right: rect.left + panX + (node.x + NODE_W) * scale,
-      bottom: rect.top + panY + (node.y + NODE_H) * scale,
+      bottom: rect.top + panY + (node.y + nodeHeight(node)) * scale,
     };
   }
 
