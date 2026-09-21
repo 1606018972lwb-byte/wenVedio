@@ -260,29 +260,6 @@ function renderList() {
   const templateCount = TEMPLATES.length + (state.templates || []).length;
 
   host.innerHTML = `
-    <div class="wf-toolbar">
-      <input id="wfSearch" type="search" placeholder="搜索工作流 / 工作区…" value="${esc($('#wfSearch')?.value || '')}" />
-      <button class="outline-button${onlyFailed ? ' accent' : ''}" id="wfOnlyFailed" type="button"${failedCount ? '' : ' disabled'}>${onlyFailed ? '✓ ' : ''}只看上次失败的${failedCount ? ` (${failedCount})` : ''}</button>
-      <span class="grow"></span>
-      <span class="wf-seg" role="group" aria-label="显示方式">
-        <button type="button" id="wfViewCards" class="${prefs.view === 'cards' ? 'on' : ''}" title="卡片视图">▦ 卡片</button>
-        <button type="button" id="wfViewList" class="${prefs.view === 'list' ? 'on' : ''}" title="列表视图">☰ 列表</button>
-      </span>
-      <label class="wf-tool-label">排序
-        <select id="wfSortKey">${SORT_OPTIONS.map(([key, label]) => `<option value="${key}"${prefs.sortKey === key ? ' selected' : ''}>${label}</option>`).join('')}</select>
-      </label>
-      <button type="button" class="outline-button" id="wfSortDir" title="切换升序 / 降序">${prefs.sortDir === 'asc' ? '↑ 升序' : '↓ 降序'}</button>
-      <button type="button" class="outline-button${prefs.group ? ' accent' : ''}" id="wfGroupToggle" title="按工作区分组显示">按工作区分组</button>
-      <label class="wf-tool-label">工作区
-        <select id="wfWsFilter"><option value="">全部（${state.workflows.length}）</option>${workspaceOptions}</select>
-      </label>
-      <button class="outline-button" id="wfImport" type="button">导入</button>
-      <input type="file" id="wfImportFile" accept=".json,application/json" hidden />
-      <button class="outline-button" id="wfImportTemplate" type="button" title="导入别人分享的模板（和工作流同一种文件格式）">导入模板</button>
-      <input type="file" id="wfImportTemplateFile" accept=".json,application/json" hidden />
-      <button class="outline-button accent" id="wfPythonEnv" type="button">🐍 Python 环境</button>
-      <button class="primary-button" id="wfNew" type="button"><span>＋</span> 新建工作流</button>
-    </div>
     <section class="wf-band wf-band-templates">
       <header class="wf-band-head">
         <button type="button" class="wf-band-toggle" id="wfTplToggle" title="${prefs.templates ? '收起模板' : '展开模板'}">${prefs.templates ? '▾' : '▸'}</button>
@@ -296,6 +273,29 @@ function renderList() {
         <b>工作流</b><span class="wf-band-count">${list.length}</span>
         <span class="wf-band-hint">按${sortLabel}${prefs.sortDir === 'asc' ? '升序' : '降序'}${prefs.group ? ' · 已按工作区分组' : ''}${wsFilter ? ` · 只看「${esc(wsFilter)}」` : ''}</span>
       </header>
+      <div class="wf-toolbar">
+        <input id="wfSearch" type="search" placeholder="搜索工作流 / 工作区…" value="${esc($('#wfSearch')?.value || '')}" />
+        <button class="outline-button${onlyFailed ? ' accent' : ''}" id="wfOnlyFailed" type="button"${failedCount ? '' : ' disabled'}>${onlyFailed ? '✓ ' : ''}只看上次失败的${failedCount ? ` (${failedCount})` : ''}</button>
+        <span class="wf-seg" role="group" aria-label="显示方式">
+          <button type="button" id="wfViewCards" class="${prefs.view === 'cards' ? 'on' : ''}" title="卡片视图">▦ 卡片</button>
+          <button type="button" id="wfViewList" class="${prefs.view === 'list' ? 'on' : ''}" title="列表视图">☰ 列表</button>
+        </span>
+        <label class="wf-tool-label">排序
+          <select id="wfSortKey">${SORT_OPTIONS.map(([key, label]) => `<option value="${key}"${prefs.sortKey === key ? ' selected' : ''}>${label}</option>`).join('')}</select>
+        </label>
+        <button type="button" class="outline-button" id="wfSortDir" title="切换升序 / 降序">${prefs.sortDir === 'asc' ? '↑ 升序' : '↓ 降序'}</button>
+        <button type="button" class="outline-button${prefs.group ? ' accent' : ''}" id="wfGroupToggle" title="按工作区分组显示">按工作区分组</button>
+        <label class="wf-tool-label">工作区
+          <select id="wfWsFilter"><option value="">全部（${state.workflows.length}）</option>${workspaceOptions}</select>
+        </label>
+        <span class="grow"></span>
+        <button class="outline-button" id="wfImport" type="button">导入</button>
+        <input type="file" id="wfImportFile" accept=".json,application/json" hidden />
+        <button class="outline-button" id="wfImportTemplate" type="button" title="导入别人分享的模板（和工作流同一种文件格式）">导入模板</button>
+        <input type="file" id="wfImportTemplateFile" accept=".json,application/json" hidden />
+        <button class="outline-button accent" id="wfPythonEnv" type="button">🐍 Python 环境</button>
+        <button class="primary-button" id="wfNew" type="button"><span>＋</span> 新建工作流</button>
+      </div>
       <div class="wf-band-body">${bodyHtml}</div>
     </section>`;
 

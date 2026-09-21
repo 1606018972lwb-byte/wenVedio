@@ -402,6 +402,8 @@
 .wf-band-toggle { width: 22px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: var(--r-xs); background: var(--surface); color: var(--text-2); cursor: pointer; line-height: 1; }
 .wf-band-toggle:hover { border-color: var(--brand); color: var(--brand); }
 .wf-band-body { padding: 14px; }
+/* 工作流的工具栏就放在工作流区里、列表正上方（模板在上面时它也跟着往下挪） */
+.wf-band-workflows .wf-toolbar { margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .wf-band-templates .wf-cards { padding: 14px; }
 .wf-cards-templates { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 .wf-group + .wf-group { margin-top: 16px; }
