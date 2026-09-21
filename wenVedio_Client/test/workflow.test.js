@@ -258,6 +258,66 @@ async function testRunFromNode() {
   check('无历史运行被拒绝', denied.data.ok === false && /历史运行/.test(denied.data.msg || ''), JSON.stringify(denied.data));
 }
 
+// 版本（发布快照）：界面上「版本」抽屉依赖这几个接口，坏在这里用户只会看到空列表
+async function testVersions() {
+  console.log('\n[版本] 发布快照 / 列表统计 / 取单版内容 / 恢复');
+  const wf = await createWorkflow({
+    name: '测试·版本',
+    nodes: [startNode([{ key: 'n', label: '数字', type: 'number' }]), codeNode('code_a', 'return { v: Number(input.n) + 1 };')],
+    edges: [{ id: 'e1', from: 'start_1', to: 'code_a' }],
+    variables: [{ key: 'v1', value: 1 }],
+  });
+  const pub1 = await api('POST', `/api/workflows/${wf.id}/publish`);
+  check('第一次发布 → V1', pub1.data.workflow?.version === 1, JSON.stringify(pub1.data).slice(0, 120));
+  check('发布版本被记为已发布版', pub1.data.workflow?.published_version === 1);
+
+  // 改一版：加一个节点、一条边、一个变量，再发布
+  await api('POST', '/api/workflows', {
+    id: wf.id,
+    name: '测试·版本',
+    nodes: [
+      startNode([{ key: 'n', label: '数字', type: 'number' }]),
+      codeNode('code_a', 'return { v: Number(input.n) + 1 };'),
+      { id: 'code_b', type: 'code', title: '新增的节点', x: 400, y: 0, params: { language: 'javascript', code: 'return { ok: 1 };' } },
+    ],
+    edges: [{ id: 'e1', from: 'start_1', to: 'code_a' }, { id: 'e2', from: 'code_a', to: 'code_b' }],
+    variables: [{ key: 'v1', value: 1 }, { key: 'v2', value: 2 }],
+  });
+  await api('POST', `/api/workflows/${wf.id}/publish`);
+
+  const list = await api('GET', `/api/workflows/${wf.id}/versions`);
+  const versions = list.data.versions || [];
+  check('列表返回 2 个版本', versions.length === 2, JSON.stringify(versions));
+  check('最新在前且统计正确（3 节点 / 2 连线 / 2 变量）',
+    versions[0]?.version === 2 && versions[0]?.node_count === 3 && versions[0]?.edge_count === 2 && versions[0]?.variable_count === 2,
+    JSON.stringify(versions[0]));
+  check('V1 统计为 2 节点 / 1 连线', versions[1]?.version === 1 && versions[1]?.node_count === 2 && versions[1]?.edge_count === 1, JSON.stringify(versions[1]));
+  check('只有当前发布版带 published 标记', versions[0]?.published === true && versions[1]?.published === false);
+  check('列表同时给出草稿规模', list.data.draft?.node_count === 3 && list.data.draft?.edge_count === 2, JSON.stringify(list.data.draft));
+
+  const one = await api('GET', `/api/workflows/${wf.id}/versions/1`);
+  check('取单版返回完整内容（不是只有统计）',
+    one.data.version?.nodes?.length === 2 && one.data.version?.edges?.length === 1 && one.data.version?.variables?.length === 1,
+    JSON.stringify({ n: one.data.version?.nodes?.length, e: one.data.version?.edges?.length }));
+  check('单版内容里没有后加的节点',
+    (one.data.version?.nodes || []).some((node) => node.id === 'code_a')
+    && !(one.data.version?.nodes || []).some((node) => node.id === 'code_b'));
+
+  const missing = await api('GET', `/api/workflows/${wf.id}/versions/99`);
+  check('不存在的版本返回 404', missing.status === 404 && missing.data.ok === false, JSON.stringify(missing.data));
+
+  const restored = await api('POST', `/api/workflows/${wf.id}/versions/1/restore`);
+  check('恢复 V1：草稿回到 2 节点 / 1 连线',
+    restored.data.workflow?.nodes?.length === 2 && restored.data.workflow?.edges?.length === 1,
+    JSON.stringify({ n: restored.data.workflow?.nodes?.length, e: restored.data.workflow?.edges?.length }));
+  check('恢复本身固化成新版本（V3）', restored.data.workflow?.version === 3 && restored.data.workflow?.published_version === 3,
+    JSON.stringify({ v: restored.data.workflow?.version, p: restored.data.workflow?.published_version }));
+  const after = await api('GET', `/api/workflows/${wf.id}`);
+  check('恢复后的草稿里 code_b 已消失', !(after.data.workflow.nodes || []).some((node) => node.id === 'code_b'));
+  const list2 = await api('GET', `/api/workflows/${wf.id}/versions`);
+  check('历史没有被恢复覆盖（仍然 3 个版本）', (list2.data.versions || []).length === 3, JSON.stringify(list2.data.versions?.map((v) => v.version)));
+}
+
 async function testPersistence() {
   console.log('\n[持久化] 坏记录不得堵死后续落盘');
   const { create } = require(path.join(ROOT, 'src', 'workflow', 'store.js'));
@@ -330,6 +390,7 @@ async function waitHealthy(timeoutMs = 20000) {
     await testSandbox();
     await testImportExportRerun();
     await testRunFromNode();
+    await testVersions();
     await testPersistence();
     console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
     if (fail) console.log(`失败用例：${failures.join('、')}`);

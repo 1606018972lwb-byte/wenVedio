@@ -175,6 +175,15 @@ function create({ store, engine, host, python, writeLog, sendJson, readBody, nod
       }
     }
 
+    // 单个版本的完整内容：版本对比要拿它和当前草稿逐项比（GET，两段路径）
+    const versionMatch = route.match(/^\/api\/workflows\/([^/]+)\/versions\/([^/]+)$/);
+    if (versionMatch && method === 'GET') {
+      const snapshot = store.getVersion(decodeURIComponent(versionMatch[1]), decodeURIComponent(versionMatch[2]));
+      if (!snapshot) { sendJson(res, 404, { ok: false, msg: '版本不存在' }); return true; }
+      sendJson(res, 200, { ok: true, version: snapshot });
+      return true;
+    }
+
     // 恢复历史版本：/api/workflows/:id/versions/:version/restore（三段路径，要在通用规则之前匹配）
     const restoreMatch = route.match(/^\/api\/workflows\/([^/]+)\/versions\/([^/]+)\/restore$/);
     if (restoreMatch && method === 'POST') {
@@ -235,7 +244,20 @@ function create({ store, engine, host, python, writeLog, sendJson, readBody, nod
     }
 
     if (action === 'versions' && method === 'GET') {
-      sendJson(res, 200, { ok: true, versions: store.listVersions(id) });
+      const workflow = store.getWorkflow(id);
+      if (!workflow) { sendJson(res, 404, { ok: false, msg: '工作流不存在' }); return true; }
+      sendJson(res, 200, {
+        ok: true,
+        versions: store.listVersions(id),
+        published_version: workflow.published_version || 0,
+        // 当前草稿的规模，界面用来显示「草稿 12 节点 / 13 连线」
+        draft: {
+          node_count: (workflow.nodes || []).length,
+          edge_count: (workflow.edges || []).length,
+          variable_count: (workflow.variables || []).length,
+          updated_at: workflow.updated_at || '',
+        },
+      });
       return true;
     }
 

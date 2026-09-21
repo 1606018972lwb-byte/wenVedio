@@ -356,6 +356,30 @@
 .wf-progress { flex: 1; height: 6px; border-radius: 999px; background: var(--surface); overflow: hidden; }
 .wf-progress i { display: block; height: 100%; width: 0; border-radius: 999px; background: var(--brand-grad); transition: width .3s; }
 
+/* 历史版本：版本行 + 对比结果 */
+.wf-vers { display: grid; gap: 8px; }
+.wf-ver-row {
+  display: grid; grid-template-columns: 132px 148px minmax(0, 1fr) auto auto; gap: 10px; align-items: center;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface);
+}
+.wf-ver-row:hover { border-color: var(--brand); background: var(--surface-hover); }
+.wf-ver-row .mono { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+.wf-ver-row .wf-ver-size { font-size: 12px; color: var(--text-2); }
+.wf-ver-tag {
+  display: inline-block; padding: 2px 8px; border-radius: var(--r-xs); font-family: var(--mono); font-size: 11px;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-2); text-align: center;
+}
+.wf-ver-tag.current { background: var(--brand-soft); color: var(--brand); border-color: var(--brand-soft-2); }
+.wf-diff { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px 14px; background: var(--surface); }
+.wf-diff-head { font-family: var(--mono); font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
+.wf-diff-group { margin-top: 8px; font-size: 12px; }
+.wf-diff-group b { font-weight: 600; color: var(--text-2); }
+.wf-diff-group ul { margin: 4px 0 0; padding-left: 18px; }
+.wf-diff-group li { color: var(--text-2); }
+.wf-diff-group li.add { color: var(--ok); }
+.wf-diff-group li.del { color: var(--danger); }
+.wf-diff-group li.mod { color: var(--warn); }
+
 @media (max-width: 1280px) {
   .wf-node-pop { width: 304px; }
 }

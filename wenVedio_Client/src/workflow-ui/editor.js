@@ -356,6 +356,7 @@ function renderEditor() {
         <button type="button" id="wfUndo" title="撤销 Ctrl+Z">↶</button>
         <button type="button" id="wfRedo" title="重做 Ctrl+Y">↷</button>
         <button type="button" id="wfDebugNode" title="只运行选中的这一个节点">⚡ 测试节点</button>
+        <button type="button" id="wfVersions" title="发布过的版本：对比与恢复">版本</button>
         <button type="button" id="wfRuns">运行记录</button>
         <button type="button" id="wfPublish">发布</button>
         <button type="button" class="primary" id="wfRun" title="试运行整个工作流">▶ 试运行</button>
@@ -375,6 +376,7 @@ function renderEditor() {
   $('#wfRedo').addEventListener('click', () => state.canvas.redo());
   $('#wfRun').addEventListener('click', () => promptRun(wf.id));
   $('#wfRuns').addEventListener('click', () => openRunList(wf.id));
+  $('#wfVersions').addEventListener('click', () => openVersionList());
   $('#wfPublish').addEventListener('click', publishCurrent);
   $('#wfDebugNode').addEventListener('click', debugSelectedNode);
   $('#wfName').addEventListener('input', () => { state.current.name = $('#wfName').value; markDirty(); });
@@ -1269,6 +1271,133 @@ async function openRunDetail(runId) {
       $$('[data-rerun]', root).forEach((button) => button.addEventListener('click', () => rerunWorkflow(button.dataset.rerun)));
     });
   } catch (err) { toast(`读取运行详情失败：${err.message}`, 'error'); }
+}
+
+// ---------------- 版本（发布快照）----------------
+// 后端一直存着版本快照，也有恢复接口，但界面只有「发布」按钮：
+// 发布了哪几版、和现在差多少、能不能退回去，全都看不到。这里补齐。
+function formatStamp(value) {
+  const at = value ? new Date(value) : null;
+  if (!at || Number.isNaN(at.getTime())) return '—';
+  return at.toLocaleString('zh-CN', { hour12: false });
+}
+
+// 版本对比：节点（增/删/改）、连线、变量三块，各给出数量与明细。
+// 纯函数，方便夹具直接断言数字。
+function diffVersions(base, draft) {
+  const baseNodes = new Map((base.nodes || []).map((node) => [node.id, node]));
+  const draftNodes = new Map((draft.nodes || []).map((node) => [node.id, node]));
+  const added = [];
+  const removed = [];
+  const changed = [];
+  for (const [id, node] of draftNodes) if (!baseNodes.has(id)) added.push(node.title || id);
+  for (const [id, node] of baseNodes) if (!draftNodes.has(id)) removed.push(node.title || id);
+  for (const [id, before] of baseNodes) {
+    const after = draftNodes.get(id);
+    if (!after) continue;
+    const fields = [];
+    if (String(before.title || '') !== String(after.title || '')) fields.push(`标题 ${before.title || '—'} → ${after.title || '—'}`);
+    if (String(before.type || '') !== String(after.type || '')) fields.push(`类型 ${before.type} → ${after.type}`);
+    if (JSON.stringify(before.params || {}) !== JSON.stringify(after.params || {})) fields.push('参数');
+    if (JSON.stringify(before.input_params || []) !== JSON.stringify(after.input_params || [])) fields.push('输入映射');
+    if (JSON.stringify(before.output_params || []) !== JSON.stringify(after.output_params || [])) fields.push('输出映射');
+    if ((before.disabled === true) !== (after.disabled === true)) fields.push(after.disabled === true ? '已改为禁用' : '已改为启用');
+    if (fields.length) changed.push({ name: after.title || id, fields });
+  }
+  const edgeKey = (nodes, edge) => {
+    const title = (id) => (nodes.get(id) || {}).title || id;
+    return `${title(edge.from)} → ${title(edge.to)}${edge.branch ? `（${edge.branch}）` : ''}`;
+  };
+  const baseEdges = new Set((base.edges || []).map((edge) => edgeKey(baseNodes, edge)));
+  const draftEdges = new Set((draft.edges || []).map((edge) => edgeKey(draftNodes, edge)));
+  const edgesAdded = [...draftEdges].filter((key) => !baseEdges.has(key));
+  const edgesRemoved = [...baseEdges].filter((key) => !draftEdges.has(key));
+  const keyOf = (item) => String(item && typeof item === 'object' ? item.key : item || '');
+  const baseVars = new Set((base.variables || []).map(keyOf).filter(Boolean));
+  const draftVars = new Set((draft.variables || []).map(keyOf).filter(Boolean));
+  const varsAdded = [...draftVars].filter((key) => !baseVars.has(key));
+  const varsRemoved = [...baseVars].filter((key) => !draftVars.has(key));
+  const counts = {
+    added: added.length, removed: removed.length, changed: changed.length,
+    edgesAdded: edgesAdded.length, edgesRemoved: edgesRemoved.length,
+    varsAdded: varsAdded.length, varsRemoved: varsRemoved.length,
+  };
+  const empty = Object.values(counts).every((value) => value === 0);
+  return { added, removed, changed, edgesAdded, edgesRemoved, varsAdded, varsRemoved, counts, empty };
+}
+
+async function openVersionList() {
+  const wf = state.current;
+  if (!wf) return;
+  // 先落盘：这样「当前草稿」和画布上正在改的东西是一致的
+  try { await saveCurrent(); } catch (_) { /* 保存失败也要能看历史版本 */ }
+  try {
+    const data = await api(`/api/workflows/${encodeURIComponent(wf.id)}/versions`);
+    const versions = data.versions || [];
+    openDrawer(`历史版本 · ${wf.name}`, '<div id="wfVerBody"></div>', (root) => {
+      const body = $('#wfVerBody', root);
+      const rows = versions.map((item) => `
+        <div class="wf-ver-row" data-ver="${esc(String(item.version))}">
+          <span class="wf-ver-tag${item.published ? ' current' : ''}">V${esc(String(item.version))}${item.published ? ' 当前发布' : ''}</span>
+          <span class="mono">${esc(formatStamp(item.saved_at))}</span>
+          <span class="wf-ver-size">${item.node_count} 节点 / ${item.edge_count} 连线${item.variable_count ? ` / ${item.variable_count} 变量` : ''}</span>
+          <button type="button" class="outline-button" data-diff="${item.version}">对比当前</button>
+          <button type="button" class="outline-button" data-restore="${item.version}">恢复</button>
+        </div>`).join('');
+      body.innerHTML = `
+        <p class="wf-insp-empty">当前草稿：${data.draft.node_count} 节点 / ${data.draft.edge_count} 连线${data.draft.variable_count ? ` / ${data.draft.variable_count} 变量` : ''}。
+        点「发布」会存下一个快照；这里可以对比差异或退回旧版（恢复本身也会固化成新版本，历史不会丢）。</p>
+        <div class="wf-vers">${rows || '<div class="wf-empty">还没有发布过版本：点编辑器右上角的「发布」生成 V1</div>'}</div>
+        <div id="wfVerDiff"></div>`;
+      $$('[data-diff]', body).forEach((el) => el.addEventListener('click', () => showVersionDiff(el.dataset.diff)));
+      $$('[data-restore]', body).forEach((el) => el.addEventListener('click', () => restoreVersion(el.dataset.restore)));
+    });
+  } catch (err) { toast(`读取版本失败：${err.message}`, 'error'); }
+}
+
+async function showVersionDiff(version) {
+  const wf = state.current;
+  const box = $('#wfVerDiff');
+  if (!wf || !box) return;
+  box.innerHTML = '<div class="wf-empty">对比中…</div>';
+  try {
+    const data = await api(`/api/workflows/${encodeURIComponent(wf.id)}/versions/${encodeURIComponent(version)}`);
+    // 用画布实时图而不是 state.current.nodes，否则刚做的改动不算进来
+    const graph = state.canvas.getGraph();
+    const diff = diffVersions(data.version, { nodes: graph.nodes, edges: graph.edges, variables: state.current.variables || [] });
+    const c = diff.counts;
+    const list = (title, items, cls) => (items.length
+      ? `<div class="wf-diff-group"><b>${title}</b><ul>${items.map((text) => `<li class="${cls}">${esc(text)}</li>`).join('')}</ul></div>`
+      : '');
+    box.innerHTML = `
+      <div class="wf-diff">
+        <div class="wf-diff-head">V${esc(String(version))} → 当前草稿：节点 +${c.added} / −${c.removed} / 改动 ${c.changed} · 连线 +${c.edgesAdded} / −${c.edgesRemoved} · 变量 +${c.varsAdded} / −${c.varsRemoved}</div>
+        ${diff.empty ? '<div class="wf-empty">与这一版完全一致</div>' : `
+          ${list('新增节点', diff.added, 'add')}
+          ${list('删除节点', diff.removed, 'del')}
+          ${list('连线新增', diff.edgesAdded, 'add')}
+          ${list('连线删除', diff.edgesRemoved, 'del')}
+          ${diff.changed.length ? `<div class="wf-diff-group"><b>改动的节点</b><ul>${diff.changed.map((item) => `<li class="mod">${esc(item.name)}：${esc(item.fields.join('、'))}</li>`).join('')}</ul></div>` : ''}
+          ${list('新增变量', diff.varsAdded, 'add')}
+          ${list('删除变量', diff.varsRemoved, 'del')}
+        `}
+      </div>`;
+  } catch (err) {
+    box.innerHTML = `<div class="wf-empty">对比失败：${esc(err.message)}</div>`;
+  }
+}
+
+async function restoreVersion(version) {
+  const wf = state.current;
+  if (!wf) return;
+  if (!window.confirm(`恢复到 V${version}？当前草稿会被这一版覆盖（恢复本身也会存成一个新版本，历史不会丢）。`)) return;
+  try {
+    const data = await api(`/api/workflows/${encodeURIComponent(wf.id)}/versions/${encodeURIComponent(version)}/restore`, { method: 'POST' });
+    closeDrawer();
+    await loadWorkflows();
+    await openWorkflow(wf.id);
+    toast(`已恢复到 V${version}，当前版本 V${data.workflow.version}`);
+  } catch (err) { toast(`恢复失败：${err.message}`, 'error'); }
 }
 
 // ---------------- 单节点调试 ----------------

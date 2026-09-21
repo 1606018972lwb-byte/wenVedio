@@ -270,7 +270,26 @@ function create({ configDir, writeLog }) {
       saved_at: item.saved_at,
       node_count: (item.nodes || []).length,
       edge_count: (item.edges || []).length,
+      // 界面上要标出「当前发布的就是这一版」，以及版本里存了哪些变量
+      published: Number(item.version) === Number(record.published_version || 0),
+      variable_count: (item.variables || []).length,
     }));
+  }
+
+  // 单个版本的完整内容：版本对比要拿它和当前草稿逐项比。
+  // 列表接口只给统计数字，内容单独取，避免一次把 20 个版本的节点全塞进响应。
+  function getVersion(id, version) {
+    const record = workflows.get(String(id));
+    if (!record) return null;
+    const snapshot = (record.versions || []).find((item) => Number(item.version) === Number(version));
+    if (!snapshot) return null;
+    return {
+      version: snapshot.version,
+      saved_at: snapshot.saved_at,
+      nodes: JSON.parse(JSON.stringify(snapshot.nodes || [])),
+      edges: JSON.parse(JSON.stringify(snapshot.edges || [])),
+      variables: JSON.parse(JSON.stringify(snapshot.variables || [])),
+    };
   }
 
   // 恢复某个历史版本：内容覆盖到草稿，同时本身也固化成一个新版本，避免历史被抹掉
@@ -392,7 +411,7 @@ function create({ configDir, writeLog }) {
   return {
     load,
     listWorkflows, getWorkflow, saveWorkflow, deleteWorkflow,
-    publishWorkflow, listVersions, restoreVersion, duplicateWorkflow, touchWorkflowRun,
+    publishWorkflow, listVersions, getVersion, restoreVersion, duplicateWorkflow, touchWorkflowRun,
     saveRun, pruneRuns, listRuns, getRun, allRuns, clearFinishedRuns,
   };
 }
