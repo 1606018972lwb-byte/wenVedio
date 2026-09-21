@@ -9,6 +9,92 @@ const { resolveParam } = require('./vars');
 // 子工作流最多嵌套几层：互相调用时靠它中止，而不是无限递归把服务打爆
 const MAX_SUB_DEPTH = 5;
 
+// ---------------- 循环体 ----------------
+// 循环体 = 在画布上被拖进循环节点框里的那些节点（存在 loop.params.body 里）。
+// 这些节点不参与顶层推进，由循环节点按项调度。
+
+// 哪些节点被哪个循环节点框住了
+function loopMembers(snapshot) {
+  const claimed = new Map();
+  for (const node of (snapshot && snapshot.nodes) || []) {
+    if (node.type !== 'loop') continue;
+    for (const raw of Array.isArray(node.params?.body) ? node.params.body : []) {
+      const id = String(raw || '');
+      if (id && !claimed.has(id)) claimed.set(id, node.id);
+    }
+  }
+  return claimed;
+}
+
+// 循环体的传递闭包：循环体里再套一个循环时，内层循环体也要带上，
+// 否则内层循环在自己的子运行里找不到它的循环体节点
+function expandBody(snapshot, ids) {
+  const byId = new Map(((snapshot && snapshot.nodes) || []).map((node) => [node.id, node]));
+  const out = new Set();
+  const walk = (raw) => {
+    const id = String(raw || '');
+    const node = byId.get(id);
+    if (!node || out.has(id)) return;
+    out.add(id);
+    if (node.type === 'loop') {
+      for (const inner of Array.isArray(node.params?.body) ? node.params.body : []) walk(inner);
+    }
+  };
+  for (const id of ids) walk(id);
+  return [...out];
+}
+
+// 把画布上的循环体拼成一个可执行的定义：
+// 用循环节点自己的 id 冒充内层「开始」（于是循环体里写 {{循环节点.item}} 就能取到当前项），
+// 末尾补一个「结束」把没有出边的节点当作每项的结果。
+function buildBodyDefinition(ctx, bodyIds, itemKey) {
+  const loopId = ctx.node.id;
+  const snapshot = ctx.run.snapshot || { nodes: [], edges: [] };
+  const byId = new Map((snapshot.nodes || []).map((node) => [node.id, node]));
+  const bodySet = new Set(expandBody(snapshot, bodyIds).filter((id) => id !== loopId && byId.has(id)));
+  const bodyNodes = [...bodySet].map((id) => JSON.parse(JSON.stringify(byId.get(id))));
+  // 循环体内部的连线保留；连到框外的线在「每一项」里没有意义，丢掉
+  const innerEdges = (snapshot.edges || [])
+    .filter((edge) => bodySet.has(String(edge.from)) && bodySet.has(String(edge.to)))
+    .map((edge) => ({ ...edge, id: `inner_${edge.id}` }));
+  const startNode = {
+    id: loopId, type: 'start', title: '每一项', x: -260, y: 0,
+    params: { fields: [
+      { key: itemKey, label: itemKey, type: 'any' },
+      { key: 'index', label: '序号', type: 'number' },
+      { key: 'total', label: '总数', type: 'number' },
+    ] },
+  };
+  // 循环体里没有入边/出边的节点，只看**这一层真正要执行**的节点：
+  // 框里如果还套着循环，内层循环体由内层循环自己调度，不能算成这一层的出入口
+  const claimedInside = loopMembers({ nodes: bodyNodes, edges: [] });
+  const topLevel = [...bodySet].filter((id) => !claimedInside.has(id));
+  const topEdges = innerEdges.filter((edge) => topLevel.includes(edge.from) && topLevel.includes(edge.to));
+  const roots = topLevel.filter((id) => !topEdges.some((edge) => edge.to === id));
+  const sinks = topLevel.filter((id) => !topEdges.some((edge) => edge.from === id));
+  const startEdges = roots.map((id, index) => ({ id: `inner_start_${index}`, from: loopId, to: id }));
+  const endNode = {
+    id: `${loopId}__end`, type: 'end', title: '每项结果', x: 99999, y: 0,
+    // 结果取「结果节点」的整个输出：代码 / AI 节点会把返回值展开在顶层，
+    // 循环 / 子工作流这类节点的输出本身就是结果对象
+    params: { outputs: sinks.length === 1
+      ? [{ key: '结果', value: `{{${sinks[0]}}}` }]
+      : sinks.map((id) => ({ key: id, value: `{{${id}}}` })) },
+  };
+  const edges = [
+    ...innerEdges,
+    ...startEdges,
+    ...sinks.map((id, index) => ({ id: `inner_end_${index}`, from: id, to: endNode.id })),
+  ];
+  return {
+    id: `${loopId}__body`,
+    name: `循环体（${ctx.node.title || loopId}）`,
+    version: 0,
+    nodes: [startNode, ...bodyNodes, endNode],
+    edges,
+  };
+}
+
 const NODE_DEFS = {
   // ---------------- 基础 ----------------
   start: {
@@ -149,18 +235,24 @@ const NODE_DEFS = {
 
   loop: {
     label: '循环', icon: '↻', group: '逻辑', color: 'violet',
-    description: '对一个数组的每一项都执行同一个子工作流，把结果收成一个数组',
+    description: '对一个数组的每一项跑一遍循环体（把节点拖进它的框里），或重复执行一个子工作流',
     inputs: ['main'],
     outputs: [
       { key: 'results', label: '结果数组', type: 'array' },
       { key: 'count', label: '成功条数', type: 'number' },
       { key: 'failed', label: '失败明细', type: 'array' },
+      // 下面三个只在循环体内部有意义：循环体里写 {{循环节点.item}} 取当前这一项
+      { key: 'item', label: '当前这一项（循环体内）', type: 'any' },
+      { key: 'index', label: '当前序号（循环体内）', type: 'number' },
+      { key: 'total', label: '总数（循环体内）', type: 'number' },
     ],
     params: [
       { key: 'items', label: '要遍历的数组', type: 'prompt', rows: 2, required: true,
         placeholder: '{{code_1.list}}，也可以直接写 ["a","b"]' },
-      { key: 'workflow_id', label: '重复执行的子工作流', type: 'workflow', required: true,
-        help: '每一项都会用同一个子工作流跑一遍' },
+      { key: 'body', label: '循环体', type: 'loop-body',
+        help: '把节点直接拖进循环节点的框里即可；循环体里用 {{循环节点.item}} 取当前这一项' },
+      { key: 'workflow_id', label: '或者：重复执行的子工作流', type: 'workflow',
+        help: '没有循环体时用它——每一项都用同一个子工作流跑一遍' },
       { key: 'item_key', label: '每项传进去的字段名', type: 'text', default: 'item',
         help: '子工作流的「开始」节点里定义同名输入项即可接住当前这一项' },
       { key: 'concurrency', label: '并发数', type: 'number', min: 1, max: 5, default: 1,
@@ -178,8 +270,11 @@ const NODE_DEFS = {
       } else if (raw !== undefined && raw !== null && raw !== '') list = [raw];
       if (!list.length) return { results: [], count: 0, failed: [], total: 0 };
 
+      const bodyIds = (Array.isArray(ctx.params.body) ? ctx.params.body : []).map(String).filter(Boolean);
       const workflowId = String(ctx.params.workflow_id || '').trim();
-      if (!workflowId) throw new Error('循环节点需要先选一个要重复执行的子工作流');
+      if (!bodyIds.length && !workflowId) {
+        throw new Error('循环节点要先选一个子工作流，或把节点拖进它的框里当循环体');
+      }
       const itemKey = String(ctx.params.item_key || 'item').trim() || 'item';
       const concurrency = Math.max(1, Math.min(5, Number(ctx.params.concurrency) || 1));
       const timeoutMs = Math.max(1000, Math.min(3600000, Number(ctx.params.timeout_ms) || 600000));
@@ -187,6 +282,13 @@ const NODE_DEFS = {
       const failed = [];
       let cursor = 0;
       let done = 0;
+
+      // 每一项跑一次：优先用画布上的循环体（把节点拖进框里），否则用选定的子工作流
+      const runOnce = (inputs) => {
+        const options = { timeoutMs, parentRunId: ctx.run.id, depth: Number(ctx.run.depth || 0) + 1 };
+        if (bodyIds.length) return ctx.bridge.runWorkflowDefinition(buildBodyDefinition(ctx, bodyIds, itemKey), inputs, options);
+        return ctx.bridge.runWorkflow(workflowId, inputs, options);
+      };
 
       const worker = async () => {
         for (;;) {
@@ -196,12 +298,12 @@ const NODE_DEFS = {
           if (ctx.isCancelled && ctx.isCancelled()) throw new Error('运行已被取消');
           const inputs = { [itemKey]: list[index], index, total: list.length };
           try {
-            const sub = await ctx.bridge.runWorkflow(workflowId, inputs, {
-              timeoutMs,
-              parentRunId: ctx.run.id,
-              depth: Number(ctx.run.depth || 0) + 1,
-            });
-            results[index] = sub.outputs;
+            const sub = await runOnce(inputs);
+            // 单项结果节点时把「结果」拆出来：results 就是每一项产出的数组
+            const out = sub.outputs;
+            results[index] = out && typeof out === 'object' && !Array.isArray(out) && out['结果'] !== undefined
+              ? out['结果']
+              : out;
           } catch (err) {
             results[index] = null;
             failed.push({ index, item: list[index], error: err.message });
@@ -868,4 +970,4 @@ function describeNodes() {
   return meta;
 }
 
-module.exports = { NODE_DEFS, describeNodes, delay, safeString };
+module.exports = { NODE_DEFS, describeNodes, delay, safeString, loopMembers, expandBody, buildBodyDefinition };

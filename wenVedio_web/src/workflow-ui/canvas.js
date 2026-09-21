@@ -66,6 +66,8 @@ export function createCanvas(host, handlers = {}) {
   const bg = el('rect', { x: 0, y: 0, width: '100%', height: '100%', fill: 'transparent' });
   const viewport = el('g');
   const edgesLayer = el('g');
+  // 循环容器的框画在节点下面
+  const containersLayer = el('g', { class: 'wf-containers' });
   const nodesLayer = el('g');
   const marquee = el('rect', { class: 'wf-marquee', rx: 3 });
   marquee.setAttribute('visibility', 'hidden');
@@ -77,7 +79,7 @@ export function createCanvas(host, handlers = {}) {
   const guideH = el('line', { class: 'wf-guide', visibility: 'hidden' });
   guidesLayer.append(guideV, guideH);
 
-  viewport.append(edgesLayer, guidesLayer, nodesLayer, marquee, draftEdge);
+  viewport.append(edgesLayer, guidesLayer, containersLayer, nodesLayer, marquee, draftEdge);
   svg.append(bg, viewport);
 
   const toolbar = document.createElement('div');
@@ -116,6 +118,7 @@ export function createCanvas(host, handlers = {}) {
 
   const nodeEls = new Map();
   const edgeEls = new Map();
+  const containerEls = new Map();
   const history = { past: [], future: [] };
   const MAX_HISTORY = 60;
 
@@ -406,6 +409,118 @@ export function createCanvas(host, handlers = {}) {
     }
   }
 
+  // ---------------- 循环容器 ----------------
+  // 拖进循环节点框里的节点就是「循环体」（存在 loop.params.body 里），
+  // 运行时由循环节点按项调度，不再参与顶层推进。
+  function loopBodyOf(node) {
+    const ids = Array.isArray(node?.params?.body) ? node.params.body.map(String) : [];
+    return ids.filter((id) => nodes.some((item) => item.id === id));
+  }
+
+  // 容器的矩形：有成员就框住它们，没有成员就给一块虚线投放区（否则没地方可拖进去）。
+  // exclude 用来在判断「拖出去」时把正在拖的节点本身排除——
+  // 否则容器会跟着被拖的节点一起长大，永远判定为「还在里面」。
+  function loopRect(loop, exclude) {
+    const members = loopBodyOf(loop).filter((id) => !(exclude && exclude.has(id)));
+    const pad = 24;
+    const head = 34;
+    if (!members.length) {
+      return {
+        x: loop.x - pad,
+        y: loop.y - head,
+        w: NODE_W + 340,
+        h: nodeHeight(loop) + head + 130,
+      };
+    }
+    let minX = loop.x;
+    let minY = loop.y;
+    let maxX = loop.x + NODE_W;
+    let maxY = loop.y + nodeHeight(loop);
+    for (const id of members) {
+      const item = nodes.find((n) => n.id === id);
+      if (!item) continue;
+      minX = Math.min(minX, item.x);
+      minY = Math.min(minY, item.y);
+      maxX = Math.max(maxX, item.x + NODE_W);
+      maxY = Math.max(maxY, item.y + nodeHeight(item));
+    }
+    return { x: minX - pad, y: minY - head - pad, w: maxX - minX + pad * 2, h: maxY - minY + head + pad * 2 };
+  }
+
+  function renderContainers() {
+    const loops = nodes.filter((node) => node.type === 'loop');
+    const seen = new Set();
+    for (const loop of loops) {
+      seen.add(loop.id);
+      let g = containerEls.get(loop.id);
+      if (!g) {
+        g = el('g', { class: 'wf-loop-box', 'data-loop': loop.id });
+        g.append(
+          el('rect', { class: 'box', rx: 14 }),
+          el('text', { class: 'label' }),
+          el('text', { class: 'hint' }),
+        );
+        containerEls.set(loop.id, g);
+        containersLayer.appendChild(g);
+      }
+      const rect = loopRect(loop);
+      const members = loopBodyOf(loop);
+      const box = g.querySelector('rect');
+      box.setAttribute('x', rect.x);
+      box.setAttribute('y', rect.y);
+      box.setAttribute('width', Math.max(90, rect.w));
+      box.setAttribute('height', Math.max(70, rect.h));
+      box.setAttribute('class', `box${members.length ? '' : ' empty'}${selection.has(loop.id) ? ' selected' : ''}`);
+      const label = g.querySelector('.label');
+      label.setAttribute('x', rect.x + 16);
+      label.setAttribute('y', rect.y + 21);
+      label.textContent = members.length ? `循环体 · ${members.length} 个节点` : '循环体 · 把节点拖进这个框';
+      const hint = g.querySelector('.hint');
+      hint.setAttribute('x', rect.x + 16);
+      hint.setAttribute('y', rect.y + 40);
+      hint.textContent = members.length ? `循环体里用 {{${loop.id}.item}} 取当前这一项` : '';
+    }
+    for (const [id, g] of containerEls) {
+      if (!seen.has(id)) { g.remove(); containerEls.delete(id); }
+    }
+  }
+
+  // 拖完之后按「中心点落进框里」判定成员关系：拖进去就加入，拖出去就移出
+  function updateLoopMembership(movedIds) {
+    let changed = false;
+    const dragging = new Set(movedIds);
+    for (const loop of nodes.filter((node) => node.type === 'loop')) {
+      const members = new Set(loopBodyOf(loop));
+      for (const id of movedIds) {
+        if (id === loop.id) continue;
+        const node = nodes.find((item) => item.id === id);
+        // 开始 / 结束节点不能进循环体（循环体自带一进一出）
+        if (!node || node.type === 'start' || node.type === 'end') continue;
+        // 判断已在框里的节点时，把「它自己」从容器范围里排除（见 loopRect 注释）
+        const rect = loopRect(loop, members.has(id) ? dragging : null);
+        const cx = node.x + NODE_W / 2;
+        const cy = node.y + nodeHeight(node) / 2;
+        const inside = cx >= rect.x && cx <= rect.x + rect.w && cy >= rect.y && cy <= rect.y + rect.h;
+        const isMember = members.has(id);
+        if (inside && !isMember) {
+          // 一个节点只属于一个循环体：从别的循环里摘掉
+          for (const other of nodes) {
+            if (other.id === loop.id || other.type !== 'loop' || !Array.isArray(other.params?.body)) continue;
+            const filtered = other.params.body.map(String).filter((item) => item !== id);
+            if (filtered.length !== other.params.body.length) { other.params.body = filtered; changed = true; }
+          }
+          members.add(id);
+          changed = true;
+        } else if (!inside && isMember) {
+          members.delete(id);
+          changed = true;
+        }
+      }
+      if (changed) loop.params = { ...(loop.params || {}), body: [...members] };
+    }
+    if (changed) { render(); emitChange(); }
+  }
+
   function render() {
     const seen = new Set();
     for (const node of nodes) {
@@ -418,6 +533,7 @@ export function createCanvas(host, handlers = {}) {
       if (!seen.has(id)) { g.remove(); nodeEls.delete(id); }
     }
     renderEdges();
+    renderContainers();
     renderMinimap();
   }
 
@@ -481,8 +597,17 @@ export function createCanvas(host, handlers = {}) {
       emitSelect();
       if (!readOnly) {
         const node = nodes.find((n) => n.id === id);
+        // 拖动循环节点时，它框住的循环体一起走
+        const movingIds = new Set(selection);
+        if (node?.type === 'loop') for (const memberId of loopBodyOf(node)) movingIds.add(memberId);
         mode = 'node';
-        drag = { startX: event.clientX, startY: event.clientY, origin: [...selection].map((sid) => ({ id: sid, x: nodes.find((n) => n.id === sid).x, y: nodes.find((n) => n.id === sid).y })), moved: false, node };
+        drag = {
+          startX: event.clientX,
+          startY: event.clientY,
+          origin: [...movingIds].map((sid) => ({ id: sid, x: nodes.find((n) => n.id === sid).x, y: nodes.find((n) => n.id === sid).y })),
+          moved: false,
+          node,
+        };
       }
       event.preventDefault();
       return;
@@ -558,6 +683,7 @@ export function createCanvas(host, handlers = {}) {
         if (group) group.setAttribute('transform', `translate(${node.x},${node.y})`);
       }
       renderEdges();
+      renderContainers();
       showGuides(snap.guideX, snap.guideY);
       return;
     }
@@ -581,7 +707,11 @@ export function createCanvas(host, handlers = {}) {
     draftEdge.setAttribute('visibility', 'hidden');
     hideGuides();
     svg.classList.remove('panning');
-    if (mode === 'node' && drag?.moved) emitChange();
+    if (mode === 'node' && drag?.moved) {
+      // 松手后按落点更新循环体归属（拖进框里 = 加进循环体，拖出去 = 移出）
+      updateLoopMembership(drag.origin.map((item) => item.id));
+      emitChange();
+    }
     if (mode === 'marquee') {
       const box = {
         x: Number(marquee.getAttribute('x')), y: Number(marquee.getAttribute('y')),
@@ -878,6 +1008,11 @@ export function createCanvas(host, handlers = {}) {
     if (selection.size) {
       nodes = nodes.filter((n) => !selection.has(n.id));
       edges = edges.filter((e) => !selection.has(e.from) && !selection.has(e.to));
+      // 被删掉的节点也要从循环体名单里去掉，否则存下来的 body 会留一堆死 id
+      for (const node of nodes) {
+        if (node.type !== 'loop' || !Array.isArray(node.params?.body)) continue;
+        node.params.body = node.params.body.map(String).filter((id) => nodes.some((n) => n.id === id));
+      }
       selection = new Set();
     }
     render();
@@ -922,8 +1057,18 @@ export function createCanvas(host, handlers = {}) {
       const id = `${node.type}_${Date.now().toString(36)}${Math.floor(Math.random() * 900 + 100)}`;
       idMap.set(node.id, id);
       const copy = { ...JSON.parse(JSON.stringify(node)), id, x: node.x + 28, y: node.y + 28 };
+      // 复制循环节点时，循环体名单要跟着换成新 id（只保留一起被复制的那些）
+      if (copy.type === 'loop' && Array.isArray(copy.params?.body)) {
+        copy.params.body = copy.params.body.map((item) => String(item)).filter((item) => clipboard.nodes.some((n) => n.id === item));
+      }
       nodes.push(copy);
       created.push(id);
+    }
+    // idMap 建全了再换循环体里的 id（否则后面的节点还没映射）
+    for (const node of nodes) {
+      if (node.type !== 'loop' || !Array.isArray(node.params?.body)) continue;
+      if (!created.includes(node.id)) continue;
+      node.params.body = node.params.body.map((item) => idMap.get(item)).filter(Boolean);
     }
     for (const edge of clipboard.edges) {
       const from = idMap.get(edge.from);

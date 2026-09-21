@@ -6,7 +6,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { NODE_DEFS, delay } = require('./nodes');
+const { NODE_DEFS, delay, loopMembers } = require('./nodes');
 const { resolveParam, getPath } = require('./vars');
 
 const TICK_MS = 800;
@@ -113,6 +113,15 @@ function create({ store, bridge, writeLog }) {
     for (const node of run.snapshot.nodes) {
       run.nodes[node.id] = { id: node.id, type: node.type, title: node.title || node.type, status: 'pending', disabled: node.disabled === true };
     }
+    // 循环体里的节点不参与顶层推进：标记成 skipped 并写明它在哪个循环里跑
+    for (const [nodeId, loopId] of loopMembers(run.snapshot)) {
+      const state = run.nodes[nodeId];
+      if (!state) continue;
+      state.in_loop = loopId;
+      state.status = 'skipped';
+      state.note = '在循环体内执行';
+      state.finished_at = startedAt;
+    }
     // 从中间节点开始：上游沿用上次结果，平行分支直接跳过
     if (options.fromNode && run.nodes[options.fromNode]) {
       applyStartFrom(run, buildGraph(run.snapshot), options.fromNode, options.seedOutputs || {});
@@ -164,7 +173,10 @@ function create({ store, bridge, writeLog }) {
   // ---------------- 推进 ----------------
 
   function buildGraph(snapshot) {
-    const nodes = snapshot.nodes || [];
+    const all = snapshot.nodes || [];
+    // 循环体里的节点由循环节点按项调度，不参与顶层推进（顶层把它们标成 skipped）
+    const claimed = loopMembers(snapshot);
+    const nodes = all.filter((node) => !claimed.has(node.id));
     const incoming = new Map();
     const outgoing = new Map();
     nodes.forEach((node) => { incoming.set(node.id, []); outgoing.set(node.id, []); });

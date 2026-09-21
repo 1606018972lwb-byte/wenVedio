@@ -704,6 +704,20 @@ function renderParam(param, values, node) {
   const help = param.help ? `<small class="help">${esc(param.help)}</small>` : '';
   const key = esc(param.key);
   switch (param.type) {
+    case 'loop-body': {
+      // 循环体不是填出来的，是在画布上把节点拖进循环的框里
+      const bodyIds = Array.isArray(value) ? value.map(String) : [];
+      const graph = state.canvas?.getGraph?.();
+      const members = bodyIds
+        .map((id) => (graph?.nodes || []).find((item) => item.id === id))
+        .filter(Boolean)
+        .map((item) => item.title || item.id);
+      return `<div class="wf-field">${label}
+        <div class="wf-loop-body-summary">${members.length
+          ? `已放进循环体：${esc(members.join('、'))}`
+          : '还没有循环体——把节点拖进画布上循环节点的虚线框里'}</div>
+        <small class="help">循环体里用 <code>{{${esc(node?.id || '循环节点')}.item}}</code> 取当前这一项，<code>{{${esc(node?.id || '循环节点')}.index}}</code> 取序号。</small>${help}</div>`;
+    }
     case 'select':
       return `<label class="wf-field">${label}<select data-param="${key}">${(param.options || []).map((opt) => {
         const optionValue = typeof opt === 'string' ? opt : opt.value;

@@ -155,6 +155,8 @@ function create(deps) {
     if (!target) throw new Error(`子工作流不存在：${workflowId}`);
     return engine.runToCompletion(target, inputs, options);
   };
+  // 循环体：定义是当场从画布拼出来的（不是存在库里的工作流），直接交给引擎跑
+  bridge.runWorkflowDefinition = (definition, inputs, options) => engine.runToCompletion(definition, inputs, options);
   const api = createApi({
     store, engine, host: bridge, writeLog, sendJson, readBody,
     nodeMeta: describeNodes(),

@@ -542,6 +542,85 @@ async function testTriggers() {
   }
 }
 
+// 循环容器形态：把节点直接拖进循环节点当循环体（不用先建一个子工作流）
+async function testLoopBody() {
+  console.log('\n[循环体] 画布上的循环体按项执行 / 顶层不重复跑 / 结果收成数组');
+  const wf = await createWorkflow({
+    name: '测试·循环体',
+    nodes: [
+      startNode(),
+      codeNode('code_list', 'return { list: [1, 2, 3] };'),
+      {
+        id: 'loop_1', type: 'loop', title: '循环', x: 460, y: 0,
+        params: { items: '{{code_list.list}}', body: ['code_double'], item_key: 'item', concurrency: 1 },
+      },
+      // 循环体里的节点：用 {{loop_1.item}} 取当前这一项
+      codeNode('code_double', 'return { v: Number(outputs.loop_1.item) * 2, at: outputs.loop_1.index };'),
+      {
+        id: 'code_sum', type: 'code', title: '汇总', x: 720, y: 0,
+        input_params: [{ key: 'results', value: '{{loop_1.results}}' }],
+        params: { language: 'javascript', code: 'return { sum: input.results.reduce((a, b) => a + b.v, 0), n: input.results.length };' },
+      },
+    ],
+    edges: [
+      { id: 'e1', from: 'start_1', to: 'code_list' },
+      { id: 'e2', from: 'code_list', to: 'loop_1' },
+      { id: 'e3', from: 'loop_1', to: 'code_double' },   // 在画布上连进循环体
+      { id: 'e4', from: 'loop_1', to: 'code_sum' },
+    ],
+  });
+  const run = await waitRun(await startRun(wf.id, {}), 40000);
+  check('整体成功', run?.status === 'success', run?.error);
+  check('循环体按项执行，结果收成数组（1、2、3 × 2）',
+    JSON.stringify((run?.nodes?.loop_1?.output?.results || []).map((item) => [item?.v, item?.at])) === JSON.stringify([[2, 0], [4, 1], [6, 2]]),
+    JSON.stringify(run?.nodes?.loop_1?.output?.results));
+  check('成功条数 3', run?.nodes?.loop_1?.output?.count === 3, JSON.stringify(run?.nodes?.loop_1?.output));
+  check('循环体节点在顶层被标成 skipped 并注明在循环体内',
+    run?.nodes?.code_double?.status === 'skipped' && run?.nodes?.code_double?.in_loop === 'loop_1'
+    && run?.nodes?.code_double?.note === '在循环体内执行',
+    JSON.stringify({ s: run?.nodes?.code_double?.status, loop: run?.nodes?.code_double?.in_loop, note: run?.nodes?.code_double?.note }));
+  check('下游能拿到循环的结果数组（2+4+6=12，3 项）',
+    run?.nodes?.code_sum?.output?.sum === 12 && run?.nodes?.code_sum?.output?.n === 3,
+    JSON.stringify(run?.nodes?.code_sum?.output));
+  check('每一项都真的跑了（3 项都有结果、失败明细为空）',
+    (run?.nodes?.loop_1?.output?.results || []).filter(Boolean).length === 3
+    && (run?.nodes?.loop_1?.output?.failed || []).length === 0,
+    JSON.stringify(run?.nodes?.loop_1?.output?.failed));
+
+  // 循环体里再套一个循环：内层循环体也要被带上
+  const nested = await createWorkflow({
+    name: '测试·循环体嵌套',
+    nodes: [
+      startNode(),
+      codeNode('code_outer', 'return { list: [[1, 2], [3]] };'),
+      {
+        id: 'loop_outer', type: 'loop', title: '外层循环', x: 400, y: 0,
+        params: { items: '{{code_outer.list}}', body: ['loop_inner'], item_key: 'item', concurrency: 1 },
+      },
+      {
+        id: 'loop_inner', type: 'loop', title: '内层循环', x: 640, y: 0,
+        params: { items: '{{loop_outer.item}}', body: ['code_sum'], item_key: 'item', concurrency: 1 },
+      },
+      codeNode('code_sum', 'return { n: Number(outputs.loop_inner.item) };'),
+    ],
+    edges: [
+      { id: 'e1', from: 'start_1', to: 'code_outer' },
+      { id: 'e2', from: 'code_outer', to: 'loop_outer' },
+      { id: 'e3', from: 'loop_outer', to: 'loop_inner' },
+      { id: 'e4', from: 'loop_inner', to: 'code_sum' },
+    ],
+  });
+  const nestedRun = await waitRun(await startRun(nested.id, {}), 40000);
+  check('嵌套循环体也能跑（外层每项是数组，内层再遍历）',
+    nestedRun?.status === 'success'
+    && JSON.stringify((nestedRun?.nodes?.loop_outer?.output?.results?.[0]?.results || []).map((item) => item?.n)) === JSON.stringify([1, 2])
+    && JSON.stringify((nestedRun?.nodes?.loop_outer?.output?.results?.[1]?.results || []).map((item) => item?.n)) === JSON.stringify([3]),
+    `${nestedRun?.status} ${JSON.stringify(nestedRun?.nodes?.loop_outer?.output)} ${nestedRun?.error || ''}`);
+  check('内层循环体节点只被顶层标一次 skipped',
+    nestedRun?.nodes?.code_sum?.status === 'skipped' && nestedRun?.nodes?.code_sum?.in_loop === 'loop_inner',
+    JSON.stringify({ s: nestedRun?.nodes?.code_sum?.status, loop: nestedRun?.nodes?.code_sum?.in_loop }));
+}
+
 async function testPersistence() {
   console.log('\n[持久化] 坏记录不得堵死后续落盘');
   const { create } = require(path.join(ROOT, 'src', 'workflow', 'store.js'));
@@ -618,6 +697,7 @@ async function waitHealthy(timeoutMs = 20000) {
     await testParallelBranches();
     await testSubWorkflowNode();
     await testTriggers();
+    await testLoopBody();
     await testPersistence();
     console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
     if (fail) console.log(`失败用例：${failures.join('、')}`);
